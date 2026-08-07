@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from verbatim.arxiv import Paper
+from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
 
@@ -35,3 +36,17 @@ def save_download_manifest(downloads: list[DownloadedPaper], destination: Path) 
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def load_download_manifest(source: Path) -> list[DownloadedPaper]:
+    """Load an auditable PDF manifest created by :func:`save_download_manifest`."""
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    return [DownloadedPaper(**paper) for paper in payload["papers"]]
+
+
+def save_chunks(chunks: list[Chunk], destination: Path) -> None:
+    """Write chunks as JSON Lines so they can be streamed into a vector database."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as output:
+        for chunk in chunks:
+            output.write(json.dumps(chunk.to_dict()) + "\n")

@@ -6,8 +6,15 @@ import argparse
 from pathlib import Path
 
 from verbatim.arxiv import fetch_metadata
+from verbatim.chunking import extract_pdf_chunks
 from verbatim.downloads import download_papers
-from verbatim.storage import load_papers, save_download_manifest, save_papers
+from verbatim.storage import (
+    load_download_manifest,
+    load_papers,
+    save_chunks,
+    save_download_manifest,
+    save_papers,
+)
 
 
 def main() -> None:
@@ -27,6 +34,12 @@ def main() -> None:
         action="store_true",
         help="Download only papers whose metadata explicitly reports a licence",
     )
+
+    chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
+    chunk_parser.add_argument("--manifest", type=Path, default=Path("data/pdfs/manifest.json"))
+    chunk_parser.add_argument("--output", type=Path, default=Path("data/chunks.jsonl"))
+    chunk_parser.add_argument("--chunk-size", type=int, default=1_200)
+    chunk_parser.add_argument("--overlap", type=int, default=200)
     args = parser.parse_args()
 
     if args.command == "fetch":
@@ -45,3 +58,13 @@ def main() -> None:
         manifest_path = args.output_dir / "manifest.json"
         save_download_manifest(downloads, manifest_path)
         print(f"Downloaded or reused {len(downloads)} PDFs; manifest: {manifest_path}")
+
+    if args.command == "chunk":
+        downloads = load_download_manifest(args.manifest)
+        chunks = extract_pdf_chunks(
+            downloads,
+            chunk_size=args.chunk_size,
+            overlap=args.overlap,
+        )
+        save_chunks(chunks, args.output)
+        print(f"Saved {len(chunks)} page-aware chunks to {args.output}")

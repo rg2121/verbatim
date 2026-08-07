@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "A citation-focused scientific literature research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "pymupdf>=1.26.0",
+]
 
 [project.scripts]
 verbatim = "verbatim.cli:main"

@@ -26,6 +26,16 @@ arXiv ID, source URL, reported licence, and SHA-256 checksum. Add
 `--require-license` to restrict downloads to records with an explicit licence
 in arXiv metadata.
 
+Extract page-aware, overlapping passages from those PDFs:
+
+```bash
+uv run verbatim chunk --manifest data/pdfs/manifest.json
+```
+
+This writes `data/chunks.jsonl`. Every line includes text plus its arXiv ID,
+original source URL, PDF checksum, and page number; it is the input to the
+future embedding and vector-index stage.
+
 ## Principles
 
 - Start with a small, inspectable corpus.
