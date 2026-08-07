@@ -1,0 +1,22 @@
+[project]
+name = "verbatim"
+version = "0.1.0"
+description = "A citation-focused scientific literature research assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+verbatim = "verbatim.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.7.0,<0.8.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

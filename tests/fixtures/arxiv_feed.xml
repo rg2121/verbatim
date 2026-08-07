@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v2</id>
+    <updated>2024-01-22T12:00:00Z</updated>
+    <published>2024-01-20T12:00:00Z</published>
+    <title> A   Test Paper </title>
+    <summary> A test abstract. </summary>
+    <author><name>Ada Lovelace</name></author>
+    <author><name>Alan Turing</name></author>
+    <category term="physics.gen-ph" scheme="http://arxiv.org/schemas/atom" />
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom" />
+    <link title="pdf" href="http://arxiv.org/pdf/2401.12345v2" rel="related" type="application/pdf" />
+    <arxiv:license>http://creativecommons.org/licenses/by/4.0/</arxiv:license>
+  </entry>
+</feed>
