@@ -24,7 +24,8 @@ uv run verbatim download --input data/papers.json --limit 3
 This writes PDFs and `data/pdfs/manifest.json`, which preserves each file's
 arXiv ID, source URL, reported licence, and SHA-256 checksum. Add
 `--require-license` to restrict downloads to records with an explicit licence
-in arXiv metadata.
+in arXiv metadata. Cached PDFs are reused only after their checksum matches
+the previous manifest; downloads and generated artifacts are written atomically.
 
 Extract page-aware, overlapping passages from those PDFs:
 
@@ -34,7 +35,8 @@ uv run verbatim chunk --manifest data/pdfs/manifest.json
 
 This writes `data/chunks.jsonl`. Every line includes text plus its arXiv ID,
 original source URL, PDF checksum, and page number; it is the input to the
-future embedding and vector-index stage.
+future embedding and vector-index stage. The chunker verifies the PDF checksum
+again before emitting any text.
 
 ## Principles
 

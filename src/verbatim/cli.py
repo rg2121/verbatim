@@ -49,13 +49,15 @@ def main() -> None:
 
     if args.command == "download":
         papers = load_papers(args.input)
+        manifest_path = args.output_dir / "manifest.json"
+        existing_downloads = load_download_manifest(manifest_path) if manifest_path.exists() else []
         downloads = download_papers(
             papers,
             args.output_dir,
             args.limit,
             require_license=args.require_license,
+            existing_downloads=existing_downloads,
         )
-        manifest_path = args.output_dir / "manifest.json"
         save_download_manifest(downloads, manifest_path)
         print(f"Downloaded or reused {len(downloads)} PDFs; manifest: {manifest_path}")
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+import os
 from pathlib import Path
+import tempfile
 
 from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
@@ -18,8 +20,7 @@ def save_papers(papers: list[Paper], destination: Path) -> None:
         "paper_count": len(papers),
         "papers": [paper.to_dict() for paper in papers],
     }
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_text(destination, json.dumps(payload, indent=2) + "\n")
 
 
 def load_papers(source: Path) -> list[Paper]:
@@ -34,8 +35,7 @@ def save_download_manifest(downloads: list[DownloadedPaper], destination: Path) 
         "paper_count": len(downloads),
         "papers": [download.to_dict() for download in downloads],
     }
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_text(destination, json.dumps(payload, indent=2) + "\n")
 
 
 def load_download_manifest(source: Path) -> list[DownloadedPaper]:
@@ -46,7 +46,20 @@ def load_download_manifest(source: Path) -> list[DownloadedPaper]:
 
 def save_chunks(chunks: list[Chunk], destination: Path) -> None:
     """Write chunks as JSON Lines so they can be streamed into a vector database."""
+    _atomic_write_text(destination, "".join(json.dumps(chunk.to_dict()) + "\n" for chunk in chunks))
+
+
+def _atomic_write_text(destination: Path, content: str) -> None:
+    """Write JSON artifacts fully before replacing their previous version."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("w", encoding="utf-8") as output:
-        for chunk in chunks:
-            output.write(json.dumps(chunk.to_dict()) + "\n")
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=destination.parent, delete=False) as temporary:
+            temporary_name = temporary.name
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, destination)
+    finally:
+        if temporary_name is not None and os.path.exists(temporary_name):
+            os.unlink(temporary_name)

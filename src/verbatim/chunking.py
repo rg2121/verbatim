@@ -9,7 +9,7 @@ from typing import Callable, Iterable
 
 import pymupdf
 
-from verbatim.downloads import DownloadedPaper
+from verbatim.downloads import DownloadedPaper, file_sha256
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,13 @@ def extract_pdf_chunks(
     chunks: list[Chunk] = []
 
     for download in downloads:
-        for page_number, page_text in enumerate(page_extractor(Path(download.local_path)), start=1):
+        pdf_path = Path(download.local_path)
+        actual_checksum = file_sha256(pdf_path)
+        if actual_checksum != download.sha256:
+            raise ValueError(
+                f"Checksum mismatch for {download.arxiv_id}: manifest={download.sha256}, file={actual_checksum}"
+            )
+        for page_number, page_text in enumerate(page_extractor(pdf_path), start=1):
             for chunk_index, text in enumerate(chunk_text(page_text, chunk_size=chunk_size, overlap=overlap)):
                 chunk_id = _chunk_id(download, page_number, chunk_index)
                 chunks.append(
@@ -90,7 +96,11 @@ def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
         chunks.append(normalized[start:end].strip())
         if end == len(normalized):
             break
-        start = max(end - overlap, start + 1)
+        next_start = max(end - overlap, start + 1)
+        if next_start > 0 and next_start < len(normalized) and normalized[next_start - 1] != " ":
+            next_space = normalized.find(" ", next_start)
+            next_start = len(normalized) if next_space == -1 else next_space + 1
+        start = next_start
     return chunks
 
 
