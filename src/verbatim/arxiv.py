@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -119,4 +118,3 @@ def _required_text(element: ElementTree.Element, path: str, namespace: dict[str,
 
 def _clean(text: str) -> str:
     return " ".join(text.split())
-
