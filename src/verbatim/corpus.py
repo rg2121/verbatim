@@ -372,7 +372,12 @@ class CorpusStore:
         )
 
     def search_chunks(
-        self, query: str, *, limit: int = 10, arxiv_id: str | None = None
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        arxiv_id: str | None = None,
+        match: str = "all",
     ) -> list[ChunkMatch]:
         """Rank chunks by BM25 relevance to a keyword query.
 
@@ -381,11 +386,11 @@ class CorpusStore:
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
-        match = build_fts_query(query)
-        if not match:
+        expression = build_fts_query(query, match=match)
+        if not expression:
             return []
         clauses = ["chunks_fts MATCH ?"]
-        parameters: list[object] = [match]
+        parameters: list[object] = [expression]
         if arxiv_id is not None:
             clauses.append("c.arxiv_id = ?")
             parameters.append(arxiv_id)
@@ -603,14 +608,21 @@ def unpack_vector(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(blob) // 4}f", blob))
 
 
-def build_fts_query(query: str) -> str:
+def build_fts_query(query: str, *, match: str = "all") -> str:
     """Turn a user query into a safe FTS5 MATCH expression.
 
     Terms are quoted so that punctuation common in scientific text — hyphens,
     colons, arXiv identifiers — cannot be read as FTS5 operators and raise a
     syntax error.  A trailing '*' still means prefix search, and double-quoted
     input is preserved as a phrase.
+
+    `match="all"` requires every term, which suits an explicit keyword search.
+    `match="any"` ranks by how many and how rare the matched terms are, which is
+    what a natural-language question needs — requiring every word of "how does a
+    changing field induce current" matches nothing at all.
     """
+    if match not in {"all", "any"}:
+        raise ValueError("match must be 'all' or 'any'")
     terms: list[str] = []
     for raw in FTS_TERM_PATTERN.findall(query):
         prefix = raw.endswith("*")
@@ -619,7 +631,7 @@ def build_fts_query(query: str) -> str:
         if not body:
             continue
         terms.append(f'"{body}"*' if prefix else f'"{body}"')
-    return " ".join(terms)
+    return (" OR " if match == "any" else " ").join(terms)
 
 
 def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:

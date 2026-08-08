@@ -8,13 +8,16 @@ A local-first, citation-focused literature-review assistant for scientific paper
 snapshot, the PDFs, the chunk export — is derived and can be rebuilt from it.
 
 ```
-arXiv API ──sync──▶ corpus.db  papers    every version seen, newest flagged current
-                              downloads  local PDFs, checksummed
-                              chunks     page-aware passages + char offsets
-                              chunks_fts keyword index over chunk text
+arXiv API ──sync──▶ corpus.db  papers           every version seen, newest current
+                              downloads        local PDFs, checksummed
+                              chunks           page-aware passages + char offsets
+                              chunks_fts       BM25 keyword index
+                              embeddings       one vector per chunk per model
+                              vec_chunks       nearest-neighbour index
                     │
            download ──▶ data/pdfs/*.pdf
               chunk ──▶ data/chunks.jsonl   (export, not the store)
+              embed ──▶ vectors in corpus.db
              search ──▶ ranked passages with citations
 ```
 
@@ -24,7 +27,8 @@ arXiv API ──sync──▶ corpus.db  papers    every version seen, newest fl
 uv run verbatim sync --category physics.gen-ph --max-results 5
 uv run verbatim download --limit 3
 uv run verbatim chunk
-uv run verbatim search "magnetic flux"
+uv run verbatim embed
+uv run verbatim search "how does a changing field induce current in a loop"
 ```
 
 `sync` writes the latest API response to `data/papers.json` for inspection and
@@ -42,11 +46,24 @@ only those files whose chunker version, chunker parameters, or bytes have
 changed since they were last chunked. It also refreshes `data/chunks.jsonl`,
 which is an export rather than the store.
 
-`search` ranks passages by BM25 relevance and prints each with the paper
-version, page, character span, and source URL needed to cite it. Use
-`--arxiv-id` to search within one paper and `--full` for whole passages. The
-index matches whole tokens and does not stem, so `field` does not match
-`fields`; use `field*` for prefix matching.
+`embed` vectorises chunks that have no vector for the chosen model, in batches,
+and is a no-op on re-run. It uses `BAAI/bge-small-en-v1.5` through ONNX, so
+there is no torch dependency and the weights are about 130MB.
+
+`search` prints each passage with the paper version, page, character span, and
+source URL needed to cite it. Use `--arxiv-id` to search within one paper and
+`--full` for whole passages. Three modes:
+
+| Mode | Finds | Misses |
+|---|---|---|
+| `hybrid` (default) | both of the below, fused by rank | — |
+| `keyword` | exact terms, identifiers, notation | paraphrases |
+| `vector` | meaning, without shared words | rare exact tokens |
+
+Keyword mode requires every term by default; `--match any` ranks by how many
+matched. The index matches whole tokens and does not stem, so `field` does not
+match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
+every word of a natural-language question matches nothing at all.
 
 For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and

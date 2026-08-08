@@ -9,7 +9,7 @@ from verbatim.arxiv import fetch_metadata
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
-from verbatim.retrieval import vector_search
+from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.downloads import DownloadedPaper, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -59,9 +59,15 @@ def main() -> None:
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
     search_parser.add_argument(
         "--mode",
-        choices=("keyword", "vector"),
-        default="keyword",
-        help="keyword: exact terms via BM25. vector: meaning, via embeddings",
+        choices=("hybrid", "keyword", "vector"),
+        default="hybrid",
+        help="hybrid: both, fused by rank (default). keyword: exact terms. vector: meaning",
+    )
+    search_parser.add_argument(
+        "--match",
+        choices=("all", "any"),
+        default="all",
+        help="keyword mode only: require every term (default) or any term",
     )
     search_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model for --mode vector")
 
@@ -141,10 +147,11 @@ def main() -> None:
         with CorpusStore(args.state) as corpus:
             if args.mode == "keyword":
                 matches = corpus.search_chunks(
-                    args.query, limit=args.limit, arxiv_id=args.arxiv_id
+                    args.query, limit=args.limit, arxiv_id=args.arxiv_id, match=args.match
                 )
             else:
-                matches = vector_search(
+                search = vector_search if args.mode == "vector" else hybrid_search
+                matches = search(
                     corpus,
                     FastEmbedEmbedder(model_name=args.model),
                     args.query,

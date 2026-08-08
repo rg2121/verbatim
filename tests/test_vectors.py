@@ -97,3 +97,59 @@ def test_similarity_inverts_l2_distance_for_unit_vectors() -> None:
     assert _similarity(0.0) == pytest.approx(1.0)  # identical
     assert _similarity(2.0**0.5) == pytest.approx(0.0)  # orthogonal
     assert _similarity(2.0) == pytest.approx(-1.0)  # opposite
+
+
+def test_hybrid_beats_either_leg_when_the_answer_needs_both(tmp_path: Path) -> None:
+    """Exact identifier lives in one passage, the concept in another.
+
+    Keyword alone misses the concept; vector alone misses the identifier.
+    """
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux threads the ring."],
+            "2608.22222v1": ["Charge conservation holds in tokamak-7 exactly."],
+        },
+    ) as corpus:
+        keyword = corpus.search_chunks("flux tokamak-7", match="any", limit=10)
+        vector = vector_search(corpus, WordCountEmbedder(), "flux tokamak-7", limit=10)
+        fused = hybrid_search(corpus, WordCountEmbedder(), "flux tokamak-7", limit=10)
+
+    assert {m.chunk.arxiv_id for m in fused} == {"2608.11111v1", "2608.22222v1"}
+    assert len(fused) >= max(len(keyword), len(vector))
+
+
+def test_hybrid_ranks_a_passage_found_by_both_legs_first(tmp_path: Path) -> None:
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux threads the ring."],
+            "2608.22222v1": ["An unrelated plant grows."],
+            "2608.33333v1": ["Charge moves along the wire."],
+        },
+    ) as corpus:
+        fused = hybrid_search(corpus, WordCountEmbedder(), "flux", limit=3)
+
+    assert fused[0].chunk.arxiv_id == "2608.11111v1"
+    assert fused[0].score > fused[1].score
+
+
+def test_hybrid_scopes_to_one_paper(tmp_path: Path) -> None:
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux threads the ring."],
+            "2608.22222v1": ["Charge moves along the wire."],
+        },
+    ) as corpus:
+        fused = hybrid_search(
+            corpus, WordCountEmbedder(), "flux charge", limit=5, arxiv_id="2608.22222v1"
+        )
+
+    assert {m.chunk.arxiv_id for m in fused} == {"2608.22222v1"}

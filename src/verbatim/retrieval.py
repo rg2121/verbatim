@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
 from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
+
+# Standard RRF constant: large enough that the top few ranks are not dominated
+# by a single leg, small enough that deep results still fade out.
+RRF_SMOOTHING = 60
 
 
 def vector_search(
@@ -48,6 +54,51 @@ def vector_search(
             ChunkMatch(chunk=chunk, score=_similarity(distance), snippet=_preview(chunk.text))
         )
     return matches
+
+
+def hybrid_search(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    query: str,
+    *,
+    limit: int = 10,
+    arxiv_id: str | None = None,
+    candidates: int = 50,
+    smoothing: int = RRF_SMOOTHING,
+    index: VectorIndex | None = None,
+) -> list[ChunkMatch]:
+    """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
+
+    RRF combines rankings by position rather than by score, so BM25 relevance
+    and cosine similarity — which share no scale — never have to be reconciled.
+
+    The keyword leg matches any term rather than all: requiring every word of a
+    natural-language question matches nothing, which would silently reduce
+    hybrid search to vector-only.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    keyword = corpus.search_chunks(
+        query, limit=candidates, arxiv_id=arxiv_id, match="any"
+    )
+    vector = vector_search(
+        corpus, embedder, query, limit=candidates, arxiv_id=arxiv_id, index=index
+    )
+
+    fused: dict[str, float] = defaultdict(float)
+    for ranking in (keyword, vector):
+        for rank, match in enumerate(ranking, start=1):
+            fused[match.chunk.chunk_id] += 1.0 / (smoothing + rank)
+
+    # Prefer the keyword leg's snippet: it highlights the matched terms.
+    best: dict[str, ChunkMatch] = {match.chunk.chunk_id: match for match in vector}
+    best.update({match.chunk.chunk_id: match for match in keyword})
+
+    ordered = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
+    return [
+        ChunkMatch(chunk=best[chunk_id].chunk, score=score, snippet=best[chunk_id].snippet)
+        for chunk_id, score in ordered[:limit]
+    ]
 
 
 def _similarity(distance: float) -> float:
