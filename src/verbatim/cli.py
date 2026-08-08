@@ -57,6 +57,8 @@ def run() -> None:
     download_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     download_parser.add_argument("--limit", type=int, default=3, help="Maximum number of PDFs to download")
     download_parser.add_argument("--output-dir", type=Path, default=config.PDF_DIR)
+    download_parser.add_argument("--delay", type=float, default=config.DOWNLOAD_DELAY,
+                                 help="Seconds between PDF requests")
     download_parser.add_argument(
         "--require-license",
         action="store_true",
@@ -198,6 +200,7 @@ def run() -> None:
                         len(papers),
                         require_license=args.require_license,
                         existing_downloads=corpus.all_downloads(),
+                        delay=args.delay,
                     )
                     if papers
                     else DownloadReport(downloaded=[], failed=[])

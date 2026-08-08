@@ -73,6 +73,9 @@ HTTP_BACKOFF = float(_text("VERBATIM_HTTP_BACKOFF", "5"))
 # to exhaust memory during a bulk ingest.
 PDF_TIMEOUT = float(_text("VERBATIM_PDF_TIMEOUT", "120"))
 PDF_MAX_BYTES = _integer("VERBATIM_PDF_MAX_BYTES", 200_000_000)
+# Seconds between PDF requests. Thousands of downloads without a gap is
+# exactly the hammering arXiv asks callers to avoid.
+DOWNLOAD_DELAY = float(_text("VERBATIM_DOWNLOAD_DELAY", "3"))
 
 # Sync paging. arXiv caps a single request, so a real corpus has to be paged.
 SYNC_LIMIT = _integer("VERBATIM_SYNC_LIMIT", 1_000)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import os
+import time
 from pathlib import Path
 import tempfile
 from typing import Callable
@@ -56,6 +57,8 @@ def download_papers(
     require_license: bool = False,
     fetch_pdf: Callable[[str], bytes] | None = None,
     existing_downloads: list[DownloadedPaper] | None = None,
+    delay: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> DownloadReport:
     """Download a bounded set of PDFs and report what succeeded and what did not.
 
@@ -64,7 +67,8 @@ def download_papers(
     record of them anywhere.  Each paper is now isolated, and the caller records
     the successes regardless of how many failed.
 
-    Cached files are reused only when they match a previous download manifest.
+    Cached files are reused only when they match a previous download manifest,
+    and a reused file costs no pause because nothing was requested.
     `require_license` restricts the operation to records whose metadata
     explicitly reports a licence.
     """
@@ -82,12 +86,22 @@ def download_papers(
     downloaded: list[DownloadedPaper] = []
     failed: list[FailedDownload] = []
 
+    pause = config.DOWNLOAD_DELAY if delay is None else delay
+    requested = 0
+
     for paper in candidates:
         assert paper.pdf_url is not None  # guaranteed by the candidate filter
         try:
-            downloaded.append(
-                _download_one(paper, destination, get, existing_by_id.get(paper.arxiv_id))
-            )
+            prior = existing_by_id.get(paper.arxiv_id)
+            # Pace only actual requests: arXiv asks callers not to hammer it,
+            # and thousands of downloads without a gap is exactly that.
+            if requested and not _matches_prior_manifest(
+                destination / f"{_filename_stem(paper.arxiv_id)}.pdf", paper, prior
+            ):
+                sleep(pause)
+            before = len(downloaded)
+            downloaded.append(_download_one(paper, destination, get, prior))
+            requested += 1 if len(downloaded) > before else 0
         except (OSError, ValueError) as error:
             # OSError covers HTTPError and URLError; ValueError covers a
             # rejected URL or a truncated response.  Neither says anything
