@@ -30,6 +30,23 @@ class DownloadedPaper:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class FailedDownload:
+    """A paper that could not be fetched, and why."""
+
+    arxiv_id: str
+    pdf_url: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class DownloadReport:
+    """What one download run achieved, including what it could not."""
+
+    downloaded: list[DownloadedPaper]
+    failed: list[FailedDownload]
+
+
 def download_papers(
     papers: list[Paper],
     destination: Path,
@@ -38,8 +55,13 @@ def download_papers(
     require_license: bool = False,
     fetch_pdf: Callable[[str], bytes] | None = None,
     existing_downloads: list[DownloadedPaper] | None = None,
-) -> list[DownloadedPaper]:
-    """Download a bounded set of PDFs and return records for a local manifest.
+) -> DownloadReport:
+    """Download a bounded set of PDFs and report what succeeded and what did not.
+
+    One paper's failure never discards another's: a withdrawn paper returning
+    404 used to abort the run, leaving already-written PDFs on disk with no
+    record of them anywhere.  Each paper is now isolated, and the caller records
+    the successes regardless of how many failed.
 
     Cached files are reused only when they match a previous download manifest.
     `require_license` restricts the operation to records whose metadata
@@ -57,35 +79,48 @@ def download_papers(
     get = fetch_pdf or _get_pdf
     existing_by_id = {download.arxiv_id: download for download in existing_downloads or []}
     downloaded: list[DownloadedPaper] = []
+    failed: list[FailedDownload] = []
 
     for paper in candidates:
-        if paper.pdf_url is None:
-            raise ValueError(f"Paper {paper.arxiv_id} has no PDF URL")
-        pdf_url = _validate_pdf_url(paper.pdf_url)
-        filename = f"{_filename_stem(paper.arxiv_id)}.pdf"
-        local_file = destination / filename
-        prior = existing_by_id.get(paper.arxiv_id)
-        if _matches_prior_manifest(local_file, paper, prior):
-            content = local_file.read_bytes()
-        else:
-            content = get(pdf_url)
-            if not _looks_like_pdf(content):
-                raise ValueError(f"Download for {paper.arxiv_id} is not a complete PDF")
-            _atomic_write_bytes(local_file, content)
-        if not _looks_like_pdf(content):
-            raise ValueError(f"Download for {paper.arxiv_id} is not a PDF")
-        downloaded.append(
-            DownloadedPaper(
-                arxiv_id=paper.arxiv_id,
-                source_url=paper.source_url,
-                pdf_url=paper.pdf_url,
-                license_url=paper.license_url,
-                local_path=str(local_file),
-                sha256=sha256(content).hexdigest(),
-                byte_count=len(content),
+        assert paper.pdf_url is not None  # guaranteed by the candidate filter
+        try:
+            downloaded.append(
+                _download_one(paper, destination, get, existing_by_id.get(paper.arxiv_id))
             )
-        )
-    return downloaded
+        except (OSError, ValueError) as error:
+            # OSError covers HTTPError and URLError; ValueError covers a
+            # rejected URL or a truncated response.  Neither says anything
+            # about the other papers in this batch.
+            failed.append(FailedDownload(paper.arxiv_id, paper.pdf_url, str(error)))
+    return DownloadReport(downloaded=downloaded, failed=failed)
+
+
+def _download_one(
+    paper: Paper,
+    destination: Path,
+    get: Callable[[str], bytes],
+    prior: DownloadedPaper | None,
+) -> DownloadedPaper:
+    pdf_url = _validate_pdf_url(paper.pdf_url or "")
+    local_file = destination / f"{_filename_stem(paper.arxiv_id)}.pdf"
+    if _matches_prior_manifest(local_file, paper, prior):
+        content = local_file.read_bytes()
+        if not _looks_like_pdf(content):
+            raise ValueError(f"Cached file for {paper.arxiv_id} is not a complete PDF")
+    else:
+        content = get(pdf_url)
+        if not _looks_like_pdf(content):
+            raise ValueError(f"Download for {paper.arxiv_id} is not a complete PDF")
+        _atomic_write_bytes(local_file, content)
+    return DownloadedPaper(
+        arxiv_id=paper.arxiv_id,
+        source_url=paper.source_url,
+        pdf_url=pdf_url,
+        license_url=paper.license_url,
+        local_path=str(local_file),
+        sha256=sha256(content).hexdigest(),
+        byte_count=len(content),
+    )
 
 
 def _get_pdf(url: str) -> bytes:

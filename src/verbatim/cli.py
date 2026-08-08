@@ -12,7 +12,7 @@ from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
 from verbatim.retrieval import hybrid_search, vector_search
-from verbatim.downloads import DownloadedPaper, download_papers
+from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
 from verbatim.storage import (
     load_download_manifest,
     load_papers,
@@ -121,33 +121,41 @@ def run() -> None:
         if args.input is not None:
             papers = load_papers(args.input)
             existing_downloads = load_download_manifest(manifest_path) if manifest_path.exists() else []
-            new_downloads = download_papers(
+            report = download_papers(
                 papers,
                 args.output_dir,
                 args.limit,
                 require_license=args.require_license,
                 existing_downloads=existing_downloads,
             )
-            downloads = _merge_downloads(existing_downloads, new_downloads)
+            downloads = _merge_downloads(existing_downloads, report.downloaded)
         else:
             with CorpusStore(args.state) as corpus:
                 papers = corpus.pending_downloads(args.limit, require_license=args.require_license)
-                existing_downloads = corpus.all_downloads()
-                new_downloads = (
+                report = (
                     download_papers(
                         papers,
                         args.output_dir,
                         len(papers),
                         require_license=args.require_license,
-                        existing_downloads=existing_downloads,
+                        existing_downloads=corpus.all_downloads(),
                     )
                     if papers
-                    else []
+                    else DownloadReport(downloaded=[], failed=[])
                 )
-                corpus.record_downloads(new_downloads)
+                # Recorded before reporting failures, so a partial run still
+                # leaves every fetched PDF accounted for.
+                corpus.record_downloads(report.downloaded)
                 downloads = corpus.all_downloads()
         save_download_manifest(downloads, manifest_path)
-        print(f"Downloaded {len(new_downloads)} new PDFs; corpus manifest has {len(downloads)} PDFs: {manifest_path}")
+        print(
+            f"Downloaded {len(report.downloaded)} new PDFs; "
+            f"corpus manifest has {len(downloads)} PDFs: {manifest_path}"
+        )
+        for failure in report.failed:
+            print(f"  ! {failure.arxiv_id}: {failure.reason}")
+        if report.failed:
+            print(f"  {len(report.failed)} paper(s) could not be downloaded.")
 
     if args.command == "embed":
         embedder = FastEmbedEmbedder(model_name=args.model)
