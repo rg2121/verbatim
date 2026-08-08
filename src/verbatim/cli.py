@@ -201,6 +201,9 @@ def run() -> None:
                         require_license=args.require_license,
                         existing_downloads=corpus.all_downloads(),
                         delay=args.delay,
+                        # Persist each success as it lands: a run this long
+                        # must not lose hours of work to one interruption.
+                        on_download=lambda record: corpus.record_downloads([record]),
                     )
                     if papers
                     else DownloadReport(downloaded=[], failed=[])

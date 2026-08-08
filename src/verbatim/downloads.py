@@ -59,6 +59,7 @@ def download_papers(
     existing_downloads: list[DownloadedPaper] | None = None,
     delay: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    on_download: Callable[[DownloadedPaper], None] | None = None,
 ) -> DownloadReport:
     """Download a bounded set of PDFs and report what succeeded and what did not.
 
@@ -66,6 +67,11 @@ def download_papers(
     404 used to abort the run, leaving already-written PDFs on disk with no
     record of them anywhere.  Each paper is now isolated, and the caller records
     the successes regardless of how many failed.
+
+    `on_download` is called after each success, so a caller can persist progress
+    as it happens.  Without it, a run interrupted after hours leaves every PDF
+    on disk with nothing recording that it arrived, and the next run fetches
+    them all again.
 
     Cached files are reused only when they match a previous download manifest,
     and a reused file costs no pause because nothing was requested.
@@ -99,9 +105,11 @@ def download_papers(
                 destination / f"{_filename_stem(paper.arxiv_id)}.pdf", paper, prior
             ):
                 sleep(pause)
-            before = len(downloaded)
-            downloaded.append(_download_one(paper, destination, get, prior))
-            requested += 1 if len(downloaded) > before else 0
+            record = _download_one(paper, destination, get, prior)
+            downloaded.append(record)
+            requested += 1
+            if on_download is not None:
+                on_download(record)
         except (OSError, ValueError) as error:
             # OSError covers HTTPError and URLError; ValueError covers a
             # rejected URL or a truncated response.  Neither says anything

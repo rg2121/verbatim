@@ -168,3 +168,28 @@ def test_a_fresh_batch_pauses_between_requests(tmp_path: Path) -> None:
     )
 
     assert pauses == [3.0, 3.0]  # between requests, not before the first
+
+
+def test_each_download_is_reported_as_it_lands(tmp_path: Path) -> None:
+    """A long run must not lose hours of work to one interruption."""
+    papers = [make_paper(arxiv_id=f"2401.0002{n}v1") for n in range(1, 4)]
+    recorded: list[str] = []
+
+    def failing_get(url: str) -> bytes:
+        if "2401.00023v1" in url:
+            raise HTTPError(url, 500, "Server Error", {}, None)  # type: ignore[arg-type]
+        return b"%PDF-1.7 body\n%%EOF\n"
+
+    report = download_papers(
+        papers,
+        tmp_path,
+        3,
+        fetch_pdf=failing_get,
+        delay=0,
+        on_download=lambda record: recorded.append(record.arxiv_id),
+    )
+
+    # The two that succeeded were reported before the third one failed.
+    assert recorded == ["2401.00021v1", "2401.00022v1"]
+    assert [d.arxiv_id for d in report.downloaded] == recorded
+    assert len(report.failed) == 1
