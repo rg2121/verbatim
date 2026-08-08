@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from verbatim.arxiv import fetch_metadata
-from verbatim.chunking import extract_pdf_chunks
+from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import CorpusStore
 from verbatim.downloads import DownloadedPaper, download_papers
 from verbatim.storage import (
@@ -106,18 +106,25 @@ def main() -> None:
             save_chunks(chunks, args.output)
             print(f"Saved {len(chunks)} page-aware chunks to {args.output}")
         else:
+            fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
             with CorpusStore(args.state) as corpus:
-                new_chunks = extract_pdf_chunks(
-                    corpus.all_downloads(),
-                    chunk_size=args.chunk_size,
-                    overlap=args.overlap,
+                pending = corpus.pending_chunking(fingerprint)
+                new_chunks = (
+                    extract_pdf_chunks(
+                        pending,
+                        chunk_size=args.chunk_size,
+                        overlap=args.overlap,
+                    )
+                    if pending
+                    else []
                 )
                 corpus.record_chunks(new_chunks)
+                corpus.mark_chunked(pending, fingerprint)
                 chunks = corpus.all_chunks()
             save_chunks(chunks, args.output)
             print(
-                f"Chunked {len(new_chunks)} passages; corpus holds {len(chunks)}. "
-                f"Exported to {args.output}"
+                f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
+                f"corpus holds {len(chunks)}. Exported to {args.output}"
             )
 
 

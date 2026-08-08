@@ -13,7 +13,16 @@ from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
+
+# Columns added to existing databases after their table was first created.
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "downloads": {
+        "chunked_at": "TEXT",
+        "chunked_with": "TEXT",
+        "chunked_sha256": "TEXT",
+    },
+}
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 
 
@@ -166,18 +175,42 @@ class CorpusStore:
             ORDER BY p.updated DESC, d.arxiv_id ASC
             """
         ).fetchall()
-        return [
-            DownloadedPaper(
-                arxiv_id=row["arxiv_id"],
-                source_url=row["source_url"],
-                pdf_url=row["pdf_url"],
-                license_url=row["license_url"],
-                local_path=row["local_path"],
-                sha256=row["sha256"],
-                byte_count=row["byte_count"],
+        return [_download_from_row(row) for row in rows]
+
+    def pending_chunking(self, fingerprint: str) -> list[DownloadedPaper]:
+        """Return PDFs whose stored chunks do not match the current chunker.
+
+        Re-chunking is needed when a PDF has never been chunked, when the
+        chunker version or its parameters changed, or when the file on disk was
+        replaced since it was last chunked.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT d.* FROM downloads AS d
+            WHERE d.chunked_at IS NULL
+               OR d.chunked_with IS NOT ?
+               OR d.chunked_sha256 IS NOT d.sha256
+            ORDER BY d.arxiv_id ASC
+            """,
+            (fingerprint,),
+        ).fetchall()
+        return [_download_from_row(row) for row in rows]
+
+    def mark_chunked(self, downloads: list[DownloadedPaper], fingerprint: str) -> None:
+        """Record a completed chunking pass, including passes that yielded nothing.
+
+        Without this a PDF with no extractable text would be retried forever.
+        """
+        now = _timestamp()
+        with self.connection:
+            self.connection.executemany(
+                """
+                UPDATE downloads
+                SET chunked_at = ?, chunked_with = ?, chunked_sha256 = ?
+                WHERE arxiv_id = ?
+                """,
+                [(now, fingerprint, download.sha256, download.arxiv_id) for download in downloads],
             )
-            for row in rows
-        ]
 
     def record_chunks(self, chunks: list[Chunk]) -> None:
         """Replace the stored chunks for every PDF represented in `chunks`.
@@ -270,7 +303,10 @@ class CorpusStore:
                     local_path TEXT NOT NULL,
                     sha256 TEXT NOT NULL,
                     byte_count INTEGER NOT NULL,
-                    downloaded_at TEXT NOT NULL
+                    downloaded_at TEXT NOT NULL,
+                    chunked_at TEXT,
+                    chunked_with TEXT,
+                    chunked_sha256 TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS chunks (
@@ -294,6 +330,7 @@ class CorpusStore:
                     ON chunks (arxiv_id, page_number, chunk_index);
                 """
             )
+            self._add_missing_columns()
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
@@ -301,6 +338,22 @@ class CorpusStore:
                 """,
                 (SCHEMA_VERSION,),
             )
+
+    def _add_missing_columns(self) -> None:
+        """Bring databases created by an earlier schema up to date.
+
+        Every change so far has been additive, so adding the absent columns is
+        the whole migration.
+        """
+        for table, columns in ADDED_COLUMNS.items():
+            present = {
+                row["name"] for row in self.connection.execute(f"PRAGMA table_info({table})")
+            }
+            for name, declaration in columns.items():
+                if name not in present:
+                    self.connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+                    )
 
 
 def split_arxiv_version(arxiv_id: str) -> tuple[str, int]:
@@ -323,6 +376,18 @@ def _paper_from_row(row: sqlite3.Row) -> Paper:
         source_url=row["source_url"],
         pdf_url=row["pdf_url"],
         license_url=row["license_url"],
+    )
+
+
+def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:
+    return DownloadedPaper(
+        arxiv_id=row["arxiv_id"],
+        source_url=row["source_url"],
+        pdf_url=row["pdf_url"],
+        license_url=row["license_url"],
+        local_path=row["local_path"],
+        sha256=row["sha256"],
+        byte_count=row["byte_count"],
     )
 
 
