@@ -23,6 +23,16 @@ from verbatim.storage import (
 
 
 def main() -> None:
+    """Entry point: report expected failures as messages, not tracebacks."""
+    try:
+        run()
+    except (RuntimeError, ValueError, OSError) as error:
+        raise SystemExit(f"error: {error}") from error
+    except KeyboardInterrupt:
+        raise SystemExit("interrupted") from None
+
+
+def run() -> None:
     parser = argparse.ArgumentParser(description="Ingest a small, traceable arXiv metadata snapshot.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     fetch_parser = subparsers.add_parser("fetch", help="Fetch paper metadata from one arXiv category")

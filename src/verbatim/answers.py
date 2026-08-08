@@ -86,22 +86,26 @@ class HostedCompletion:
                 "Answering needs the hosted SDK package; install it with 'uv add hosted-sdk'"
             ) from error
 
+        client = hosted_sdk.Client()
         try:
-            client = hosted_sdk.Client()
-        except TypeError as error:  # the SDK raises this when no credential resolves
+            # Credentials are resolved when the request is built, not at
+            # construction, so this is the call that fails without a key.
+            response = client.beta.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+        except TypeError as error:
+            if "authentication" not in str(error).lower():
+                raise
             raise RuntimeError(
                 "No hosted credentials found. Set HOSTED_API_KEY, or run "
                 "the provider's login command if you have its CLI installed."
             ) from error
-        response = client.beta.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            output_config={"format": {"type": "json_schema", "schema": schema}},
-        )
         if response.stop_reason == "refusal":
             raise RuntimeError(
                 "The model declined to answer this question "
