@@ -42,7 +42,20 @@ uv run verbatim sync --category cs.CL cs.IR --limit 2000
 
 A stored watermark per category is what makes this resumable: paging stops once
 results are older than the last run, so re-syncing costs one request rather than
-walking the category again. `--full` ignores it. arXiv's API is variable — the
+walking the category again.
+
+The watermark only looks **forward in time**. A category first synced with a
+small `--limit` stays at that size, because everything older is already "behind"
+the mark — a later `sync --limit 5000` on it fetches nothing. To go *deeper*
+into a category's history, use `--full`, which ignores the watermark and pages
+from the newest paper again:
+
+```bash
+uv run verbatim sync --category cs.LG --limit 5000 --full
+```
+
+Already-known papers are refreshed rather than duplicated, so the only cost is
+re-requesting their metadata. arXiv's API is variable — the
 same query has taken 2s and 61s, and returns 503 under load — so requests are
 retried with backoff, and a page that still fails stops the run cleanly with
 everything already fetched committed and the watermark recorded.
