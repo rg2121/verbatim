@@ -9,6 +9,7 @@ from verbatim.arxiv import fetch_metadata
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
+from verbatim.retrieval import vector_search
 from verbatim.downloads import DownloadedPaper, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -56,6 +57,13 @@ def main() -> None:
     search_parser.add_argument("--limit", type=int, default=10, help="Maximum number of passages")
     search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
+    search_parser.add_argument(
+        "--mode",
+        choices=("keyword", "vector"),
+        default="keyword",
+        help="keyword: exact terms via BM25. vector: meaning, via embeddings",
+    )
+    search_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model for --mode vector")
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -131,9 +139,18 @@ def main() -> None:
 
     if args.command == "search":
         with CorpusStore(args.state) as corpus:
-            matches = corpus.search_chunks(
-                args.query, limit=args.limit, arxiv_id=args.arxiv_id
-            )
+            if args.mode == "keyword":
+                matches = corpus.search_chunks(
+                    args.query, limit=args.limit, arxiv_id=args.arxiv_id
+                )
+            else:
+                matches = vector_search(
+                    corpus,
+                    FastEmbedEmbedder(model_name=args.model),
+                    args.query,
+                    limit=args.limit,
+                    arxiv_id=args.arxiv_id,
+                )
         if not matches:
             print(f"No passages matched {args.query!r}.")
         for rank, match in enumerate(matches, start=1):

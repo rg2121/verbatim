@@ -286,6 +286,22 @@ class CorpusStore:
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
 
+    def chunks_for_paper(self, arxiv_id: str) -> list[Chunk]:
+        rows = self.connection.execute(
+            "SELECT * FROM chunks WHERE arxiv_id = ? ORDER BY page_number, chunk_index",
+            (arxiv_id,),
+        ).fetchall()
+        return [_chunk_from_row(row) for row in rows]
+
+    def chunks_by_id(self, chunk_ids: Sequence[str]) -> list[Chunk]:
+        if not chunk_ids:
+            return []
+        placeholders = ",".join("?" * len(chunk_ids))
+        rows = self.connection.execute(
+            f"SELECT * FROM chunks WHERE chunk_id IN ({placeholders})", tuple(chunk_ids)
+        ).fetchall()
+        return [_chunk_from_row(row) for row in rows]
+
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
