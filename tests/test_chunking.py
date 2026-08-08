@@ -28,6 +28,12 @@ def test_chunk_text_normalizes_and_overlaps_at_word_boundaries() -> None:
     assert chunks == ["alpha beta gamma", "gamma delta", "delta epsilon"]
 
 
+def test_chunk_text_folds_typographic_ligatures_to_ascii() -> None:
+    (chunk,) = chunk_text("magnetic ﬂux and eﬃciency", chunk_size=100, overlap=10)
+
+    assert chunk == "magnetic flux and efficiency"
+
+
 def test_chunk_text_does_not_start_a_chunk_in_the_middle_of_a_word() -> None:
     chunks = chunk_text("alpha beta gamma delta epsilon", chunk_size=25, overlap=3)
 

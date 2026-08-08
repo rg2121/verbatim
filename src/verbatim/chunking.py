@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable
+import unicodedata
 
 import pymupdf
 
@@ -74,6 +75,15 @@ def extract_pages_from_pdf(pdf_path: Path) -> list[str]:
         return [page.get_text("text") for page in document]
 
 
+def normalize_page_text(text: str) -> str:
+    """Fold typographic ligatures and collapse whitespace.
+
+    PDF extraction yields presentation glyphs such as U+FB02 "ﬂ", which break
+    both keyword search and embedding similarity against ordinary "fl".
+    """
+    return " ".join(unicodedata.normalize("NFKC", text).split())
+
+
 def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
     """Create normalized, overlapping chunks without splitting words when possible."""
     if chunk_size < 1:
@@ -81,7 +91,7 @@ def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
     if overlap < 0 or overlap >= chunk_size:
         raise ValueError("overlap must be non-negative and smaller than chunk_size")
 
-    normalized = " ".join(text.split())
+    normalized = normalize_page_text(text)
     if not normalized:
         return []
 
