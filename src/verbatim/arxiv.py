@@ -41,6 +41,7 @@ def fetch_metadata(
     category: str,
     max_results: int,
     *,
+    sort_by: str = "lastUpdatedDate",
     http_get: Callable[[str], bytes] | None = None,
 ) -> list[Paper]:
     """Fetch recent papers in one arXiv category.
@@ -49,13 +50,15 @@ def fetch_metadata(
     """
     if max_results < 1:
         raise ValueError("max_results must be at least 1")
+    if sort_by not in {"lastUpdatedDate", "submittedDate"}:
+        raise ValueError("sort_by must be 'lastUpdatedDate' or 'submittedDate'")
 
     query = urlencode(
         {
             "search_query": f"cat:{category}",
             "start": 0,
             "max_results": max_results,
-            "sortBy": "submittedDate",
+            "sortBy": sort_by,
             "sortOrder": "descending",
         }
     )

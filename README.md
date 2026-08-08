@@ -7,31 +7,36 @@ A local-first, citation-focused literature-review assistant for scientific paper
 Fetch a small set of paper records from arXiv, retain their provenance, and save
 them locally. Full texts are deliberately out of scope for this first step.
 
-## Quick start
+## Daily corpus workflow
+
+```bash
+uv run verbatim sync --category physics.gen-ph --max-results 5
+uv run verbatim download --limit 3
+uv run verbatim chunk
+```
+
+`sync` writes the latest API response to `data/papers.json` for inspection and
+upserts it into `data/corpus.db`, the cumulative SQLite catalogue. It tracks
+full arXiv versions and marks superseded versions without deleting them.
+
+`download` selects the newest current versions that have not yet been downloaded
+and updates the cumulative PDF manifest. `chunk` regenerates a complete,
+page-aware JSONL export from the cumulative manifest.
+
+For a one-off metadata-only snapshot, use:
 
 ```bash
 uv run verbatim fetch --category physics.gen-ph --max-results 5
 ```
 
 This writes JSON to `data/papers.json` (which is intentionally not committed).
+The legacy one-off download form remains available with `download --input`.
 
-To download a small, bounded set of PDFs referenced by that snapshot:
-
-```bash
-uv run verbatim download --input data/papers.json --limit 3
-```
-
-This writes PDFs and `data/pdfs/manifest.json`, which preserves each file's
+The PDF manifest preserves each file's
 arXiv ID, source URL, reported licence, and SHA-256 checksum. Add
 `--require-license` to restrict downloads to records with an explicit licence
 in arXiv metadata. Cached PDFs are reused only after their checksum matches
 the previous manifest; downloads and generated artifacts are written atomically.
-
-Extract page-aware, overlapping passages from those PDFs:
-
-```bash
-uv run verbatim chunk --manifest data/pdfs/manifest.json
-```
 
 This writes `data/chunks.jsonl`. Every line includes text plus its arXiv ID,
 original source URL, PDF checksum, and page number; it is the input to the

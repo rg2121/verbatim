@@ -34,6 +34,7 @@ def test_fetch_metadata_builds_category_query() -> None:
     assert len(papers) == 1
     assert "search_query=cat%3Aphysics.gen-ph" in requested_urls[0]
     assert "max_results=3" in requested_urls[0]
+    assert "sortBy=lastUpdatedDate" in requested_urls[0]
 
 
 def test_fetch_metadata_rejects_zero_results() -> None:
