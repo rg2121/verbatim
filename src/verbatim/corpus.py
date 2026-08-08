@@ -13,7 +13,10 @@ from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
+# Terms are quoted before reaching FTS5, so a query may still use a trailing
+# '*' for prefix matching and double quotes for phrases.
+FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 
 # Columns added to existing databases after their table was first created.
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
@@ -30,6 +33,15 @@ VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 class SyncSummary:
     inserted: int
     updated: int
+
+
+@dataclass(frozen=True)
+class ChunkMatch:
+    """One keyword hit, carrying everything a citation needs."""
+
+    chunk: Chunk
+    score: float
+    snippet: str
 
 
 class CorpusStore:
@@ -265,7 +277,55 @@ class CorpusStore:
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
+    def search_chunks(
+        self, query: str, *, limit: int = 10, arxiv_id: str | None = None
+    ) -> list[ChunkMatch]:
+        """Rank chunks by BM25 relevance to a keyword query.
+
+        `arxiv_id` filters before ranking, so scores are not diluted by matches
+        in papers the caller already excluded.
+        """
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        match = build_fts_query(query)
+        if not match:
+            return []
+        clauses = ["chunks_fts MATCH ?"]
+        parameters: list[object] = [match]
+        if arxiv_id is not None:
+            clauses.append("c.arxiv_id = ?")
+            parameters.append(arxiv_id)
+        parameters.append(limit)
+        rows = self.connection.execute(
+            f"""
+            SELECT c.*,
+                   bm25(chunks_fts) AS relevance,
+                   snippet(chunks_fts, 0, '[', ']', '…', 16) AS snippet
+            FROM chunks_fts
+            JOIN chunks AS c ON c.rowid = chunks_fts.rowid
+            WHERE {' AND '.join(clauses)}
+            ORDER BY relevance ASC
+            LIMIT ?
+            """,
+            parameters,
+        ).fetchall()
+        # bm25() is negative with better matches further from zero; negate so
+        # callers can sort descending like every other relevance score.
+        return [
+            ChunkMatch(
+                chunk=_chunk_from_row(row),
+                score=-float(row["relevance"]),
+                snippet=row["snippet"],
+            )
+            for row in rows
+        ]
+
     def _initialize(self) -> None:
+        # Checked before the schema runs: CREATE VIRTUAL TABLE IF NOT EXISTS
+        # cannot report whether it created the index, and COUNT(*) on an
+        # external-content FTS5 table reads the content table rather than the
+        # index, so neither can tell us the index needs a backfill.
+        search_index_existed = self._table_exists("chunks_fts")
         with self.connection:
             self.connection.executescript(
                 """
@@ -328,8 +388,35 @@ class CorpusStore:
 
                 CREATE INDEX IF NOT EXISTS chunks_by_paper
                     ON chunks (arxiv_id, page_number, chunk_index);
+
+                CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                    text,
+                    content='chunks',
+                    content_rowid='rowid',
+                    tokenize="unicode61 remove_diacritics 2"
+                );
+
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_after_insert
+                AFTER INSERT ON chunks BEGIN
+                    INSERT INTO chunks_fts (rowid, text) VALUES (new.rowid, new.text);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_after_delete
+                AFTER DELETE ON chunks BEGIN
+                    INSERT INTO chunks_fts (chunks_fts, rowid, text)
+                    VALUES ('delete', old.rowid, old.text);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS chunks_fts_after_update
+                AFTER UPDATE ON chunks BEGIN
+                    INSERT INTO chunks_fts (chunks_fts, rowid, text)
+                    VALUES ('delete', old.rowid, old.text);
+                    INSERT INTO chunks_fts (rowid, text) VALUES (new.rowid, new.text);
+                END;
                 """
             )
+            if not search_index_existed:
+                self._backfill_search_index()
             self._add_missing_columns()
             self.connection.execute(
                 """
@@ -338,6 +425,21 @@ class CorpusStore:
                 """,
                 (SCHEMA_VERSION,),
             )
+
+    def _table_exists(self, name: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    def _backfill_search_index(self) -> None:
+        """Index chunks stored before the search index existed.
+
+        The triggers only cover writes made after they were created, so a
+        database upgraded in place would otherwise never match its own chunks.
+        """
+        self.connection.execute("INSERT INTO chunks_fts (chunks_fts) VALUES ('rebuild')")
 
     def _add_missing_columns(self) -> None:
         """Bring databases created by an earlier schema up to date.
@@ -377,6 +479,25 @@ def _paper_from_row(row: sqlite3.Row) -> Paper:
         pdf_url=row["pdf_url"],
         license_url=row["license_url"],
     )
+
+
+def build_fts_query(query: str) -> str:
+    """Turn a user query into a safe FTS5 MATCH expression.
+
+    Terms are quoted so that punctuation common in scientific text — hyphens,
+    colons, arXiv identifiers — cannot be read as FTS5 operators and raise a
+    syntax error.  A trailing '*' still means prefix search, and double-quoted
+    input is preserved as a phrase.
+    """
+    terms: list[str] = []
+    for raw in FTS_TERM_PATTERN.findall(query):
+        prefix = raw.endswith("*")
+        body = raw[:-1] if prefix else raw
+        body = body.strip('"').replace('"', "")
+        if not body:
+            continue
+        terms.append(f'"{body}"*' if prefix else f'"{body}"')
+    return " ".join(terms)
 
 
 def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:
