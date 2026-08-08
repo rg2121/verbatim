@@ -200,3 +200,50 @@ def test_hybrid_cap_promotes_a_second_paper_into_the_results(tmp_path: Path) -> 
 
     assert len({m.chunk.arxiv_id for m in capped}) >= len({m.chunk.arxiv_id for m in uncapped})
     assert sum(1 for m in capped if m.chunk.arxiv_id == "2608.11111v1") == 1
+
+
+def test_index_filters_by_kind_and_paper_without_passing_ids(tmp_path: Path) -> None:
+    """Filtering happens inside the KNN query, so it survives a large corpus."""
+    from verbatim.chunking import REFERENCES
+    from verbatim.corpus import CorpusStore
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux threads the ring."],
+            "2608.22222v1": ["Charge moves along the wire."],
+        },
+    ) as corpus:
+        # Mark one paper's chunk as a bibliography and reindex.
+        corpus.connection.execute(
+            "UPDATE chunks SET kind = ? WHERE arxiv_id = ?", (REFERENCES, "2608.22222v1")
+        )
+        corpus.connection.commit()
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.rebuild("stub")
+        query = WordCountEmbedder().embed_query("flux charge")
+
+        everything = index.search(query, limit=10)
+        body_only = index.search(query, limit=10, kind="body")
+        one_paper = index.search(query, limit=10, arxiv_id="2608.22222v1")
+
+    assert len(everything) == 2
+    assert len(body_only) == 1
+    assert len(one_paper) == 1
+
+
+def test_an_index_built_before_metadata_columns_is_replaced(tmp_path: Path) -> None:
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        SqliteVecIndex(corpus.connection, 3)  # loads the sqlite-vec extension
+        # Simulate the older schema: no arxiv_id or kind columns.
+        corpus.connection.execute("DROP TABLE vec_chunks")
+        corpus.connection.execute(
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[3])"
+        )
+        corpus.connection.commit()
+
+        index = SqliteVecIndex(corpus.connection, 3)  # should detect and replace
+        index.rebuild("stub")
+        hits = index.search(WordCountEmbedder().embed_query("flux"), limit=5, kind="body")
+
+    assert len(hits) == 1

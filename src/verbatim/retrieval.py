@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from verbatim.chunking import BODY
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
 from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
@@ -36,19 +37,15 @@ def vector_search(
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
     ensure_current(index, stored, model.model_id)
 
-    # Bibliographies match almost any technical query, so they are excluded by
-    # scoping the search rather than by filtering afterwards, which would
-    # silently shorten the result list.
-    scope = None
-    if arxiv_id is not None or not include_references:
-        scope = (
-            [chunk.chunk_id for chunk in corpus.chunks_for_paper(arxiv_id)]
-            if include_references and arxiv_id is not None
-            else corpus.body_chunk_ids(arxiv_id)
-        )
-        if not scope:
-            return []
-    hits = index.search(embedder.embed_query(query), limit=limit, chunk_ids=scope)
+    # Filters are pushed into the index rather than applied to a list of chunk
+    # ids: SQLite caps a statement at 32766 variables, so passing every body
+    # chunk id would fail at roughly 500 papers.
+    hits = index.search(
+        embedder.embed_query(query),
+        limit=limit,
+        arxiv_id=arxiv_id,
+        kind=None if include_references else BODY,
+    )
     if not hits:
         return []
 
