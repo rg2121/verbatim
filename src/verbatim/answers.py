@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from typing import Any, Protocol
 
@@ -50,19 +50,46 @@ ANSWER_SCHEMA: dict[str, Any] = {
 
 
 @dataclass(frozen=True)
+class RejectedCitation:
+    """A citation whose quoted words are not in the passage it names."""
+
+    chunk_id: str
+    quoted_text: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Answer:
     """A generated answer and the citations it rests on."""
 
     question: str
     text: str
     citations: list[Citation]
+    rejected: list[RejectedCitation]
 
     def to_dict(self) -> dict[str, object]:
         return {
             "question": self.question,
             "text": self.text,
             "citations": [citation.to_dict() for citation in self.citations],
+            "rejected": [asdict(item) for item in self.rejected],
         }
+
+
+def verify_quote(quoted_text: str, chunk_text: str) -> str | None:
+    """Return why a quote fails verification, or None if it is genuine.
+
+    Whitespace is normalized on both sides before comparison: the passage text
+    is already whitespace-collapsed, and a model reproducing it faithfully may
+    still differ in line breaks. Nothing else is forgiven — this is the check
+    that separates a real citation from a fabricated one.
+    """
+    quote = " ".join(quoted_text.split())
+    if not quote:
+        return "empty quote"
+    if quote not in " ".join(chunk_text.split()):
+        return "quoted text does not appear in the cited passage"
+    return None
 
 
 class Completion(Protocol):
@@ -140,18 +167,37 @@ def answer_from_matches(
 ) -> Answer:
     """Generate an answer over already-retrieved passages."""
     if not matches:
-        return Answer(question=question, text="No passages in the corpus match this question.", citations=[])
+        return Answer(
+            question=question,
+            text="No passages in the corpus match this question.",
+            citations=[],
+            rejected=[],
+        )
 
     payload = completion.complete(SYSTEM_PROMPT, build_prompt(question, matches), ANSWER_SCHEMA)
     chunks = {match.chunk.chunk_id: match.chunk for match in matches}
     papers = corpus.papers_by_id(sorted({match.chunk.arxiv_id for match in matches}))
 
     citations: list[Citation] = []
+    rejected: list[RejectedCitation] = []
     for raw in payload.get("citations", []):
-        chunk = chunks.get(raw.get("chunk_id", ""))
+        chunk_id = raw.get("chunk_id", "")
+        quoted_text = raw.get("quoted_text", "")
+        chunk = chunks.get(chunk_id)
         paper = papers.get(chunk.arxiv_id) if chunk else None
         if chunk is None or paper is None:
-            # The model named a passage that was not offered to it.
+            rejected.append(
+                RejectedCitation(chunk_id, quoted_text, "cited a passage that was not retrieved")
+            )
             continue
-        citations.append(citation_from_chunk(chunk, paper, raw.get("quoted_text", "")))
-    return Answer(question=question, text=payload.get("answer", ""), citations=citations)
+        failure = verify_quote(quoted_text, chunk.text)
+        if failure is not None:
+            rejected.append(RejectedCitation(chunk_id, quoted_text, failure))
+            continue
+        citations.append(citation_from_chunk(chunk, paper, quoted_text))
+    return Answer(
+        question=question,
+        text=payload.get("answer", ""),
+        citations=citations,
+        rejected=rejected,
+    )

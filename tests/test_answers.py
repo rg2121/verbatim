@@ -62,7 +62,7 @@ def test_answer_attaches_a_full_citation_to_each_cited_passage(tmp_path: Path) -
     assert citation.quoted_text == "Magnetic flux threads"
 
 
-def test_answer_drops_citations_naming_a_passage_that_was_never_offered(tmp_path: Path) -> None:
+def test_answer_rejects_citations_naming_a_passage_that_was_never_offered(tmp_path: Path) -> None:
     with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
         matches = matches_for(corpus)
         completion = ScriptedCompletion(
@@ -76,6 +76,7 @@ def test_answer_drops_citations_naming_a_passage_that_was_never_offered(tmp_path
         answer = answer_from_matches(corpus, completion, "?", matches)
 
     assert answer.citations == []
+    assert answer.rejected[0].reason == "cited a passage that was not retrieved"
 
 
 def test_answer_without_passages_does_not_call_the_model(tmp_path: Path) -> None:
@@ -85,4 +86,77 @@ def test_answer_without_passages_does_not_call_the_model(tmp_path: Path) -> None
 
     assert completion.user is None
     assert answer.citations == []
+    assert answer.rejected == []
     assert "No passages" in answer.text
+
+
+def test_a_fabricated_quote_is_rejected_not_cited(tmp_path: Path) -> None:
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        completion = ScriptedCompletion(
+            {
+                "answer": "The ring emits neutrinos [1].",
+                "citations": [
+                    {
+                        "marker": 1,
+                        "chunk_id": matches[0].chunk.chunk_id,
+                        "quoted_text": "the ring emits neutrinos",
+                    }
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert answer.citations == []
+    assert len(answer.rejected) == 1
+    assert "does not appear" in answer.rejected[0].reason
+
+
+def test_a_quote_differing_only_in_whitespace_still_verifies(tmp_path: Path) -> None:
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        completion = ScriptedCompletion(
+            {
+                "answer": "Flux threads it [1].",
+                "citations": [
+                    {
+                        "marker": 1,
+                        "chunk_id": matches[0].chunk.chunk_id,
+                        "quoted_text": "Magnetic   flux\n threads",
+                    }
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert len(answer.citations) == 1
+    assert answer.rejected == []
+
+
+def test_genuine_and_fabricated_citations_are_separated(tmp_path: Path) -> None:
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring.", "Charge moves along wires."]}
+    ) as corpus:
+        matches = matches_for(corpus)
+        completion = ScriptedCompletion(
+            {
+                "answer": "Flux threads [1] and charge moves [2], and pigs fly [3].",
+                "citations": [
+                    {"marker": 1, "chunk_id": matches[0].chunk.chunk_id, "quoted_text": "flux threads"},
+                    {"marker": 2, "chunk_id": matches[1].chunk.chunk_id, "quoted_text": "Charge moves"},
+                    {"marker": 3, "chunk_id": matches[0].chunk.chunk_id, "quoted_text": "pigs fly"},
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert [c.quoted_text for c in answer.citations] == ["flux threads", "Charge moves"]
+    assert [r.quoted_text for r in answer.rejected] == ["pigs fly"]
+
+
+def test_an_empty_quote_is_rejected(tmp_path: Path) -> None:
+    from verbatim.answers import verify_quote
+
+    assert verify_quote("", "some text") == "empty quote"
+    assert verify_quote("   ", "some text") == "empty quote"
+    assert verify_quote("some", "some text") is None

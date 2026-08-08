@@ -195,6 +195,10 @@ def run() -> None:
         if answer.citations:
             print("\nReferences")
             print(render_bibliography(answer.citations))
+        for item in answer.rejected:
+            # Loud on purpose: an unverifiable citation is the failure this
+            # tool exists to catch.
+            print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
 
     if args.command == "chunk":
         if args.manifest is not None:
