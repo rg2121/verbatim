@@ -1,0 +1,189 @@
+from pathlib import Path
+
+import pytest
+
+from verbatim.arxiv import FeedPage
+from verbatim.corpus import CorpusStore
+from verbatim.sync import sync_category
+
+from helpers import paper
+
+
+class FakeArxiv:
+    """A category of N papers, served in pages, newest `updated` first."""
+
+    def __init__(self, count: int) -> None:
+        # Descending timestamps, so index 0 is the most recently updated.
+        self.papers = [
+            paper(f"2608.{n:05d}v1", updated=f"2026-08-{(count - n) % 28 + 1:02d}T00:00:00Z")
+            for n in range(count)
+        ]
+        self.papers.sort(key=lambda p: p.updated, reverse=True)
+        self.requests: list[tuple[int, int]] = []
+
+    def __call__(self, category: str, *, start: int = 0, page_size: int = 100, **kwargs) -> FeedPage:
+        self.requests.append((start, page_size))
+        return FeedPage(
+            papers=self.papers[start : start + page_size],
+            total_results=len(self.papers),
+            start=start,
+        )
+
+    def publish(self, arxiv_id: str, updated: str) -> None:
+        """Add a newer paper, as arXiv would."""
+        self.papers.insert(0, paper(arxiv_id, updated=updated))
+
+
+def no_sleep(_seconds: float) -> None:
+    return None
+
+
+def test_sync_pages_past_a_single_request(tmp_path: Path) -> None:
+    feed = FakeArxiv(250)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        report = sync_category(
+            corpus, "cs.CL", limit=250, page_size=100, fetch_page=feed, sleep=no_sleep
+        )
+        stored = corpus.pipeline_stats("f", "m")["papers"]
+
+    assert report.requests == 3  # 100 + 100 + 50
+    assert report.fetched == 250
+    assert stored == 250
+    assert feed.requests == [(0, 100), (100, 100), (200, 50)]
+
+
+def test_a_repeat_sync_stops_at_the_watermark(tmp_path: Path) -> None:
+    """The point of the watermark: re-syncing must not re-walk the category."""
+    feed = FakeArxiv(250)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        sync_category(corpus, "cs.CL", limit=250, page_size=100, fetch_page=feed, sleep=no_sleep)
+        feed.requests.clear()
+        second = sync_category(
+            corpus, "cs.CL", limit=250, page_size=100, fetch_page=feed, sleep=no_sleep
+        )
+
+    assert second.fetched == 0
+    assert second.requests == 1  # one request to discover there is nothing new
+    assert second.stopped_because == "reached the watermark"
+    assert second.caught_up
+
+
+def test_only_papers_newer_than_the_watermark_are_ingested(tmp_path: Path) -> None:
+    feed = FakeArxiv(50)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        sync_category(corpus, "cs.CL", limit=50, page_size=50, fetch_page=feed, sleep=no_sleep)
+        feed.publish("2608.99999v1", updated="2026-09-01T00:00:00Z")
+        second = sync_category(
+            corpus, "cs.CL", limit=50, page_size=50, fetch_page=feed, sleep=no_sleep
+        )
+
+    assert second.fetched == 1
+    assert second.inserted == 1
+    assert second.stopped_because == "reached the watermark"
+
+
+def test_full_ignores_the_watermark(tmp_path: Path) -> None:
+    feed = FakeArxiv(120)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        sync_category(corpus, "cs.CL", limit=120, page_size=60, fetch_page=feed, sleep=no_sleep)
+        again = sync_category(
+            corpus, "cs.CL", limit=120, page_size=60, fetch_page=feed, sleep=no_sleep, full=True
+        )
+
+    assert again.fetched == 120
+    assert again.inserted == 0  # already known; refreshed rather than inserted
+    assert again.updated == 120
+
+
+def test_sync_stops_when_the_category_runs_out(tmp_path: Path) -> None:
+    feed = FakeArxiv(30)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        report = sync_category(
+            corpus, "cs.CL", limit=1_000, page_size=100, fetch_page=feed, sleep=no_sleep
+        )
+
+    assert report.fetched == 30
+    assert report.stopped_because == "exhausted the category"
+    assert report.total_available == 30
+
+
+def test_limit_caps_the_run_and_the_next_run_resumes(tmp_path: Path) -> None:
+    feed = FakeArxiv(200)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        first = sync_category(
+            corpus, "cs.CL", limit=50, page_size=50, fetch_page=feed, sleep=no_sleep
+        )
+        watermark = corpus.sync_watermark("cs.CL")
+
+    assert first.fetched == 50
+    assert first.stopped_because == "reached the limit"
+    assert watermark is not None
+
+
+def test_the_watermark_never_moves_backwards(tmp_path: Path) -> None:
+    """A later, smaller run must not lower the mark and cause refetching."""
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.record_sync("cs.CL", "2026-08-20T00:00:00Z", 10)
+        corpus.record_sync("cs.CL", "2026-08-01T00:00:00Z", 5)
+
+        assert corpus.sync_watermark("cs.CL") == "2026-08-20T00:00:00Z"
+        assert corpus.sync_summary() == [("cs.CL", "2026-08-20T00:00:00Z", 15)]
+
+
+def test_a_run_that_finds_nothing_leaves_the_watermark_intact(tmp_path: Path) -> None:
+    feed = FakeArxiv(20)
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        sync_category(corpus, "cs.CL", limit=20, page_size=20, fetch_page=feed, sleep=no_sleep)
+        before = corpus.sync_watermark("cs.CL")
+        sync_category(corpus, "cs.CL", limit=20, page_size=20, fetch_page=feed, sleep=no_sleep)
+
+        assert corpus.sync_watermark("cs.CL") == before
+
+
+def test_sync_paces_its_requests(tmp_path: Path) -> None:
+    feed = FakeArxiv(300)
+    pauses: list[float] = []
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        sync_category(
+            corpus,
+            "cs.CL",
+            limit=300,
+            page_size=100,
+            delay=3.0,
+            fetch_page=feed,
+            sleep=pauses.append,
+        )
+
+    assert pauses == [3.0, 3.0]  # between requests, not before the first
+
+
+@pytest.mark.parametrize(("limit", "page_size"), [(0, 10), (10, 0)])
+def test_sync_rejects_nonsense_paging(tmp_path: Path, limit: int, page_size: int) -> None:
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        with pytest.raises(ValueError):
+            sync_category(corpus, "cs.CL", limit=limit, page_size=page_size)
+
+
+def test_a_failing_page_keeps_the_papers_already_ingested(tmp_path: Path) -> None:
+    """A long ingest must not lose committed work when arXiv fails mid-run."""
+    feed = FakeArxiv(300)
+    calls = {"n": 0}
+
+    def flaky(category, *, start=0, page_size=100, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("503 Service Unavailable")
+        return feed(category, start=start, page_size=page_size)
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        report = sync_category(
+            corpus, "cs.CL", limit=300, page_size=100, fetch_page=flaky, sleep=no_sleep
+        )
+        stored = corpus.pipeline_stats("f", "m")["papers"]
+        watermark = corpus.sync_watermark("cs.CL")
+
+    assert report.fetched == 200  # two pages committed before the failure
+    assert stored == 200
+    assert "failed after" in report.stopped_because
+    assert not report.caught_up
+    assert watermark is not None  # so the next run resumes rather than restarting

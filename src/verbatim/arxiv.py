@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import time
 from typing import Callable
 from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
+
+from verbatim import config
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 # Licence lives only here; the query API omits it entirely.
@@ -15,6 +19,7 @@ OAI_NAMESPACE = "http://www.openarchives.org/OAI/2.0/"
 ARXIV_OAI_METADATA_NAMESPACE = "http://arxiv.org/OAI/arXiv/"
 ARXIV_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
 ATOM_NAMESPACE = "http://www.w3.org/2005/Atom"
+OPENSEARCH_NAMESPACE = "http://a9.com/-/spec/opensearch/1.1/"
 ARXIV_NAMESPACE = "http://arxiv.org/schemas/atom"
 
 
@@ -39,6 +44,61 @@ class Paper:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class FeedPage:
+    """One page of search results, and how many exist in total."""
+
+    papers: list[Paper]
+    total_results: int
+    start: int
+
+
+def fetch_metadata_page(
+    category: str,
+    *,
+    start: int = 0,
+    page_size: int = 100,
+    sort_by: str = "lastUpdatedDate",
+    http_get: Callable[[str], bytes] | None = None,
+) -> FeedPage:
+    """Fetch one page of a category, for callers that page through results.
+
+    arXiv caps a single request well below the size of a real corpus, so
+    anything past a few hundred papers has to be paged.  `total_results` comes
+    from the feed itself, which is what lets a caller know when to stop.
+    """
+    if start < 0:
+        raise ValueError("start must not be negative")
+    if page_size < 1:
+        raise ValueError("page_size must be at least 1")
+    if sort_by not in {"lastUpdatedDate", "submittedDate"}:
+        raise ValueError("sort_by must be 'lastUpdatedDate' or 'submittedDate'")
+
+    query = urlencode(
+        {
+            "search_query": f"cat:{category}",
+            "start": start,
+            "max_results": page_size,
+            "sortBy": sort_by,
+            "sortOrder": "descending",
+        }
+    )
+    get = http_get or _get
+    xml = get(f"{ARXIV_API_URL}?{query}")
+    return FeedPage(
+        papers=parse_feed(xml), total_results=parse_total_results(xml), start=start
+    )
+
+
+def parse_total_results(xml: bytes) -> int:
+    """Read how many papers match the query, across all pages."""
+    root = ElementTree.fromstring(xml)
+    element = root.find(f"{{{OPENSEARCH_NAMESPACE}}}totalResults")
+    if element is None or not (element.text or "").strip():
+        return 0
+    return int(element.text.strip())
 
 
 def fetch_metadata(
@@ -157,13 +217,34 @@ def parse_license(xml: bytes) -> str | None:
     return element.text.strip() or None
 
 
-def _get(url: str) -> bytes:
+def _get(url: str, *, sleep: Callable[[float], None] = time.sleep) -> bytes:
+    """Fetch one URL, retrying the failures arXiv actually produces.
+
+    Measured against the live API, identical queries returned in 2s, 18s, 36s
+    and 61s, and one came back 503 - so a single attempt on a short timeout
+    fails routinely. A multi-hour ingest cannot afford to abort on that.
+    Client errors are not retried, since repeating them changes nothing.
+    """
     request = Request(
         url,
         headers={"User-Agent": "verbatim/0.1 (personal research project)"},
     )
-    with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed HTTPS API host
-        return response.read()
+    last_error: Exception | None = None
+    for attempt in range(config.HTTP_RETRIES + 1):
+        if attempt:
+            sleep(config.HTTP_BACKOFF * (2 ** (attempt - 1)))
+        try:
+            with urlopen(request, timeout=config.HTTP_TIMEOUT) as response:  # noqa: S310
+                return response.read()
+        except HTTPError as error:
+            if error.code < 500:
+                raise
+            last_error = error
+        except (URLError, TimeoutError, OSError) as error:
+            last_error = error
+    raise RuntimeError(
+        f"arXiv did not respond after {config.HTTP_RETRIES + 1} attempts: {last_error}"
+    ) from last_error
 
 
 def _required_text(element: ElementTree.Element, path: str, namespace: dict[str, str]) -> str:

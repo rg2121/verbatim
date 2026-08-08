@@ -8,6 +8,7 @@ import time
 
 from verbatim.answers import HostedCompletion, OllamaCompletion, answer_from_matches
 from verbatim.arxiv import fetch_license, fetch_metadata, license_class
+from verbatim.sync import format_sync_report, sync_category
 from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
@@ -44,10 +45,12 @@ def run() -> None:
     fetch_parser.add_argument("--output", type=Path, default=config.PAPERS_SNAPSHOT_PATH)
 
     sync_parser = subparsers.add_parser("sync", help="Fetch metadata and upsert it into the cumulative corpus catalogue")
-    sync_parser.add_argument("--category", required=True, help="arXiv category, e.g. physics.gen-ph")
-    sync_parser.add_argument("--max-results", type=int, default=10, help="Number of recently updated papers to fetch")
+    sync_parser.add_argument("--category", required=True, nargs="+", help="One or more arXiv categories")
+    sync_parser.add_argument("--limit", type=int, default=config.SYNC_LIMIT, help="Papers to ingest per category this run")
+    sync_parser.add_argument("--page-size", type=int, default=config.SYNC_PAGE_SIZE, help="Papers per API request")
+    sync_parser.add_argument("--delay", type=float, default=config.SYNC_DELAY, help="Seconds between requests")
+    sync_parser.add_argument("--full", action="store_true", help="Ignore the watermark and re-walk the category")
     sync_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
-    sync_parser.add_argument("--output", type=Path, default=config.PAPERS_SNAPSHOT_PATH)
 
     download_parser = subparsers.add_parser("download", help="Download a bounded set of PDFs from a metadata snapshot")
     download_parser.add_argument("--input", type=Path, help="Legacy one-off metadata snapshot; omit to use --state")
@@ -155,11 +158,22 @@ def run() -> None:
         print(f"Saved {len(papers)} papers to {args.output}")
 
     if args.command == "sync":
-        papers = fetch_metadata(args.category, args.max_results)
-        save_papers(papers, args.output)
         with CorpusStore(args.state) as corpus:
-            summary = corpus.upsert_papers(papers)
-        print(f"Synced {len(papers)} papers ({summary.inserted} new, {summary.updated} refreshed) to {args.state}")
+            for position, category in enumerate(args.category):
+                if position:
+                    time.sleep(args.delay)
+                report = sync_category(
+                    corpus,
+                    category,
+                    limit=args.limit,
+                    page_size=args.page_size,
+                    delay=args.delay,
+                    full=args.full,
+                    on_page=lambda done, total: print(
+                        f"  {category}: {done}/{total}", end="\r", flush=True
+                    ),
+                )
+                print(format_sync_report(report))
 
     if args.command == "download":
         manifest_path = args.output_dir / "manifest.json"
@@ -207,7 +221,13 @@ def run() -> None:
             counts = corpus.pipeline_stats(
                 chunker_fingerprint(args.chunk_size, args.overlap), args.model
             )
+            synced = corpus.sync_summary()
         print(format_stats(counts))
+        if synced:
+            print("\n  synced categories")
+            for category, watermark, seen in synced:
+                mark = (watermark or "never")[:19]
+                print(f"    {category:<18} {seen:>7,} ingested   up to {mark}")
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)

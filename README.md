@@ -32,9 +32,20 @@ uv run verbatim embed
 uv run verbatim search "how does a changing field induce current in a loop"
 ```
 
-`sync` writes the latest API response to `data/papers.json` for inspection and
-upserts it into the catalogue. It tracks full arXiv versions and marks
-superseded versions without deleting them.
+`sync` pages through one or more categories, newest-updated first, and upserts
+into the catalogue. It tracks full arXiv versions and marks superseded versions
+without deleting them.
+
+```bash
+uv run verbatim sync --category cs.CL cs.IR --limit 2000
+```
+
+A stored watermark per category is what makes this resumable: paging stops once
+results are older than the last run, so re-syncing costs one request rather than
+walking the category again. `--full` ignores it. arXiv's API is variable — the
+same query has taken 2s and 61s, and returns 503 under load — so requests are
+retried with backoff, and a page that still fails stops the run cleanly with
+everything already fetched committed and the watermark recorded.
 
 `download` selects the newest current versions that have not yet been
 downloaded. Cached PDFs are reused only after their checksum matches the

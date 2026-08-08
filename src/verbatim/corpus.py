@@ -15,7 +15,7 @@ from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "8"
+SCHEMA_VERSION = "9"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -418,6 +418,45 @@ class CorpusStore:
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
+    def sync_watermark(self, category: str) -> str | None:
+        """The newest `updated` timestamp already ingested for a category.
+
+        Paging stops once results are older than this, so a repeat sync costs
+        one request rather than walking the whole category again.
+        """
+        row = self.connection.execute(
+            "SELECT newest_updated FROM sync_state WHERE category = ?", (category,)
+        ).fetchone()
+        return None if row is None else row["newest_updated"]
+
+    def record_sync(self, category: str, newest_updated: str | None, papers_seen: int) -> None:
+        """Advance the watermark, never retreat it.
+
+        A sync bounded by --limit can return older papers than a previous run
+        already covered; taking the max keeps the mark monotonic.
+        """
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO sync_state (category, newest_updated, last_synced_at, papers_seen)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(category) DO UPDATE SET
+                    newest_updated = MAX(
+                        COALESCE(excluded.newest_updated, ''),
+                        COALESCE(sync_state.newest_updated, '')
+                    ),
+                    last_synced_at = excluded.last_synced_at,
+                    papers_seen = sync_state.papers_seen + excluded.papers_seen
+                """,
+                (category, newest_updated, _timestamp(), papers_seen),
+            )
+
+    def sync_summary(self) -> list[tuple[str, str | None, int]]:
+        rows = self.connection.execute(
+            "SELECT category, newest_updated, papers_seen FROM sync_state ORDER BY category"
+        ).fetchall()
+        return [(r["category"], r["newest_updated"], r["papers_seen"]) for r in rows]
+
     def register_embedding_model(self, model: EmbeddingModel) -> None:
         """Record which model produced a set of vectors, so they can be swapped.
 
@@ -606,6 +645,13 @@ class CorpusStore:
 
                 CREATE INDEX IF NOT EXISTS chunks_by_paper
                     ON chunks (arxiv_id, page_number, chunk_index);
+
+                CREATE TABLE IF NOT EXISTS sync_state (
+                    category TEXT PRIMARY KEY,
+                    newest_updated TEXT,
+                    last_synced_at TEXT NOT NULL,
+                    papers_seen INTEGER NOT NULL DEFAULT 0
+                );
 
                 CREATE TABLE IF NOT EXISTS embedding_models (
                     model_id TEXT PRIMARY KEY,

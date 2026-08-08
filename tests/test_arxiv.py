@@ -134,3 +134,51 @@ def test_license_class_separates_reusable_from_merely_present(url, expected) -> 
     from verbatim.arxiv import license_class
 
     assert license_class(url) == expected
+
+
+def test_a_transient_arxiv_failure_is_retried() -> None:
+    """arXiv returns 503 under load; a multi-hour ingest cannot abort on that."""
+    from urllib.error import HTTPError
+    from verbatim.arxiv import _get
+
+    attempts = {"n": 0}
+
+    def flaky_urlopen(request, timeout):  # noqa: ARG001
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise HTTPError(request.full_url, 503, "Service Unavailable", {}, None)
+        raise AssertionError("should not reach a real request in this test")
+
+    import verbatim.arxiv as module
+
+    original = module.urlopen
+    module.urlopen = flaky_urlopen
+    try:
+        with pytest.raises(AssertionError):
+            _get("https://export.arxiv.org/api/query?x=1", sleep=lambda _s: None)
+    finally:
+        module.urlopen = original
+
+    assert attempts["n"] == 3  # two 503s were retried
+
+
+def test_a_client_error_is_not_retried() -> None:
+    from urllib.error import HTTPError
+    from verbatim.arxiv import _get
+    import verbatim.arxiv as module
+
+    attempts = {"n": 0}
+
+    def bad_request(request, timeout):  # noqa: ARG001
+        attempts["n"] += 1
+        raise HTTPError(request.full_url, 400, "Bad Request", {}, None)
+
+    original = module.urlopen
+    module.urlopen = bad_request
+    try:
+        with pytest.raises(HTTPError):
+            _get("https://export.arxiv.org/api/query?x=1", sleep=lambda _s: None)
+    finally:
+        module.urlopen = original
+
+    assert attempts["n"] == 1  # retrying a 400 would change nothing

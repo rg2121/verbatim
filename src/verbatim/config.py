@@ -64,5 +64,16 @@ OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
 
+# arXiv's API is variable: identical queries have taken 2s and 61s, and it
+# returns 503 under load, so a long ingest needs patience and retries.
+HTTP_TIMEOUT = float(_text("VERBATIM_HTTP_TIMEOUT", "90"))
+HTTP_RETRIES = _integer("VERBATIM_HTTP_RETRIES", 4)
+HTTP_BACKOFF = float(_text("VERBATIM_HTTP_BACKOFF", "5"))
+
+# Sync paging. arXiv caps a single request, so a real corpus has to be paged.
+SYNC_LIMIT = _integer("VERBATIM_SYNC_LIMIT", 1_000)
+SYNC_PAGE_SIZE = _integer("VERBATIM_SYNC_PAGE_SIZE", 100)
+SYNC_DELAY = float(_text("VERBATIM_SYNC_DELAY", "3"))
+
 # arXiv politeness. The OAI-PMH interface asks callers to pace themselves.
 LICENSE_LOOKUP_DELAY = float(_text("VERBATIM_LICENSE_LOOKUP_DELAY", "3"))
