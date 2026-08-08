@@ -18,7 +18,8 @@ MAX_TOKENS = 16_000
 JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
-CHUNK_ID_MARKER_PATTERN = re.compile(r"\[[0-9a-f]{16,}\]")
+CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
+MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
 
 LINE_PROTOCOL = """
 Reply in exactly this format and nothing else:
@@ -273,19 +274,33 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
     return {"answer": answer.group(1).strip(), "citations": citations}
 
 
-def renumber_markers(text: str, citations: list[Citation]) -> str:
+def renumber_markers(
+    text: str, citations: list[Citation], marker_positions: dict[int, int] | None = None
+) -> str:
     """Rewrite inline markers so they match the rendered bibliography.
 
-    Small models often cite by chunk id, or number their markers in an order
-    that does not survive rejected citations. The bibliography is numbered by
-    position, so the prose is normalised to match rather than trusting the
-    model to keep two numbering schemes in step.
+    Small models cite by chunk id, and their numbering does not survive a
+    rejected citation: a model citing [1] and [2] where [1] failed leaves the
+    prose pointing at a reference that is not printed. The bibliography is
+    numbered by position, so the prose is rewritten to match, and any marker
+    whose citation did not survive becomes [unverified].
     """
-    for position, citation in enumerate(citations, start=1):
-        text = text.replace(f"[{citation.chunk_id}]", f"[{position}]")
-    # A marker still holding a chunk id belongs to a citation that failed
-    # verification. Say so rather than leaving an opaque hash in the prose.
-    text = CHUNK_ID_MARKER_PATTERN.sub("[unverified]", text)
+    positions = marker_positions or {}
+    chunk_positions = {citation.chunk_id: n for n, citation in enumerate(citations, start=1)}
+
+    def rewrite(match: re.Match[str]) -> str:
+        token = match.group(1).strip()
+        if token in chunk_positions:
+            return f"[{chunk_positions[token]}]"
+        if token.isdigit() and int(token) in positions:
+            return f"[{positions[int(token)]}]"
+        if token.isdigit() or CHUNK_ID_PATTERN.fullmatch(token):
+            # Points at a citation that did not survive verification. Say so
+            # rather than leaving a dangling number or an opaque hash.
+            return "[unverified]"
+        return match.group(0)  # not a citation marker; leave it alone
+
+    text = MARKER_PATTERN.sub(rewrite, text)
     # Collapse the runs this can produce, e.g. "[1] [1]" or "[1][1]".
     return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", text)
 
@@ -338,6 +353,7 @@ def answer_from_matches(
 
     citations: list[Citation] = []
     rejected: list[RejectedCitation] = []
+    marker_positions: dict[int, int] = {}
     for raw in payload.get("citations", []):
         chunk_id = raw.get("chunk_id", "")
         quoted_text = raw.get("quoted_text", "")
@@ -352,14 +368,23 @@ def answer_from_matches(
         if failure is not None:
             rejected.append(RejectedCitation(chunk_id, quoted_text, failure))
             continue
-        if any(existing.chunk_id == chunk_id for existing in citations):
+        duplicate = next(
+            (n for n, existing in enumerate(citations, start=1) if existing.chunk_id == chunk_id),
+            None,
+        )
+        if duplicate is not None:
             # A second quote from the same passage renders as an identical
-            # reference, so the reader gains nothing from a duplicate entry.
+            # reference, so the reader gains nothing from a duplicate entry -
+            # but its marker must still resolve to the entry that is printed.
+            if isinstance(raw.get("marker"), int):
+                marker_positions[raw["marker"]] = duplicate
             continue
         citations.append(citation_from_chunk(chunk, paper, quoted_text))
+        if isinstance(raw.get("marker"), int):
+            marker_positions[raw["marker"]] = len(citations)
     return Answer(
         question=question,
-        text=renumber_markers(payload.get("answer", ""), citations),
+        text=renumber_markers(payload.get("answer", ""), citations, marker_positions),
         citations=citations,
         rejected=rejected,
     )

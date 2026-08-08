@@ -185,17 +185,38 @@ def test_markers_written_as_chunk_ids_are_renumbered_to_match_the_bibliography(
     assert answer.text == "Flux threads [1] and charge moves [2]."
 
 
-def test_renumbering_leaves_correct_numeric_markers_alone() -> None:
+def test_a_numeric_marker_resolves_to_its_citations_final_position() -> None:
+    """The model's second citation becomes [1] when its first was rejected."""
     from verbatim.answers import renumber_markers
 
-    assert renumber_markers("Already fine [1] and [2].", []) == "Already fine [1] and [2]."
+    class FakeCitation:
+        chunk_id = "aaa"
+
+    assert renumber_markers("Claim [2] holds.", [FakeCitation()], {2: 1}) == "Claim [1] holds."
+
+
+def test_a_marker_with_no_surviving_citation_is_flagged() -> None:
+    from verbatim.answers import renumber_markers
+
+    assert renumber_markers("Already [1] and [2].", []) == "Already [unverified] and [unverified]."
+
+
+def test_renumbering_leaves_non_citation_brackets_alone() -> None:
+    from verbatim.answers import renumber_markers
+
+    assert renumber_markers("The set [a, b] is closed.", []) == "The set [a, b] is closed."
 
 
 def test_renumbering_collapses_duplicate_markers() -> None:
     from verbatim.answers import renumber_markers
 
-    assert renumber_markers("Claim [1] [1] holds.", []) == "Claim [1] holds."
-    assert renumber_markers("Claim [2][2][2] holds.", []) == "Claim [2] holds."
+    class FakeCitation:
+        chunk_id = "aaa"
+
+    assert renumber_markers("Claim [1] [1] holds.", [FakeCitation()], {1: 1}) == "Claim [1] holds."
+    assert (
+        renumber_markers("Claim [1][1][1] holds.", [FakeCitation()], {1: 1}) == "Claim [1] holds."
+    )
 
 
 def test_line_protocol_parses_into_the_answer_payload() -> None:

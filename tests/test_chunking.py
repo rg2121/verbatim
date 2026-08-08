@@ -82,63 +82,63 @@ def test_extract_pdf_chunks_rejects_a_file_that_does_not_match_its_manifest(tmp_
 
 
 def marked(pages: list[str]) -> list[str]:
-    """Chunk one paper's pages and return the kind of each chunk."""
-    from verbatim.chunking import mark_references
-    from verbatim.chunking import Chunk
+    """Chunk one paper's Markdown pages and return the kind of each chunk."""
+    from verbatim.downloads import DownloadedPaper
+    from verbatim.chunking import extract_pdf_chunks
+    import tempfile
+    from hashlib import sha256 as _sha
 
-    chunks = []
-    for page_number, text in enumerate(pages, start=1):
-        for index, span in enumerate(chunk_page(text, chunk_size=200, overlap=20)):
-            chunks.append(
-                Chunk(
-                    chunk_id=f"c{page_number}{index}",
-                    arxiv_id="2608.11111v1",
-                    source_url="u",
-                    license_url=None,
-                    pdf_sha256="s",
-                    page_number=page_number,
-                    chunk_index=index,
-                    char_start=span.char_start,
-                    char_end=span.char_end,
-                    text=span.text,
-                    chunker_version="3:200:20",
-                )
-            )
-    return [chunk.kind for chunk in mark_references(chunks)]
+    directory = Path(tempfile.mkdtemp())
+    pdf = directory / "paper.pdf"
+    content = b"%PDF-1.7 x\n%%EOF\n"
+    pdf.write_bytes(content)
+    record = DownloadedPaper(
+        arxiv_id="2608.11111v1",
+        source_url="u",
+        pdf_url="p",
+        license_url=None,
+        local_path=str(pdf),
+        sha256=_sha(content).hexdigest(),
+        byte_count=len(content),
+    )
+    chunks = extract_pdf_chunks(
+        [record], chunk_size=400, overlap=40, extract_pages=lambda _: pages
+    )
+    return [chunk.kind for chunk in chunks]
 
 
-def test_bibliography_and_everything_after_it_are_marked_as_references() -> None:
+def test_a_references_heading_marks_it_and_everything_after() -> None:
     kinds = marked(
         [
-            "Introduction. We study flux.",
-            "Method. We measure flux carefully.",
-            "Conclusion follows. References [1] A. Smith, Flux, 2020.",
+            "## Introduction\n\nWe study flux.",
+            "## Method\n\nWe measure flux carefully.",
+            "## Conclusion\n\nFlux moves.\n\n## References\n\n[1] A. Smith, Flux, 2020.",
             "[2] B. Jones, More flux, 2021.",
         ]
     )
 
-    assert kinds[0] == "body" and kinds[1] == "body"
-    assert kinds[2] == "references" and kinds[3] == "references"
+    assert kinds[:3] == ["body", "body", "body"]
+    assert set(kinds[3:]) == {"references"}
 
 
-def test_prose_merely_mentioning_references_is_not_marked() -> None:
+def test_a_section_that_merely_mentions_references_is_not_marked() -> None:
     kinds = marked(
         [
-            "Introduction to flux.",
-            "We follow the References section of prior work when reporting results.",
-            "Discussion of the measured flux values and their implications here.",
+            "## Introduction\n\nFlux is studied.",
+            "## Reference-Assisted Human Audit\n\nWe audit against a reference set.",
+            "## Evaluated Model References\n\nModels are listed with their versions.",
         ]
     )
 
     assert set(kinds) == {"body"}
 
 
-def test_an_early_bibliography_mention_does_not_swallow_the_paper() -> None:
+def test_a_bibliography_quoted_early_does_not_swallow_the_paper() -> None:
     kinds = marked(
         [
-            "References [1] A. Smith, 2020. (a quoted reference list in the abstract)",
-            "Body text about flux measurements.",
-            "More body text about flux measurements and their meaning.",
+            "## References\n\n[1] A. Smith, 2020. (quoted in the abstract)",
+            "## Introduction\n\nBody text about flux measurements.",
+            "## Method\n\nMore body text about flux and its meaning.",
         ]
     )
 
@@ -146,4 +146,38 @@ def test_an_early_bibliography_mention_does_not_swallow_the_paper() -> None:
 
 
 def test_a_paper_with_no_bibliography_is_left_alone() -> None:
-    assert set(marked(["Only body text.", "Still only body text about flux."])) == {"body"}
+    assert set(marked(["## Intro\n\nOnly body text.", "## Method\n\nStill body text."])) == {"body"}
+
+
+def test_section_paths_record_the_heading_hierarchy() -> None:
+    from verbatim.chunking import parse_markdown_sections
+
+    sections, stack = parse_markdown_sections(
+        "# **Title**\n\nPreamble.\n\n## **1 Intro**\n\nBody.\n\n### **1.1 Setup**\n\nDetail.", []
+    )
+
+    assert [s.path for s in sections] == [
+        ("Title",),
+        ("Title", "1 Intro"),
+        ("Title", "1 Intro", "1.1 Setup"),
+    ]
+    assert [level for level, _ in stack] == [1, 2, 3]
+
+
+def test_a_heading_continues_onto_the_next_page() -> None:
+    from verbatim.chunking import parse_markdown_sections
+
+    first, stack = parse_markdown_sections("## **2 Method**\n\nWe begin.", [])
+    second, _ = parse_markdown_sections("The method continues here.", stack)
+
+    assert first[0].path == ("2 Method",)
+    assert second[0].path == ("2 Method",)
+
+
+def test_markdown_emphasis_is_stripped_from_text_and_headings() -> None:
+    from verbatim.chunking import parse_markdown_sections, strip_markdown
+
+    assert strip_markdown("**Bold** and _italic_ and `code`") == "Bold and italic and code"
+    sections, _ = parse_markdown_sections("## **3 Results**\n\nWe found **flux**.", [])
+    assert sections[0].path == ("3 Results",)
+    assert sections[0].text == "We found flux."

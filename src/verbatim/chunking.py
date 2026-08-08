@@ -10,24 +10,31 @@ from typing import Callable, Iterable
 import unicodedata
 
 import pymupdf
+import pymupdf4llm
 
 from verbatim.downloads import DownloadedPaper, file_sha256
 
-CHUNKER_VERSION = "3"
+CHUNKER_VERSION = "5"
 
 BODY = "body"
 REFERENCES = "references"
 
-# A bibliography heading immediately followed by the start of a citation: a
-# bracketed number, an author surname, or an initial.  Matching the heading
-# alone also fires on prose that merely mentions references; requiring what
-# follows it is what makes this precise enough to filter on.
-REFERENCES_HEADING = re.compile(
-    r"\b(?:REFERENCES|References|Bibliography|BIBLIOGRAPHY)\s+(?=\[\d|[A-Z][a-z]+[,.]|[A-Z]\.)"
+# Layout-aware extraction turns the bibliography heading into a section, so a
+# whole-title match is both simpler and far more reliable than the earlier
+# approach of scanning prose for the word "References".
+REFERENCES_TITLE = re.compile(
+    r"^(?:\d+\s*\.?\s*)?(?:references|bibliography|works cited|literature cited)\s*$",
+    re.I,
 )
 # Bibliographies sit at the back; a "References" mention earlier is a citation
 # to someone else's reference list, not the start of this paper's.
 REFERENCES_EARLIEST_FRACTION = 0.4
+MARKDOWN_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
+# Emphasis, inline HTML, and link syntax; the words inside are kept.
+MARKDOWN_MARKUP = re.compile(r"\*{1,3}|_+|`+|<[^>]{1,40}>|^\s*[-*+]\s+", re.M)
+# Font-size heading detection sometimes swallows an author block into the
+# title; a real section heading is short.
+MAX_HEADING_LENGTH = 80
 
 
 def chunker_fingerprint(chunk_size: int, overlap: int) -> str:
@@ -49,6 +56,15 @@ class TextSpan:
 
 
 @dataclass(frozen=True)
+class Section:
+    """One heading's worth of text, and where it sits in the page."""
+
+    path: tuple[str, ...]
+    text: str
+    char_start: int
+
+
+@dataclass(frozen=True)
 class Chunk:
     """A retrievable passage with enough data to cite its original paper."""
 
@@ -64,6 +80,7 @@ class Chunk:
     text: str
     chunker_version: str
     kind: str = BODY
+    section_path: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -89,24 +106,31 @@ def extract_pdf_chunks(
                 f"Checksum mismatch for {download.arxiv_id}: manifest={download.sha256}, file={actual_checksum}"
             )
         paper_chunks: list[Chunk] = []
+        heading_stack: list[tuple[int, str]] = []
         for page_number, page_text in enumerate(page_extractor(pdf_path), start=1):
-            spans = chunk_page(page_text, chunk_size=chunk_size, overlap=overlap)
-            for chunk_index, span in enumerate(spans):
-                paper_chunks.append(
-                    Chunk(
-                        chunk_id=_chunk_id(download, page_number, chunk_index, fingerprint),
-                        arxiv_id=download.arxiv_id,
-                        source_url=download.source_url,
-                        license_url=download.license_url,
-                        pdf_sha256=download.sha256,
-                        page_number=page_number,
-                        chunk_index=chunk_index,
-                        char_start=span.char_start,
-                        char_end=span.char_end,
-                        text=span.text,
-                        chunker_version=fingerprint,
+            sections, heading_stack = parse_markdown_sections(page_text, heading_stack)
+            chunk_index = 0
+            for section in sections:
+                for span in chunk_page(section.text, chunk_size=chunk_size, overlap=overlap):
+                    paper_chunks.append(
+                        Chunk(
+                            chunk_id=_chunk_id(download, page_number, chunk_index, fingerprint),
+                            arxiv_id=download.arxiv_id,
+                            source_url=download.source_url,
+                            license_url=download.license_url,
+                            pdf_sha256=download.sha256,
+                            page_number=page_number,
+                            chunk_index=chunk_index,
+                            # Offsets stay relative to the page, not the section,
+                            # so a citation still addresses the page a reader sees.
+                            char_start=section.char_start + span.char_start,
+                            char_end=section.char_start + span.char_end,
+                            text=span.text,
+                            chunker_version=fingerprint,
+                            section_path=" > ".join(section.path),
+                        )
                     )
-                )
+                    chunk_index += 1
         chunks.extend(mark_references(paper_chunks))
     return chunks
 
@@ -114,18 +138,18 @@ def extract_pdf_chunks(
 def mark_references(paper_chunks: list[Chunk]) -> list[Chunk]:
     """Label the bibliography of one paper, and everything after it.
 
-    Detection is deliberately conservative: it fires only on a heading that is
-    immediately followed by the start of a citation, in the back of the paper.
-    That misses papers whose heading did not survive extraction, but it does not
-    mislabel body text — and dropping real content would be worse than the
-    over-representation this exists to fix.
+    A chunk belongs to the bibliography when one of its section headings *is*
+    "References" (or a synonym), rather than merely mentions it — so a section
+    called "Reference-Assisted Human Audit" is not swept up. Requiring the
+    heading to sit in the back of the paper rules out a bibliography quoted in
+    an abstract.
     """
     last_page = max((chunk.page_number for chunk in paper_chunks), default=0)
     start: tuple[int, int] | None = None
     for chunk in paper_chunks:
         if chunk.page_number < last_page * REFERENCES_EARLIEST_FRACTION:
             continue
-        if REFERENCES_HEADING.search(chunk.text):
+        if any(REFERENCES_TITLE.match(title) for title in chunk.section_path.split(" > ")):
             start = (chunk.page_number, chunk.chunk_index)
             break
     if start is None:
@@ -139,12 +163,79 @@ def mark_references(paper_chunks: list[Chunk]) -> list[Chunk]:
 
 
 def extract_pages_from_pdf(pdf_path: Path) -> list[str]:
-    """Return text for every page of a text-based PDF.
+    """Return Markdown for every page of a text-based PDF.
+
+    pymupdf4llm reconstructs reading order and marks headings by font size,
+    which plain text extraction cannot express.  It costs roughly 50x the time
+    of raw extraction, which is affordable because chunking is incremental.
 
     Scanned PDFs need OCR, which will be a separate later stage.
     """
+    pages = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True, show_progress=False)
+    return [page.get("text") or "" for page in pages]
+
+
+def extract_plain_pages_from_pdf(pdf_path: Path) -> list[str]:
+    """Raw per-page text, without layout reconstruction.
+
+    Kept as the fast path for callers that do not need structure.
+    """
     with pymupdf.open(pdf_path) as document:
         return [page.get_text("text") for page in document]
+
+
+def parse_markdown_sections(
+    page_markdown: str, heading_stack: list[tuple[int, str]]
+) -> tuple[list[Section], list[tuple[int, str]]]:
+    """Split one page into sections, carrying the heading stack across pages.
+
+    A section runs from one heading to the next, so a chunk never straddles a
+    section boundary and every chunk knows which part of the paper it came
+    from.  The stack is returned because a section usually continues onto the
+    following page.
+    """
+    stack = list(heading_stack)
+    sections: list[Section] = []
+    body: list[str] = []
+    offset = 0
+
+    def flush() -> None:
+        nonlocal body, offset
+        text = clean_markdown_text("\n".join(body))
+        if text:
+            sections.append(Section(path=tuple(title for _, title in stack), text=text, char_start=offset))
+            offset += len(text) + 1  # +1 for the separator between sections
+        body = []
+
+    for line in page_markdown.splitlines():
+        heading = MARKDOWN_HEADING.match(line)
+        if heading is None:
+            body.append(line)
+            continue
+        flush()
+        level = len(heading.group(1))
+        title = strip_markdown(heading.group(2))[:MAX_HEADING_LENGTH].strip()
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        if title:
+            stack.append((level, title))
+    flush()
+    return sections, stack
+
+
+def clean_markdown_text(text: str) -> str:
+    """Drop Markdown markup, then normalize, keeping only the words.
+
+    Body text is stripped as well as headings: a stored passage containing
+    "**flux**" would fail citation verification against a model that quoted
+    "flux", and the markup is noise to both keyword and vector search.
+    """
+    return normalize_page_text(MARKDOWN_MARKUP.sub("", text))
+
+
+def strip_markdown(text: str) -> str:
+    """Remove Markdown emphasis and inline markup from a single line."""
+    return clean_markdown_text(text)
 
 
 def normalize_page_text(text: str) -> str:
