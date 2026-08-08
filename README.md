@@ -66,6 +66,25 @@ matched. The index matches whole tokens and does not stem, so `field` does not
 match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
 every word of a natural-language question matches nothing at all.
 
+`stats` shows what each stage has done and what it has left, which is how a
+long ingest stays observable:
+
+```
+  stage      done                           remaining              next
+  papers     59                             59 current
+  licences   19 known                       40 to look up          verbatim licenses
+  pdfs       35 (0.1 GB)                    24 to fetch            verbatim download
+  chunks     3,184 (2,326 body / 858 refs)  0 pdfs to chunk        verbatim chunk
+  vectors    3,184                          0 to embed             verbatim embed
+```
+
+Every stage is incremental and safe to re-run: nothing is redone unless its
+input changed. Papers are upserted by arXiv ID; a PDF is fetched only if it has
+no download record; a PDF is re-chunked only if its bytes, the chunker version,
+or the chunk size changed; a chunk is embedded only if it has no vector *for
+that model*; and the vector index adds and removes only what differs.
+`verbatim index --rebuild` forces a full reload if you ever need one.
+
 `ask` retrieves passages, answers strictly from them, and cites every claim:
 
 ```bash

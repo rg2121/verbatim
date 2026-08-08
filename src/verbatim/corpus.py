@@ -327,6 +327,44 @@ class CorpusStore:
                 (license_url, _timestamp(), base_arxiv_id),
             )
 
+    def pipeline_stats(self, chunker_fingerprint: str, model_id: str) -> dict[str, int]:
+        """Counts for each stage, and how much work each has left.
+
+        One query set rather than several calls, so a long ingest can be
+        watched without loading the corpus into memory.
+        """
+        scalar = lambda sql, args=(): int(self.connection.execute(sql, args).fetchone()[0])
+        return {
+            "papers": scalar("SELECT COUNT(*) FROM papers"),
+            "papers_current": scalar("SELECT COUNT(*) FROM papers WHERE is_latest = 1"),
+            "licences_known": scalar("SELECT COUNT(*) FROM papers WHERE license_url IS NOT NULL"),
+            "licences_pending": scalar(
+                "SELECT COUNT(DISTINCT base_arxiv_id) FROM papers"
+                " WHERE license_url IS NULL AND license_checked_at IS NULL"
+            ),
+            "downloaded": scalar("SELECT COUNT(*) FROM downloads"),
+            "downloads_pending": scalar(
+                "SELECT COUNT(*) FROM papers AS p LEFT JOIN downloads AS d"
+                " ON d.arxiv_id = p.arxiv_id"
+                " WHERE p.is_latest = 1 AND p.pdf_url IS NOT NULL AND d.arxiv_id IS NULL"
+            ),
+            "chunks": scalar("SELECT COUNT(*) FROM chunks"),
+            "chunks_body": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'body'"),
+            "chunks_references": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'references'"),
+            "chunking_pending": scalar(
+                "SELECT COUNT(*) FROM downloads"
+                " WHERE chunked_at IS NULL OR chunked_with IS NOT ? OR chunked_sha256 IS NOT sha256",
+                (chunker_fingerprint,),
+            ),
+            "vectors": scalar("SELECT COUNT(*) FROM embeddings WHERE model_id = ?", (model_id,)),
+            "embedding_pending": scalar(
+                "SELECT COUNT(*) FROM chunks AS c WHERE NOT EXISTS ("
+                " SELECT 1 FROM embeddings AS e WHERE e.chunk_id = c.chunk_id AND e.model_id = ?)",
+                (model_id,),
+            ),
+            "bytes_on_disk": scalar("SELECT COALESCE(SUM(byte_count), 0) FROM downloads"),
+        }
+
     def license_summary(self) -> dict[str, int]:
         rows = self.connection.execute(
             """

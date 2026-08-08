@@ -14,6 +14,7 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
 from verbatim.embedding import FastEmbedEmbedder, embed_pending
 from verbatim.retrieval import hybrid_search, vector_search
+from verbatim.vectors import SqliteVecIndex
 from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -57,6 +58,19 @@ def run() -> None:
         "--require-license",
         action="store_true",
         help="Download only papers whose metadata explicitly reports a licence",
+    )
+
+    stats_parser = subparsers.add_parser("stats", help="Show corpus size and work remaining")
+    stats_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    stats_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    stats_parser.add_argument("--chunk-size", type=int, default=config.CHUNK_SIZE)
+    stats_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
+
+    index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
+    index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    index_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    index_parser.add_argument(
+        "--rebuild", action="store_true", help="Discard and reload, rather than syncing changes"
     )
 
     licenses_parser = subparsers.add_parser(
@@ -187,6 +201,25 @@ def run() -> None:
             print(f"  ! {failure.arxiv_id}: {failure.reason}")
         if report.failed:
             print(f"  {len(report.failed)} paper(s) could not be downloaded.")
+
+    if args.command == "stats":
+        with CorpusStore(args.state) as corpus:
+            counts = corpus.pipeline_stats(
+                chunker_fingerprint(args.chunk_size, args.overlap), args.model
+            )
+        print(format_stats(counts))
+
+    if args.command == "index":
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        with CorpusStore(args.state) as corpus:
+            model = embedder.model
+            index = SqliteVecIndex(corpus.connection, model.dimensions)
+            if args.rebuild:
+                print(f"Rebuilt the index with {index.rebuild(model.model_id)} vectors.")
+            else:
+                change = index.sync(model.model_id)
+                print(f"Index synced: {change.added} added, {change.removed} removed; "
+                      f"{index.count()} vectors total.")
 
     if args.command == "licenses":
         with CorpusStore(args.state) as corpus:
@@ -332,3 +365,25 @@ def _merge_downloads(
     by_id = {download.arxiv_id: download for download in existing_downloads}
     by_id.update({download.arxiv_id: download for download in new_downloads})
     return list(by_id.values())
+
+
+def format_stats(counts: dict[str, int]) -> str:
+    """Render pipeline counts as a table of done-versus-remaining per stage."""
+    gigabytes = counts["bytes_on_disk"] / 1e9
+    rows = [
+        ("papers", f"{counts['papers']:,}", f"{counts['papers_current']:,} current", ""),
+        ("licences", f"{counts['licences_known']:,} known",
+         f"{counts['licences_pending']:,} to look up", "verbatim licenses"),
+        ("pdfs", f"{counts['downloaded']:,} ({gigabytes:.1f} GB)",
+         f"{counts['downloads_pending']:,} to fetch", "verbatim download"),
+        ("chunks", f"{counts['chunks']:,} "
+                   f"({counts['chunks_body']:,} body / {counts['chunks_references']:,} refs)",
+         f"{counts['chunking_pending']:,} pdfs to chunk", "verbatim chunk"),
+        ("vectors", f"{counts['vectors']:,}",
+         f"{counts['embedding_pending']:,} to embed", "verbatim embed"),
+    ]
+    width = max(len(row[1]) for row in rows)
+    lines = [f"  {'stage':<10} {'done':<{width}}  {'remaining':<22} next"]
+    for stage, done, remaining, command in rows:
+        lines.append(f"  {stage:<10} {done:<{width}}  {remaining:<22} {command}")
+    return "\n".join(lines)

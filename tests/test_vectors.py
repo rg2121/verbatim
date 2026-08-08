@@ -3,10 +3,11 @@ from pathlib import Path
 import pytest
 
 from verbatim.corpus import CorpusStore, EmbeddingModel
+from verbatim.chunking import extract_pdf_chunks
 from verbatim.retrieval import _similarity, vector_search
 from verbatim.vectors import SqliteVecIndex, ensure_current
 
-from helpers import chunked_corpus
+from helpers import chunked_corpus, downloaded, paper
 
 
 class WordCountEmbedder:
@@ -247,3 +248,44 @@ def test_an_index_built_before_metadata_columns_is_replaced(tmp_path: Path) -> N
         hits = index.search(WordCountEmbedder().embed_query("flux"), limit=5, kind="body")
 
     assert len(hits) == 1
+
+
+def test_index_sync_adds_only_what_is_missing(tmp_path: Path) -> None:
+    """Adding a paper must not reload the whole index."""
+    from verbatim.embedding import embed_pending
+
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux.", "Charge moves."]}) as corpus:
+        index = SqliteVecIndex(corpus.connection, 3)
+        first = index.sync("stub")
+        assert (first.added, first.removed) == (2, 0)
+
+        # A second sync with nothing new must do no work at all.
+        assert index.sync("stub") == type(first)(added=0, removed=0)
+
+        # Add a paper: only its chunks are indexed.
+        record = downloaded(tmp_path, "2608.22222v1")
+        corpus.upsert_papers([paper("2608.22222v1")])
+        corpus.record_downloads([record])
+        corpus.record_chunks(
+            extract_pdf_chunks([record], extract_pages=lambda _: ["## S\n\nCharge flows onward."])
+        )
+        embed_pending(corpus, WordCountEmbedder())
+        second = index.sync("stub")
+
+        assert second.removed == 0
+        assert second.added >= 1
+        assert index.count() == corpus.embedding_count("stub")
+
+
+def test_index_sync_drops_vectors_whose_chunks_are_gone(tmp_path: Path) -> None:
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux.", "Charge moves."]}) as corpus:
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.sync("stub")
+        before = index.count()
+
+        corpus.connection.execute("DELETE FROM embeddings WHERE model_id = 'stub'")
+        corpus.connection.commit()
+        change = index.sync("stub")
+
+    assert before == 2
+    assert change.removed == 2
