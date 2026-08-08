@@ -6,9 +6,10 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from verbatim import config
 from verbatim.corpus import CorpusStore, EmbeddingModel
 
-DEFAULT_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+DEFAULT_MODEL_NAME = config.EMBEDDING_MODEL
 # bge asks for this prefix on the query side only; passages are embedded bare.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 

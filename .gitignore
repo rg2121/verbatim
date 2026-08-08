@@ -6,3 +6,6 @@ __pycache__/
 data/
 *.egg-info/
 
+
+# Secrets and local overrides
+.env

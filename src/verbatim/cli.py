@@ -6,13 +6,13 @@ import argparse
 from pathlib import Path
 import time
 
-from verbatim.answers import MODEL as HOSTED_MODEL
 from verbatim.answers import HostedCompletion, OllamaCompletion, answer_from_matches
 from verbatim.arxiv import fetch_license, fetch_metadata, license_class
 from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
-from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
+from verbatim import config
+from verbatim.embedding import FastEmbedEmbedder, embed_pending
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
 from verbatim.storage import (
@@ -40,19 +40,19 @@ def run() -> None:
     fetch_parser = subparsers.add_parser("fetch", help="Fetch paper metadata from one arXiv category")
     fetch_parser.add_argument("--category", required=True, help="arXiv category, e.g. physics.gen-ph")
     fetch_parser.add_argument("--max-results", type=int, default=10, help="Number of papers to fetch")
-    fetch_parser.add_argument("--output", type=Path, default=Path("data/papers.json"))
+    fetch_parser.add_argument("--output", type=Path, default=config.PAPERS_SNAPSHOT_PATH)
 
     sync_parser = subparsers.add_parser("sync", help="Fetch metadata and upsert it into the cumulative corpus catalogue")
     sync_parser.add_argument("--category", required=True, help="arXiv category, e.g. physics.gen-ph")
     sync_parser.add_argument("--max-results", type=int, default=10, help="Number of recently updated papers to fetch")
-    sync_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
-    sync_parser.add_argument("--output", type=Path, default=Path("data/papers.json"))
+    sync_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    sync_parser.add_argument("--output", type=Path, default=config.PAPERS_SNAPSHOT_PATH)
 
     download_parser = subparsers.add_parser("download", help="Download a bounded set of PDFs from a metadata snapshot")
     download_parser.add_argument("--input", type=Path, help="Legacy one-off metadata snapshot; omit to use --state")
-    download_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    download_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     download_parser.add_argument("--limit", type=int, default=3, help="Maximum number of PDFs to download")
-    download_parser.add_argument("--output-dir", type=Path, default=Path("data/pdfs"))
+    download_parser.add_argument("--output-dir", type=Path, default=config.PDF_DIR)
     download_parser.add_argument(
         "--require-license",
         action="store_true",
@@ -62,22 +62,22 @@ def run() -> None:
     licenses_parser = subparsers.add_parser(
         "licenses", help="Look up licences via OAI-PMH, which the query API omits"
     )
-    licenses_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    licenses_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     licenses_parser.add_argument("--limit", type=int, default=50, help="Papers to look up this run")
     licenses_parser.add_argument(
-        "--delay", type=float, default=3.0, help="Seconds between requests; arXiv asks for a pause"
+        "--delay", type=float, default=config.LICENSE_LOOKUP_DELAY, help="Seconds between requests; arXiv asks for a pause"
     )
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
-    embed_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
-    embed_parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
+    embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    embed_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
     embed_parser.add_argument("--batch-size", type=int, default=64)
     embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
 
     search_parser = subparsers.add_parser("search", help="Keyword-search the chunked corpus")
     search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
-    search_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
-    search_parser.add_argument("--limit", type=int, default=10, help="Maximum number of passages")
+    search_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
     search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
     search_parser.add_argument(
@@ -92,7 +92,7 @@ def run() -> None:
         default="all",
         help="keyword mode only: require every term (default) or any term",
     )
-    search_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model for --mode vector")
+    search_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model for --mode vector")
     search_parser.add_argument(
         "--include-references",
         action="store_true",
@@ -101,14 +101,14 @@ def run() -> None:
 
     ask_parser = subparsers.add_parser("ask", help="Answer a question from the corpus, with citations")
     ask_parser.add_argument("question")
-    ask_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
-    ask_parser.add_argument("--passages", type=int, default=8, help="Passages to retrieve")
+    ask_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    ask_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES, help="Passages to retrieve")
     ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
-    ask_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model")
+    ask_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     ask_parser.add_argument(
         "--backend",
         choices=("ollama", "hosted"),
-        default="ollama",
+        default=config.ANSWER_BACKEND,
         help="Which model answers: a local Ollama model (default) or a hosted API",
     )
     ask_parser.add_argument(
@@ -123,16 +123,16 @@ def run() -> None:
     ask_parser.add_argument(
         "--max-per-paper",
         type=int,
-        default=3,
+        default=config.ASK_MAX_PER_PAPER,
         help="Cap passages taken from any one paper, so one source cannot dominate",
     )
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
-    chunk_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
-    chunk_parser.add_argument("--output", type=Path, default=Path("data/chunks.jsonl"))
-    chunk_parser.add_argument("--chunk-size", type=int, default=1_200)
-    chunk_parser.add_argument("--overlap", type=int, default=200)
+    chunk_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    chunk_parser.add_argument("--output", type=Path, default=config.CHUNKS_PATH)
+    chunk_parser.add_argument("--chunk-size", type=int, default=config.CHUNK_SIZE)
+    chunk_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
     args = parser.parse_args()
 
     if args.command == "fetch":
@@ -263,9 +263,9 @@ def run() -> None:
                 include_references=args.include_references,
             )
             completion = (
-                OllamaCompletion(args.llm)
+                OllamaCompletion(args.llm or config.OLLAMA_MODEL)
                 if args.backend == "ollama"
-                else HostedCompletion(args.llm or HOSTED_MODEL)
+                else HostedCompletion(args.llm or config.HOSTED_MODEL)
             )
             answer = answer_from_matches(corpus, completion, args.question, matches)
         print(answer.text)

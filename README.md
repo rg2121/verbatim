@@ -142,6 +142,23 @@ training policy.
 PyMuPDF is AGPL-3.0. That is fine for local personal use and is a decision to
 revisit before building any hosted product on top of it.
 
+## Configuration
+
+All tunables live in `.env`; copy the template and edit:
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` documents every setting — storage paths, chunk size and overlap,
+embedding model, retrieval limits, and which backend answers questions. `.env`
+itself is gitignored because it may hold `HOSTED_API_KEY`. An exported
+environment variable always overrides the file, so a one-off run needs no edit:
+
+```bash
+OLLAMA_MODEL=llama3.1 uv run verbatim ask "..."
+```
+
 ## Development
 
 ```bash

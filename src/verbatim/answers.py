@@ -4,19 +4,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-import os
 import re
 from typing import Any, Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from verbatim import config
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
 
-MODEL = "hosted-model"
+MODEL = config.HOSTED_MODEL
 MAX_TOKENS = 16_000
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TIMEOUT = 600.0
 JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
@@ -143,11 +141,12 @@ class OllamaCompletion:
         model: str | None = None,
         *,
         host: str | None = None,
-        timeout: float = OLLAMA_TIMEOUT,
+        timeout: float | None = None,
     ) -> None:
-        self.host = (host or os.environ.get("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST).rstrip("/")
-        self.timeout = timeout  # set before model discovery, which makes a request
-        self.model = model or os.environ.get("OLLAMA_MODEL") or self._first_available_model()
+        self.host = (host or config.OLLAMA_HOST).rstrip("/")
+        # Set before model discovery, which makes a request.
+        self.timeout = config.OLLAMA_TIMEOUT if timeout is None else timeout
+        self.model = model or config.OLLAMA_MODEL or self._first_available_model()
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Elicit the answer as flat lines, then shape it like the JSON schema.
