@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 from verbatim import config
+from verbatim.fetching import fetch
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 # Licence lives only here; the query API omits it entirely.
@@ -218,33 +219,7 @@ def parse_license(xml: bytes) -> str | None:
 
 
 def _get(url: str, *, sleep: Callable[[float], None] = time.sleep) -> bytes:
-    """Fetch one URL, retrying the failures arXiv actually produces.
-
-    Measured against the live API, identical queries returned in 2s, 18s, 36s
-    and 61s, and one came back 503 - so a single attempt on a short timeout
-    fails routinely. A multi-hour ingest cannot afford to abort on that.
-    Client errors are not retried, since repeating them changes nothing.
-    """
-    request = Request(
-        url,
-        headers={"User-Agent": "verbatim/0.1 (personal research project)"},
-    )
-    last_error: Exception | None = None
-    for attempt in range(config.HTTP_RETRIES + 1):
-        if attempt:
-            sleep(config.HTTP_BACKOFF * (2 ** (attempt - 1)))
-        try:
-            with urlopen(request, timeout=config.HTTP_TIMEOUT) as response:  # noqa: S310
-                return response.read()
-        except HTTPError as error:
-            if error.code < 500:
-                raise
-            last_error = error
-        except (URLError, TimeoutError, OSError) as error:
-            last_error = error
-    raise RuntimeError(
-        f"arXiv did not respond after {config.HTTP_RETRIES + 1} attempts: {last_error}"
-    ) from last_error
+    return fetch(url, sleep=sleep)
 
 
 def _required_text(element: ElementTree.Element, path: str, namespace: dict[str, str]) -> str:

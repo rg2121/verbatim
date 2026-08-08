@@ -69,6 +69,10 @@ OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
 HTTP_TIMEOUT = float(_text("VERBATIM_HTTP_TIMEOUT", "90"))
 HTTP_RETRIES = _integer("VERBATIM_HTTP_RETRIES", 4)
 HTTP_BACKOFF = float(_text("VERBATIM_HTTP_BACKOFF", "5"))
+# PDFs are larger than metadata, and one pathological file should not be able
+# to exhaust memory during a bulk ingest.
+PDF_TIMEOUT = float(_text("VERBATIM_PDF_TIMEOUT", "120"))
+PDF_MAX_BYTES = _integer("VERBATIM_PDF_MAX_BYTES", 200_000_000)
 
 # Sync paging. arXiv caps a single request, so a real corpus has to be paged.
 SYNC_LIMIT = _integer("VERBATIM_SYNC_LIMIT", 1_000)

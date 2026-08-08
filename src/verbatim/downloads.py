@@ -9,9 +9,10 @@ from pathlib import Path
 import tempfile
 from typing import Callable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
+from verbatim import config
 from verbatim.arxiv import ARXIV_HOSTS, Paper
+from verbatim.fetching import fetch
 
 
 @dataclass(frozen=True)
@@ -124,13 +125,16 @@ def _download_one(
 
 
 def _get_pdf(url: str) -> bytes:
-    url = _validate_pdf_url(url)
-    request = Request(
-        url,
-        headers={"User-Agent": "verbatim/0.1 (personal research project)"},
+    """Fetch one PDF, with the same retry policy as the metadata client.
+
+    A withdrawn paper's 404 is not retried, so it still surfaces promptly as a
+    per-paper failure rather than costing four attempts.
+    """
+    return fetch(
+        _validate_pdf_url(url),
+        timeout=config.PDF_TIMEOUT,
+        max_bytes=config.PDF_MAX_BYTES,
     )
-    with urlopen(request, timeout=60) as response:  # noqa: S310 - supplied by arXiv metadata
-        return response.read()
 
 
 def file_sha256(path: Path) -> str:
