@@ -59,3 +59,78 @@ def test_parse_feed_rejects_arxiv_api_error_entry() -> None:
 
     with pytest.raises(ArxivAPIError, match="incorrect_id_format_for_bogus"):
         parse_feed(xml.encode())
+
+
+OAI_RECORD = b"""<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <GetRecord><record><metadata>
+    <arXiv xmlns="http://arxiv.org/OAI/arXiv/">
+      <id>2608.05440</id>
+      <license>http://arxiv.org/licenses/nonexclusive-distrib/1.0/</license>
+    </arXiv>
+  </metadata></record></GetRecord>
+</OAI-PMH>"""
+
+OAI_NO_LICENSE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <GetRecord><record><metadata>
+    <arXiv xmlns="http://arxiv.org/OAI/arXiv/"><id>math/0309136</id></arXiv>
+  </metadata></record></GetRecord>
+</OAI-PMH>"""
+
+OAI_ERROR = b"""<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/">
+  <error code="idDoesNotExist">No matching identifier</error>
+</OAI-PMH>"""
+
+
+def test_license_is_read_from_the_oai_record() -> None:
+    from verbatim.arxiv import parse_license
+
+    assert parse_license(OAI_RECORD) == "http://arxiv.org/licenses/nonexclusive-distrib/1.0/"
+
+
+def test_a_record_without_a_license_returns_none_rather_than_raising() -> None:
+    from verbatim.arxiv import parse_license
+
+    assert parse_license(OAI_NO_LICENSE) is None
+
+
+def test_an_oai_error_is_raised_rather_than_read_as_no_license() -> None:
+    from verbatim.arxiv import parse_license
+
+    with pytest.raises(ArxivAPIError, match="idDoesNotExist"):
+        parse_license(OAI_ERROR)
+
+
+def test_license_lookup_uses_the_base_identifier() -> None:
+    from verbatim.arxiv import fetch_license
+
+    requested: list[str] = []
+
+    def fake_get(url: str) -> bytes:
+        requested.append(url)
+        return OAI_RECORD
+
+    fetch_license("math/0309136", http_get=fake_get)
+
+    assert "identifier=oai%3AarXiv.org%3Amath%2F0309136" in requested[0]
+    assert "metadataPrefix=arXiv" in requested[0]
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://creativecommons.org/licenses/by/4.0/", "open"),
+        ("http://creativecommons.org/licenses/by-sa/4.0/", "open"),
+        ("http://creativecommons.org/publicdomain/zero/1.0/", "open"),
+        ("http://arxiv.org/licenses/nonexclusive-distrib/1.0/", "arxiv-nonexclusive"),
+        (None, "unknown"),
+        ("", "unknown"),
+        ("https://example.com/custom", "other"),
+    ],
+)
+def test_license_class_separates_reusable_from_merely_present(url, expected) -> None:
+    from verbatim.arxiv import license_class
+
+    assert license_class(url) == expected

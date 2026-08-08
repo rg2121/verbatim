@@ -15,7 +15,7 @@ from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -23,6 +23,7 @@ FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 # Columns added to existing databases after their table was first created.
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "chunks": {"kind": "TEXT NOT NULL DEFAULT 'body'"},
+    "papers": {"license_checked_at": "TEXT"},
     "downloads": {
         "chunked_at": "TEXT",
         "chunked_with": "TEXT",
@@ -288,6 +289,49 @@ class CorpusStore:
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
 
+    def base_ids_missing_license(self, limit: int) -> list[str]:
+        """Base identifiers whose licence has never been looked up.
+
+        Keyed on the base id because OAI-PMH is: one lookup covers every
+        version of a paper.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT base_arxiv_id FROM papers
+            WHERE license_url IS NULL AND license_checked_at IS NULL
+            GROUP BY base_arxiv_id
+            ORDER BY MAX(updated) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [row["base_arxiv_id"] for row in rows]
+
+    def record_license(self, base_arxiv_id: str, license_url: str | None) -> None:
+        """Store a looked-up licence against every version of one paper.
+
+        The checked timestamp is written even when no licence came back, so a
+        paper that predates the field is not looked up again on every run.
+        """
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE papers
+                SET license_url = COALESCE(?, license_url), license_checked_at = ?
+                WHERE base_arxiv_id = ?
+                """,
+                (license_url, _timestamp(), base_arxiv_id),
+            )
+
+    def license_summary(self) -> dict[str, int]:
+        rows = self.connection.execute(
+            """
+            SELECT COALESCE(license_url, '(none reported)') AS license, COUNT(*) AS n
+            FROM papers GROUP BY license ORDER BY n DESC
+            """
+        ).fetchall()
+        return {row["license"]: row["n"] for row in rows}
+
     def get_paper(self, arxiv_id: str) -> Paper | None:
         row = self.connection.execute(
             "SELECT * FROM papers WHERE arxiv_id = ?", (arxiv_id,)
@@ -478,7 +522,8 @@ class CorpusStore:
                     license_url TEXT,
                     is_latest INTEGER NOT NULL CHECK (is_latest IN (0, 1)),
                     first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
+                    last_seen_at TEXT NOT NULL,
+                    license_checked_at TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS papers_latest_updated

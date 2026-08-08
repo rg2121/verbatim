@@ -116,8 +116,28 @@ arXiv metadata and arXiv full texts are licensed differently. The default
 submission licence lets arXiv distribute a paper; it does not grant
 redistribution rights to third parties. Local reading and indexing is one
 thing, redistributing PDFs or chunk text is another, and training on them is a
-third that needs an explicit written policy first. Licence URLs are recorded
-per paper and carried through to each chunk, but nothing yet enforces a policy.
+third that needs an explicit written policy first.
+
+**The query API does not return licences at all** — measured across 59 papers,
+every one came back without one. Licence lives in the OAI-PMH record instead:
+
+```bash
+uv run verbatim licenses --limit 50
+```
+
+Licences are grouped by what they actually permit, because presence is not
+permission:
+
+| Class | Meaning |
+|---|---|
+| `open` | CC-BY / CC-BY-SA / CC0 — redistribution and training permitted, usually with attribution |
+| `arxiv-nonexclusive` | arXiv's default: **arXiv** may distribute it, you may not |
+| `unknown` | not looked up yet, or the paper predates the field |
+
+Licence URLs are carried through to every chunk, and `--require-license`
+restricts downloads to papers that report one — but note it accepts
+`arxiv-nonexclusive` too, so it is not yet a reuse gate. Nothing enforces a
+training policy.
 
 PyMuPDF is AGPL-3.0. That is fine for local personal use and is a decision to
 revisit before building any hosted product on top of it.

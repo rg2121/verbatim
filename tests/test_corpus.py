@@ -158,3 +158,19 @@ def test_corpus_refreshes_existing_metadata_without_creating_a_duplicate(tmp_pat
 
     assert (summary.inserted, summary.updated) == (0, 1)
     assert pending[0].updated == "2026-08-10T10:00:00Z"
+
+
+def test_license_backfill_records_absence_so_it_is_not_retried(tmp_path: Path) -> None:
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.12345v1"), paper("2608.12345v2"), paper("2608.99999v1")])
+
+        pending = corpus.base_ids_missing_license(10)
+        corpus.record_license("2608.12345", "http://arxiv.org/licenses/nonexclusive-distrib/1.0/")
+        corpus.record_license("2608.99999", None)  # genuinely has none
+
+        remaining = corpus.base_ids_missing_license(10)
+        both_versions = [corpus.get_paper(f"2608.12345v{n}") for n in (1, 2)]
+
+    assert sorted(pending) == ["2608.12345", "2608.99999"]
+    assert remaining == []  # absence recorded, so neither is looked up again
+    assert all(p is not None and p.license_url is not None for p in both_versions)

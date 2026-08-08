@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
 from verbatim.answers import MODEL as HOSTED_MODEL
 from verbatim.answers import HostedCompletion, OllamaCompletion, answer_from_matches
-from verbatim.arxiv import fetch_metadata
+from verbatim.arxiv import fetch_license, fetch_metadata, license_class
 from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
@@ -56,6 +57,15 @@ def run() -> None:
         "--require-license",
         action="store_true",
         help="Download only papers whose metadata explicitly reports a licence",
+    )
+
+    licenses_parser = subparsers.add_parser(
+        "licenses", help="Look up licences via OAI-PMH, which the query API omits"
+    )
+    licenses_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    licenses_parser.add_argument("--limit", type=int, default=50, help="Papers to look up this run")
+    licenses_parser.add_argument(
+        "--delay", type=float, default=3.0, help="Seconds between requests; arXiv asks for a pause"
     )
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
@@ -177,6 +187,26 @@ def run() -> None:
             print(f"  ! {failure.arxiv_id}: {failure.reason}")
         if report.failed:
             print(f"  {len(report.failed)} paper(s) could not be downloaded.")
+
+    if args.command == "licenses":
+        with CorpusStore(args.state) as corpus:
+            pending = corpus.base_ids_missing_license(args.limit)
+            for position, base_id in enumerate(pending):
+                if position:
+                    time.sleep(args.delay)  # arXiv asks callers to pace themselves
+                try:
+                    corpus.record_license(base_id, fetch_license(base_id))
+                except (OSError, ValueError) as error:
+                    print(f"  ! {base_id}: {error}")
+            summary = corpus.license_summary()
+        print(f"Looked up {len(pending)} papers. Licences across the corpus:")
+        for license_url, count in summary.items():
+            url = None if license_url == "(none reported)" else license_url
+            print(f"  {count:4}  [{license_class(url)}]  {license_url}")
+        print(
+            "  Only 'open' permits redistribution or training; "
+            "'arxiv-nonexclusive' grants arXiv distribution rights, not you."
+        )
 
     if args.command == "embed":
         embedder = FastEmbedEmbedder(model_name=args.model)

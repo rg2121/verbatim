@@ -9,6 +9,10 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
+# Licence lives only here; the query API omits it entirely.
+ARXIV_OAI_URL = "https://export.arxiv.org/oai2"
+OAI_NAMESPACE = "http://www.openarchives.org/OAI/2.0/"
+ARXIV_OAI_METADATA_NAMESPACE = "http://arxiv.org/OAI/arXiv/"
 ARXIV_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
 ATOM_NAMESPACE = "http://www.w3.org/2005/Atom"
 ARXIV_NAMESPACE = "http://arxiv.org/schemas/atom"
@@ -97,6 +101,60 @@ def parse_feed(xml: bytes) -> list[Paper]:
             )
         )
     return papers
+
+
+def license_class(license_url: str | None) -> str:
+    """Group a licence URL by what it actually permits.
+
+    The distinction matters more than presence: arXiv's default
+    non-exclusive-distrib licence grants *arXiv* the right to distribute and
+    grants a third party nothing, so treating "has a licence" as "is reusable"
+    would be wrong. Only the `open` class permits redistribution or training,
+    and even then usually with attribution conditions.
+    """
+    if not license_url:
+        return "unknown"
+    url = license_url.lower()
+    if "creativecommons.org/publicdomain" in url or "/zero/" in url:
+        return "open"
+    if "creativecommons.org/licenses/" in url:
+        return "open"
+    if "arxiv.org/licenses/nonexclusive-distrib" in url:
+        return "arxiv-nonexclusive"
+    return "other"
+
+
+def fetch_license(
+    base_arxiv_id: str, *, http_get: Callable[[str], bytes] | None = None
+) -> str | None:
+    """Look up one paper's licence via arXiv's OAI-PMH interface.
+
+    The query API does not return `<arxiv:license>` at all — measured across 59
+    papers, every one came back without it — so licence has to come from the
+    OAI-PMH record, which does carry it. Takes the base identifier without a
+    version, which is what OAI-PMH is keyed on.
+    """
+    query = urlencode(
+        {
+            "verb": "GetRecord",
+            "identifier": f"oai:arXiv.org:{base_arxiv_id}",
+            "metadataPrefix": "arXiv",
+        }
+    )
+    get = http_get or _get
+    return parse_license(get(f"{ARXIV_OAI_URL}?{query}"))
+
+
+def parse_license(xml: bytes) -> str | None:
+    """Read the licence out of an OAI-PMH record, if the record carries one."""
+    root = ElementTree.fromstring(xml)
+    error = root.find("oai:error", {"oai": OAI_NAMESPACE})
+    if error is not None:
+        raise ArxivAPIError(f"arXiv OAI-PMH error: {error.get('code')}: {error.text}")
+    element = root.find(f".//{{{ARXIV_OAI_METADATA_NAMESPACE}}}license")
+    if element is None or element.text is None:
+        return None
+    return element.text.strip() or None
 
 
 def _get(url: str) -> bytes:
