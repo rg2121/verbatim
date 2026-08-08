@@ -113,3 +113,38 @@ def test_build_fts_query_quotes_terms_and_keeps_prefix_search() -> None:
     assert build_fts_query("spin-orbit coupling") == '"spin-orbit" "coupling"'
     assert build_fts_query("suprac*") == '"suprac"*'
     assert build_fts_query("   ") == ""
+
+
+def test_format_match_renders_a_traceable_citation_header() -> None:
+    from verbatim.chunking import Chunk
+    from verbatim.cli import format_match
+    from verbatim.corpus import ChunkMatch
+
+    match = ChunkMatch(
+        chunk=Chunk(
+            chunk_id="abc123",
+            arxiv_id="2608.05440v1",
+            source_url="https://arxiv.org/abs/2608.05440v1",
+            license_url=None,
+            pdf_sha256="f" * 64,
+            page_number=16,
+            chunk_index=2,
+            char_start=40,
+            char_end=90,
+            text="Lorentz contraction compresses the flux into a smaller area.",
+            chunker_version="2:1200:200",
+        ),
+        score=3.74,
+        snippet="…compresses the [flux] into…",
+    )
+
+    rendered = format_match(1, match)
+    full = format_match(1, match, full=True)
+
+    assert "arXiv:2608.05440v1" in rendered
+    assert "p.16" in rendered
+    assert "chars 40-90" in rendered
+    assert "https://arxiv.org/abs/2608.05440v1" in rendered
+    assert "no licence reported" in rendered
+    assert "…compresses the [flux] into…" in rendered
+    assert "Lorentz contraction compresses" in full

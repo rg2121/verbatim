@@ -7,7 +7,7 @@ from pathlib import Path
 
 from verbatim.arxiv import fetch_metadata
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
-from verbatim.corpus import CorpusStore
+from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.downloads import DownloadedPaper, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -42,6 +42,13 @@ def main() -> None:
         action="store_true",
         help="Download only papers whose metadata explicitly reports a licence",
     )
+
+    search_parser = subparsers.add_parser("search", help="Keyword-search the chunked corpus")
+    search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
+    search_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    search_parser.add_argument("--limit", type=int, default=10, help="Maximum number of passages")
+    search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
+    search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -96,6 +103,15 @@ def main() -> None:
         save_download_manifest(downloads, manifest_path)
         print(f"Downloaded {len(new_downloads)} new PDFs; corpus manifest has {len(downloads)} PDFs: {manifest_path}")
 
+    if args.command == "search":
+        with CorpusStore(args.state) as corpus:
+            matches = corpus.search_chunks(
+                args.query, limit=args.limit, arxiv_id=args.arxiv_id
+            )
+        if not matches:
+            print(f"No passages matched {args.query!r}.")
+        for rank, match in enumerate(matches, start=1):
+            print(format_match(rank, match, full=args.full))
     if args.command == "chunk":
         if args.manifest is not None:
             chunks = extract_pdf_chunks(
@@ -126,6 +142,22 @@ def main() -> None:
                 f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
                 f"corpus holds {len(chunks)}. Exported to {args.output}"
             )
+
+
+def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
+    """Render one hit so the passage can be traced back to a paper and page.
+
+    The header is the citation: paper version, page, and the abs URL that
+    resolves to exactly the version the text came from.
+    """
+    chunk = match.chunk
+    header = (
+        f"{rank}. arXiv:{chunk.arxiv_id}  p.{chunk.page_number}  "
+        f"[chars {chunk.char_start}-{chunk.char_end}]  score {match.score:.2f}"
+    )
+    licence = chunk.license_url or "no licence reported"
+    body = chunk.text if full else match.snippet
+    return f"{header}\n   {chunk.source_url}  ({licence})\n   {body}\n"
 
 
 def _merge_downloads(
