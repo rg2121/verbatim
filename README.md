@@ -19,6 +19,7 @@ arXiv API ──sync──▶ corpus.db  papers           every version seen, ne
               chunk ──▶ data/chunks.jsonl   (export, not the store)
               embed ──▶ vectors in corpus.db
              search ──▶ ranked passages with citations
+                ask ──▶ an answer, every claim cited and verified
 ```
 
 ## Daily corpus workflow
@@ -64,6 +65,29 @@ Keyword mode requires every term by default; `--match any` ranks by how many
 matched. The index matches whole tokens and does not stem, so `field` does not
 match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
 every word of a natural-language question matches nothing at all.
+
+`ask` retrieves passages, answers strictly from them, and cites every claim:
+
+```bash
+uv run verbatim ask "can magnetic flux move through a region of zero field?"
+```
+
+```
+Flux can move through zero field [1].
+
+References
+[1] Walstad, "Moving Magnetic Flux and Electromagnetic Induction",
+    arXiv:2608.05440v1, p. 1. https://arxiv.org/abs/2608.05440v1
+```
+
+Every citation is checked in code before it is printed: the quoted words must
+appear in the passage the claim names, or the citation is reported as rejected
+rather than rendered. Citations always pin the paper *version*. At most three
+passages come from any one paper by default (`--max-per-paper`), so a
+corpus-wide question is not answered from a single source.
+
+`ask` needs hosted API credentials — set `HOSTED_API_KEY`. Nothing else
+in the pipeline calls a network model; `sync` and `download` reach arXiv only.
 
 For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and
