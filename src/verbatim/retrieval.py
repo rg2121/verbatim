@@ -65,6 +65,7 @@ def hybrid_search(
     arxiv_id: str | None = None,
     candidates: int = 50,
     smoothing: int = RRF_SMOOTHING,
+    max_per_paper: int | None = None,
     index: VectorIndex | None = None,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
@@ -94,11 +95,34 @@ def hybrid_search(
     best: dict[str, ChunkMatch] = {match.chunk.chunk_id: match for match in vector}
     best.update({match.chunk.chunk_id: match for match in keyword})
 
-    ordered = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
-    return [
+    ordered = [
         ChunkMatch(chunk=best[chunk_id].chunk, score=score, snippet=best[chunk_id].snippet)
-        for chunk_id, score in ordered[:limit]
+        for chunk_id, score in sorted(fused.items(), key=lambda item: (-item[1], item[0]))
     ]
+    # Capped before truncating, so dropping a paper's surplus promotes another
+    # paper into the results rather than shortening them.
+    if max_per_paper is not None:
+        ordered = cap_per_paper(ordered, max_per_paper)
+    return ordered[:limit]
+
+
+def cap_per_paper(matches: list[ChunkMatch], max_per_paper: int) -> list[ChunkMatch]:
+    """Keep at most N passages per paper, preserving rank order.
+
+    Without this, one verbose paper with a well-matching section fills every
+    slot and a corpus-wide question is answered from a single source.
+    """
+    if max_per_paper < 1:
+        raise ValueError("max_per_paper must be at least 1")
+    seen: dict[str, int] = defaultdict(int)
+    kept: list[ChunkMatch] = []
+    for match in matches:
+        arxiv_id = match.chunk.arxiv_id
+        if seen[arxiv_id] >= max_per_paper:
+            continue
+        seen[arxiv_id] += 1
+        kept.append(match)
+    return kept
 
 
 def _similarity(distance: float) -> float:

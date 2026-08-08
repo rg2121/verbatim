@@ -153,3 +153,50 @@ def test_hybrid_scopes_to_one_paper(tmp_path: Path) -> None:
         )
 
     assert {m.chunk.arxiv_id for m in fused} == {"2608.22222v1"}
+
+
+def test_cap_per_paper_keeps_rank_order_and_promotes_other_papers(tmp_path: Path) -> None:
+    from verbatim.corpus import ChunkMatch
+    from verbatim.retrieval import cap_per_paper
+
+    with chunked_corpus(
+        tmp_path,
+        {"2608.11111v1": ["flux one", "flux two", "flux three"], "2608.22222v1": ["charge one"]},
+    ) as corpus:
+        chunks = {c.arxiv_id: [] for c in corpus.all_chunks()}
+        for c in corpus.all_chunks():
+            chunks[c.arxiv_id].append(c)
+        ranked = [
+            ChunkMatch(chunk=chunks["2608.11111v1"][0], score=0.9, snippet=""),
+            ChunkMatch(chunk=chunks["2608.11111v1"][1], score=0.8, snippet=""),
+            ChunkMatch(chunk=chunks["2608.11111v1"][2], score=0.7, snippet=""),
+            ChunkMatch(chunk=chunks["2608.22222v1"][0], score=0.6, snippet=""),
+        ]
+
+    capped = cap_per_paper(ranked, 2)
+
+    assert [m.chunk.arxiv_id for m in capped] == [
+        "2608.11111v1",
+        "2608.11111v1",
+        "2608.22222v1",
+    ]
+    assert [m.score for m in capped] == [0.9, 0.8, 0.6]
+
+
+def test_hybrid_cap_promotes_a_second_paper_into_the_results(tmp_path: Path) -> None:
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux one.", "Magnetic flux two.", "Magnetic flux three."],
+            "2608.22222v1": ["Charge moves here."],
+        },
+    ) as corpus:
+        uncapped = hybrid_search(corpus, WordCountEmbedder(), "flux charge", limit=3)
+        capped = hybrid_search(
+            corpus, WordCountEmbedder(), "flux charge", limit=3, max_per_paper=1
+        )
+
+    assert len({m.chunk.arxiv_id for m in capped}) >= len({m.chunk.arxiv_id for m in uncapped})
+    assert sum(1 for m in capped if m.chunk.arxiv_id == "2608.11111v1") == 1

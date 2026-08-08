@@ -89,6 +89,12 @@ def run() -> None:
     ask_parser.add_argument("--passages", type=int, default=8, help="Passages to retrieve")
     ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
     ask_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model")
+    ask_parser.add_argument(
+        "--max-per-paper",
+        type=int,
+        default=3,
+        help="Cap passages taken from any one paper, so one source cannot dominate",
+    )
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -189,6 +195,7 @@ def run() -> None:
                 args.question,
                 limit=args.passages,
                 arxiv_id=args.arxiv_id,
+                max_per_paper=args.max_per_paper,
             )
             answer = answer_from_matches(corpus, HostedCompletion(), args.question, matches)
         print(answer.text)
