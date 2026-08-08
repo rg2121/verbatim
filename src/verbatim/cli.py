@@ -8,6 +8,7 @@ from pathlib import Path
 from verbatim.arxiv import fetch_metadata
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
 from verbatim.downloads import DownloadedPaper, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -42,6 +43,12 @@ def main() -> None:
         action="store_true",
         help="Download only papers whose metadata explicitly reports a licence",
     )
+
+    embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
+    embed_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    embed_parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
+    embed_parser.add_argument("--batch-size", type=int, default=64)
+    embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
 
     search_parser = subparsers.add_parser("search", help="Keyword-search the chunked corpus")
     search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
@@ -102,6 +109,25 @@ def main() -> None:
                 downloads = corpus.all_downloads()
         save_download_manifest(downloads, manifest_path)
         print(f"Downloaded {len(new_downloads)} new PDFs; corpus manifest has {len(downloads)} PDFs: {manifest_path}")
+
+    if args.command == "embed":
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        with CorpusStore(args.state) as corpus:
+            embedded = embed_pending(
+                corpus,
+                embedder,
+                batch_size=args.batch_size,
+                limit=args.limit,
+                on_progress=lambda done, total: print(
+                    f"  embedded {done}/{total}", end="\r", flush=True
+                ),
+            )
+            model = embedder.model
+            stored = corpus.embedding_count(model.model_id)
+        print(
+            f"Embedded {embedded} new chunks with {model.model_id} "
+            f"({model.dimensions}d); corpus holds {stored} vectors."
+        )
 
     if args.command == "search":
         with CorpusStore(args.state) as corpus:

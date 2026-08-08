@@ -104,3 +104,55 @@ def test_registering_a_model_with_a_different_shape_is_rejected(tmp_path: Path) 
                     model_id=MODEL.model_id, dimensions=4, normalized=True, revision="def456"
                 )
             )
+
+
+class StubEmbedder:
+    """Deterministic stand-in so tests need no model download."""
+
+    def __init__(self, dimensions: int = 4) -> None:
+        self.model = EmbeddingModel(
+            model_id="stub", dimensions=dimensions, normalized=True, revision="v0"
+        )
+        self.batches: list[int] = []
+
+    def embed_passages(self, texts):
+        self.batches.append(len(texts))
+        return [[float(len(text)), 0.0, 0.0, 0.0] for text in texts]
+
+    def embed_query(self, text):
+        return [float(len(text)), 0.0, 0.0, 0.0]
+
+
+def test_embed_pending_is_incremental_and_batches(tmp_path: Path) -> None:
+    from verbatim.embedding import embed_pending
+
+    with chunked_corpus(tmp_path, ["alpha", "beta", "gamma", "delta", "epsilon"]) as corpus:
+        embedder = StubEmbedder()
+        first = embed_pending(corpus, embedder, batch_size=2)
+        second = embed_pending(corpus, embedder, batch_size=2)
+
+        assert first == 5
+        assert second == 0
+        assert embedder.batches == [2, 2, 1]
+        assert corpus.embedding_count("stub") == 5
+
+
+def test_embed_pending_respects_a_limit(tmp_path: Path) -> None:
+    from verbatim.embedding import embed_pending
+
+    with chunked_corpus(tmp_path, ["alpha", "beta", "gamma"]) as corpus:
+        assert embed_pending(corpus, StubEmbedder(), limit=2) == 2
+        assert corpus.embedding_count("stub") == 2
+        assert len(corpus.pending_embeddings("stub")) == 1
+
+
+def test_embed_pending_rejects_a_mismatched_vector_count(tmp_path: Path) -> None:
+    from verbatim.embedding import embed_pending
+
+    class Broken(StubEmbedder):
+        def embed_passages(self, texts):
+            return []
+
+    with chunked_corpus(tmp_path, ["alpha"]) as corpus:
+        with pytest.raises(RuntimeError, match="returned 0 vectors"):
+            embed_pending(corpus, Broken())
