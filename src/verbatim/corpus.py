@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
 import re
 import sqlite3
+import struct
 
 from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -33,6 +35,16 @@ VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 class SyncSummary:
     inserted: int
     updated: int
+
+
+@dataclass(frozen=True)
+class EmbeddingModel:
+    """The exact model that produced a set of vectors."""
+
+    model_id: str
+    dimensions: int
+    normalized: bool
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -277,6 +289,72 @@ class CorpusStore:
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
+    def register_embedding_model(self, model: EmbeddingModel) -> None:
+        """Record which model produced a set of vectors, so they can be swapped.
+
+        Re-registering with a different dimension or revision is rejected: those
+        vectors are not comparable with the ones already stored.
+        """
+        existing = self.connection.execute(
+            "SELECT dimensions, revision FROM embedding_models WHERE model_id = ?",
+            (model.model_id,),
+        ).fetchone()
+        if existing is not None and (
+            existing["dimensions"] != model.dimensions or existing["revision"] != model.revision
+        ):
+            raise ValueError(
+                f"Embedding model {model.model_id} is already stored as "
+                f"{existing['dimensions']}d revision {existing['revision']}; "
+                f"use a new model_id rather than mixing incompatible vectors"
+            )
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO embedding_models (model_id, dimensions, normalized, revision, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(model_id) DO NOTHING
+                """,
+                (model.model_id, model.dimensions, int(model.normalized), model.revision, _timestamp()),
+            )
+
+    def pending_embeddings(self, model_id: str, *, limit: int | None = None) -> list[Chunk]:
+        """Return chunks that have no vector from this model yet."""
+        rows = self.connection.execute(
+            """
+            SELECT c.* FROM chunks AS c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM embeddings AS e
+                WHERE e.chunk_id = c.chunk_id AND e.model_id = ?
+            )
+            ORDER BY c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
+            LIMIT ?
+            """,
+            (model_id, -1 if limit is None else limit),
+        ).fetchall()
+        return [_chunk_from_row(row) for row in rows]
+
+    def record_embeddings(self, model_id: str, vectors: list[tuple[str, Sequence[float]]]) -> None:
+        """Store one vector per chunk for the given model."""
+        now = _timestamp()
+        with self.connection:
+            self.connection.executemany(
+                """
+                INSERT INTO embeddings (chunk_id, model_id, vector, embedded_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chunk_id, model_id) DO UPDATE SET
+                    vector = excluded.vector,
+                    embedded_at = excluded.embedded_at
+                """,
+                [(chunk_id, model_id, pack_vector(vector), now) for chunk_id, vector in vectors],
+            )
+
+    def embedding_count(self, model_id: str) -> int:
+        return int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE model_id = ?", (model_id,)
+            ).fetchone()[0]
+        )
+
     def search_chunks(
         self, query: str, *, limit: int = 10, arxiv_id: str | None = None
     ) -> list[ChunkMatch]:
@@ -389,6 +467,25 @@ class CorpusStore:
                 CREATE INDEX IF NOT EXISTS chunks_by_paper
                     ON chunks (arxiv_id, page_number, chunk_index);
 
+                CREATE TABLE IF NOT EXISTS embedding_models (
+                    model_id TEXT PRIMARY KEY,
+                    dimensions INTEGER NOT NULL,
+                    normalized INTEGER NOT NULL CHECK (normalized IN (0, 1)),
+                    revision TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    chunk_id TEXT NOT NULL
+                        REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+                    model_id TEXT NOT NULL REFERENCES embedding_models(model_id),
+                    vector BLOB NOT NULL,
+                    embedded_at TEXT NOT NULL,
+                    PRIMARY KEY (chunk_id, model_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS embeddings_by_model ON embeddings (model_id);
+
                 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
                     text,
                     content='chunks',
@@ -479,6 +576,15 @@ def _paper_from_row(row: sqlite3.Row) -> Paper:
         pdf_url=row["pdf_url"],
         license_url=row["license_url"],
     )
+
+
+def pack_vector(vector: Sequence[float]) -> bytes:
+    """Serialize a vector as little-endian float32, the layout sqlite-vec reads."""
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def unpack_vector(blob: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(blob) // 4}f", blob))
 
 
 def build_fts_query(query: str) -> str:

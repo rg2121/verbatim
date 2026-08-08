@@ -5,6 +5,7 @@ description = "A citation-focused scientific literature research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "fastembed>=0.8.0",
   "pymupdf>=1.26.0",
 ]
 
