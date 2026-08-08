@@ -28,6 +28,12 @@ def test_chunk_text_normalizes_and_overlaps_at_word_boundaries() -> None:
     assert chunks == ["alpha beta gamma", "gamma delta", "delta epsilon"]
 
 
+def test_chunk_text_folds_typographic_ligatures_to_ascii() -> None:
+    (chunk,) = chunk_text("magnetic ﬂux and eﬃciency", chunk_size=100, overlap=10)
+
+    assert chunk == "magnetic flux and efficiency"
+
+
 def test_chunk_text_does_not_start_a_chunk_in_the_middle_of_a_word() -> None:
     chunks = chunk_text("alpha beta gamma delta epsilon", chunk_size=25, overlap=3)
 
@@ -49,6 +55,13 @@ def test_extract_pdf_chunks_preserves_page_provenance(tmp_path: Path) -> None:
     assert all(chunk.arxiv_id == "2401.12345v1" for chunk in chunks)
     assert all(chunk.pdf_sha256 == paper.sha256 for chunk in chunks)
     assert len(destination.read_text().splitlines()) == 2
+
+
+def test_chunk_text_keeps_every_character_of_a_token_longer_than_the_chunk() -> None:
+    chunks = chunk_text("aa " + "b" * 24 + " cc", chunk_size=10, overlap=3)
+
+    assert sum(chunk.count("b") for chunk in chunks) == 24
+    assert chunks == ["aa", "bbbbbbbbb", "bbbbbbbbbb", "bbbbb cc"]
 
 
 @pytest.mark.parametrize(

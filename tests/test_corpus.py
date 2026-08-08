@@ -2,8 +2,9 @@ from hashlib import sha256
 from pathlib import Path
 
 from verbatim.arxiv import Paper
+from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import CorpusStore, split_arxiv_version
-from verbatim.downloads import DownloadedPaper
+from verbatim.downloads import DownloadedPaper, file_sha256
 
 
 def paper(arxiv_id: str, *, updated: str = "2026-08-08T10:00:00Z") -> Paper:
@@ -52,6 +53,100 @@ def test_corpus_accumulates_versions_and_selects_only_current_undownloaded_paper
     assert (second.inserted, second.updated) == (1, 0)
     assert [item.arxiv_id for item in pending] == ["2608.12345v2", "2608.33333v1"]
     assert [item.arxiv_id for item in all_downloads] == ["2608.12345v1"]
+
+
+def test_corpus_stores_chunks_and_replaces_them_when_a_pdf_is_rechunked(tmp_path: Path) -> None:
+    pdf = tmp_path / "2608.12345v1.pdf"
+    pdf.write_bytes(b"%PDF-1.7 body\n%%EOF\n")
+    record = DownloadedPaper(
+        arxiv_id="2608.12345v1",
+        source_url="https://arxiv.org/abs/2608.12345v1",
+        pdf_url="https://arxiv.org/pdf/2608.12345v1",
+        license_url=None,
+        local_path=str(pdf),
+        sha256=file_sha256(pdf),
+        byte_count=pdf.stat().st_size,
+    )
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.12345v1")])
+        corpus.record_downloads([record])
+
+        first = extract_pdf_chunks([record], extract_pages=lambda _: ["alpha beta gamma"])
+        corpus.record_chunks(first)
+        after_first = corpus.chunk_count()
+
+        second = extract_pdf_chunks([record], extract_pages=lambda _: ["alpha beta gamma"])
+        corpus.record_chunks(second)
+
+        stored = corpus.all_chunks()
+
+    assert after_first == 1
+    assert corpus_chunk_texts(stored) == ["alpha beta gamma"]
+    assert stored[0].char_start == 0 and stored[0].char_end == len("alpha beta gamma")
+    assert stored[0].chunker_version.startswith("2:")
+
+
+def corpus_chunk_texts(chunks: list) -> list[str]:
+    return [chunk.text for chunk in chunks]
+
+
+def test_corpus_only_rechunks_pdfs_whose_chunker_or_bytes_changed(tmp_path: Path) -> None:
+    pdf = tmp_path / "2608.12345v1.pdf"
+    pdf.write_bytes(b"%PDF-1.7 body\n%%EOF\n")
+    record = DownloadedPaper(
+        arxiv_id="2608.12345v1",
+        source_url="https://arxiv.org/abs/2608.12345v1",
+        pdf_url="https://arxiv.org/pdf/2608.12345v1",
+        license_url=None,
+        local_path=str(pdf),
+        sha256=file_sha256(pdf),
+        byte_count=pdf.stat().st_size,
+    )
+    fingerprint = chunker_fingerprint(1_200, 200)
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.12345v1")])
+        corpus.record_downloads([record])
+
+        first_pass = corpus.pending_chunking(fingerprint)
+        corpus.record_chunks(extract_pdf_chunks(first_pass, extract_pages=lambda _: ["alpha beta"]))
+        corpus.mark_chunked(first_pass, fingerprint)
+
+        second_pass = corpus.pending_chunking(fingerprint)
+        different_parameters = corpus.pending_chunking(chunker_fingerprint(400, 50))
+
+    assert [item.arxiv_id for item in first_pass] == ["2608.12345v1"]
+    assert second_pass == []
+    assert [item.arxiv_id for item in different_parameters] == ["2608.12345v1"]
+
+
+def test_corpus_marks_chunking_done_even_when_a_pdf_yields_no_text(tmp_path: Path) -> None:
+    pdf = tmp_path / "2608.99999v1.pdf"
+    pdf.write_bytes(b"%PDF-1.7 scanned\n%%EOF\n")
+    record = DownloadedPaper(
+        arxiv_id="2608.99999v1",
+        source_url="https://arxiv.org/abs/2608.99999v1",
+        pdf_url="https://arxiv.org/pdf/2608.99999v1",
+        license_url=None,
+        local_path=str(pdf),
+        sha256=file_sha256(pdf),
+        byte_count=pdf.stat().st_size,
+    )
+    fingerprint = chunker_fingerprint(1_200, 200)
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.99999v1")])
+        corpus.record_downloads([record])
+        pending = corpus.pending_chunking(fingerprint)
+        corpus.record_chunks(extract_pdf_chunks(pending, extract_pages=lambda _: ["   "]))
+        corpus.mark_chunked(pending, fingerprint)
+
+        retried = corpus.pending_chunking(fingerprint)
+        stored = corpus.chunk_count()
+
+    assert stored == 0
+    assert retried == []
 
 
 def test_corpus_refreshes_existing_metadata_without_creating_a_duplicate(tmp_path: Path) -> None:
