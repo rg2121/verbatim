@@ -4,13 +4,33 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import os
+import re
 from typing import Any, Protocol
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
 
 MODEL = "hosted-model"
 MAX_TOKENS = 16_000
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_TIMEOUT = 600.0
+JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
+CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
+CHUNK_ID_MARKER_PATTERN = re.compile(r"\[[0-9a-f]{16,}\]")
+
+LINE_PROTOCOL = """
+Reply in exactly this format and nothing else:
+
+ANSWER: <one paragraph, using [1], [2] markers>
+CITE [1] <chunk_id> :: <words copied character-for-character from that passage>
+CITE [2] <chunk_id> :: <words copied character-for-character from that passage>
+
+Emit no CITE lines if the passages do not answer the question.
+"""
 
 SYSTEM_PROMPT = """You answer research questions strictly from the passages provided.
 
@@ -79,12 +99,16 @@ class Answer:
 def verify_quote(quoted_text: str, chunk_text: str) -> str | None:
     """Return why a quote fails verification, or None if it is genuine.
 
-    Whitespace is normalized on both sides before comparison: the passage text
-    is already whitespace-collapsed, and a model reproducing it faithfully may
-    still differ in line breaks. Nothing else is forgiven — this is the check
-    that separates a real citation from a fabricated one.
+    Two presentation differences are forgiven, because neither changes which
+    words were quoted: collapsed whitespace, and wrapping quotation marks or
+    trailing sentence punctuation that a model adds when it sets a quote into
+    its own prose. Measured against a local model, the wrapper alone accounted
+    for a third of apparent failures.
+
+    Nothing about the words themselves is forgiven. A paraphrase still fails,
+    which is the whole point of the check.
     """
-    quote = " ".join(quoted_text.split())
+    quote = _normalize_quote(quoted_text)
     if not quote:
         return "empty quote"
     if quote not in " ".join(chunk_text.split()):
@@ -92,10 +116,100 @@ def verify_quote(quoted_text: str, chunk_text: str) -> str | None:
     return None
 
 
+def _normalize_quote(text: str) -> str:
+    collapsed = " ".join(text.split()).strip()
+    unwrapped = collapsed.strip("\"'“”‘’").strip()
+    return unwrapped.rstrip(".,;:").strip()
+
+
 class Completion(Protocol):
     """A model that returns JSON matching a schema."""
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class OllamaCompletion:
+    """A local model served by Ollama.
+
+    Structure is elicited with a flat line protocol rather than Ollama's
+    `format` parameter or tool calling. See `complete` for the measurements
+    behind that choice; briefly, neither of the documented mechanisms survived
+    a realistic multi-passage prompt on the model tested, and the line protocol
+    parsed every time.
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        *,
+        host: str | None = None,
+        timeout: float = OLLAMA_TIMEOUT,
+    ) -> None:
+        self.host = (host or os.environ.get("OLLAMA_HOST") or DEFAULT_OLLAMA_HOST).rstrip("/")
+        self.timeout = timeout  # set before model discovery, which makes a request
+        self.model = model or os.environ.get("OLLAMA_MODEL") or self._first_available_model()
+
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """Elicit the answer as flat lines, then shape it like the JSON schema.
+
+        `schema` is deliberately unused. Measured on this machine's model:
+        tool calling produced the right structure on a one-passage prompt but
+        was ignored on every realistic five-passage prompt, as were both
+        `format: "json"` and a full JSON schema. The flat CITE-line protocol
+        parsed correctly on every attempt, so the backend elicits that and
+        converts it to the shape the caller expects.
+        """
+        body = self._post(
+            "/api/chat",
+            {
+                "model": self.model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": f"{system}\n{LINE_PROTOCOL}"},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        content = body.get("message", {}).get("content", "")
+        payload = parse_line_protocol(content)
+        if payload is None:
+            raise RuntimeError(
+                f"Ollama model {self.model!r} did not answer in the expected "
+                f"format. Response began: {content[:200]!r}"
+            )
+        return payload
+
+    def _first_available_model(self) -> str:
+        models = [item["name"] for item in self._get("/api/tags").get("models", [])]
+        if not models:
+            raise RuntimeError(
+                "Ollama has no models pulled. Run 'ollama pull <model>' first."
+            )
+        return models[0]
+
+    def _get(self, path: str) -> dict[str, Any]:
+        return self._request(Request(f"{self.host}{path}"))
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        request = Request(
+            f"{self.host}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        return self._request(request)
+
+    def _request(self, request: Request) -> dict[str, Any]:
+        try:
+            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local host
+                body = json.loads(response.read())
+        except URLError as error:
+            raise RuntimeError(
+                f"Cannot reach Ollama at {self.host} ({error.reason}). "
+                f"Is it running? Start it with 'ollama serve'."
+            ) from error
+        if "error" in body:
+            raise RuntimeError(f"Ollama error: {body['error']}")
+        return body
 
 
 class HostedCompletion:
@@ -142,6 +256,51 @@ class HostedCompletion:
         if text is None:
             raise RuntimeError(f"No text in model response (stop_reason={response.stop_reason})")
         return json.loads(text)
+
+
+def parse_line_protocol(content: str) -> dict[str, Any] | None:
+    """Read the flat ANSWER/CITE format back into the answer payload shape.
+
+    Returns None when there is no ANSWER line at all, which is the signal that
+    the model ignored the format rather than simply finding nothing to cite.
+    """
+    answer = ANSWER_LINE_PATTERN.search(content)
+    if answer is None:
+        return None
+    citations = [
+        {"marker": int(marker), "chunk_id": chunk_id, "quoted_text": quote.strip()}
+        for marker, chunk_id, quote in CITE_LINE_PATTERN.findall(content)
+    ]
+    return {"answer": answer.group(1).strip(), "citations": citations}
+
+
+def renumber_markers(text: str, citations: list[Citation]) -> str:
+    """Rewrite inline markers so they match the rendered bibliography.
+
+    Small models often cite by chunk id, or number their markers in an order
+    that does not survive rejected citations. The bibliography is numbered by
+    position, so the prose is normalised to match rather than trusting the
+    model to keep two numbering schemes in step.
+    """
+    for position, citation in enumerate(citations, start=1):
+        text = text.replace(f"[{citation.chunk_id}]", f"[{position}]")
+    # A marker still holding a chunk id belongs to a citation that failed
+    # verification. Say so rather than leaving an opaque hash in the prose.
+    text = CHUNK_ID_MARKER_PATTERN.sub("[unverified]", text)
+    # Collapse the runs this can produce, e.g. "[1] [1]" or "[1][1]".
+    return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", text)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Pull a JSON object out of prose, tolerating ``` fences."""
+    match = JSON_OBJECT_PATTERN.search(text)
+    if match is None:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def build_prompt(question: str, matches: list[ChunkMatch]) -> str:
@@ -194,10 +353,14 @@ def answer_from_matches(
         if failure is not None:
             rejected.append(RejectedCitation(chunk_id, quoted_text, failure))
             continue
+        if any(existing.chunk_id == chunk_id for existing in citations):
+            # A second quote from the same passage renders as an identical
+            # reference, so the reader gains nothing from a duplicate entry.
+            continue
         citations.append(citation_from_chunk(chunk, paper, quoted_text))
     return Answer(
         question=question,
-        text=payload.get("answer", ""),
+        text=renumber_markers(payload.get("answer", ""), citations),
         citations=citations,
         rejected=rejected,
     )

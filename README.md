@@ -86,8 +86,17 @@ rather than rendered. Citations always pin the paper *version*. At most three
 passages come from any one paper by default (`--max-per-paper`), so a
 corpus-wide question is not answered from a single source.
 
-`ask` needs hosted API credentials — set `HOSTED_API_KEY`. Nothing else
-in the pipeline calls a network model; `sync` and `download` reach arXiv only.
+`ask` uses a local model through **Ollama** by default, so the whole pipeline
+runs offline once the corpus is built. It picks `$OLLAMA_MODEL`, or the first
+pulled model; override with `--llm`. Use `--backend hosted` to answer with the
+hosted API instead, which needs `HOSTED_API_KEY`.
+
+Small local models paraphrase rather than quote, so expect rejected citations —
+that is the check working, not a bug. A claim whose quote could not be verified
+is marked `[unverified]` in the prose rather than silently presented as sourced.
+Ollama's `format` parameter and tool calling were both unreliable on realistic
+multi-passage prompts, so the backend elicits a flat `ANSWER:` / `CITE` line
+format and parses that.
 
 For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and

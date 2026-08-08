@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from verbatim.answers import HostedCompletion, answer_from_matches
+from verbatim.answers import MODEL as HOSTED_MODEL
+from verbatim.answers import HostedCompletion, OllamaCompletion, answer_from_matches
 from verbatim.arxiv import fetch_metadata
 from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
@@ -89,6 +90,16 @@ def run() -> None:
     ask_parser.add_argument("--passages", type=int, default=8, help="Passages to retrieve")
     ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
     ask_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model")
+    ask_parser.add_argument(
+        "--backend",
+        choices=("ollama", "hosted"),
+        default="ollama",
+        help="Which model answers: a local Ollama model (default) or a hosted API",
+    )
+    ask_parser.add_argument(
+        "--llm",
+        help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
+    )
     ask_parser.add_argument(
         "--max-per-paper",
         type=int,
@@ -205,7 +216,12 @@ def run() -> None:
                 arxiv_id=args.arxiv_id,
                 max_per_paper=args.max_per_paper,
             )
-            answer = answer_from_matches(corpus, HostedCompletion(), args.question, matches)
+            completion = (
+                OllamaCompletion(args.llm)
+                if args.backend == "ollama"
+                else HostedCompletion(args.llm or HOSTED_MODEL)
+            )
+            answer = answer_from_matches(corpus, completion, args.question, matches)
         print(answer.text)
         if answer.citations:
             print("\nReferences")

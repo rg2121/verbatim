@@ -160,3 +160,142 @@ def test_an_empty_quote_is_rejected(tmp_path: Path) -> None:
     assert verify_quote("", "some text") == "empty quote"
     assert verify_quote("   ", "some text") == "empty quote"
     assert verify_quote("some", "some text") is None
+
+
+def test_markers_written_as_chunk_ids_are_renumbered_to_match_the_bibliography(
+    tmp_path: Path,
+) -> None:
+    """Small local models cite by chunk id; the bibliography numbers by position."""
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring.", "Charge moves along wires."]}
+    ) as corpus:
+        matches = matches_for(corpus)
+        first, second = matches[0].chunk.chunk_id, matches[1].chunk.chunk_id
+        completion = ScriptedCompletion(
+            {
+                "answer": f"Flux threads [{first}] and charge moves [{second}].",
+                "citations": [
+                    {"marker": 1, "chunk_id": first, "quoted_text": "flux threads"},
+                    {"marker": 2, "chunk_id": second, "quoted_text": "Charge moves"},
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert answer.text == "Flux threads [1] and charge moves [2]."
+
+
+def test_renumbering_leaves_correct_numeric_markers_alone() -> None:
+    from verbatim.answers import renumber_markers
+
+    assert renumber_markers("Already fine [1] and [2].", []) == "Already fine [1] and [2]."
+
+
+def test_renumbering_collapses_duplicate_markers() -> None:
+    from verbatim.answers import renumber_markers
+
+    assert renumber_markers("Claim [1] [1] holds.", []) == "Claim [1] holds."
+    assert renumber_markers("Claim [2][2][2] holds.", []) == "Claim [2] holds."
+
+
+def test_line_protocol_parses_into_the_answer_payload() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol(
+        "ANSWER: Flux moves [1] and charge moves [2].\n"
+        "CITE [1] aaa111 :: flux can move\n"
+        "CITE [2] bbb222 :: charge moves along\n"
+    )
+
+    assert payload == {
+        "answer": "Flux moves [1] and charge moves [2].",
+        "citations": [
+            {"marker": 1, "chunk_id": "aaa111", "quoted_text": "flux can move"},
+            {"marker": 2, "chunk_id": "bbb222", "quoted_text": "charge moves along"},
+        ],
+    }
+
+
+def test_line_protocol_accepts_an_answer_with_no_citations() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol("ANSWER: The passages do not address this question.")
+
+    assert payload["citations"] == []
+    assert "do not address" in payload["answer"]
+
+
+def test_line_protocol_keeps_a_multi_line_answer_out_of_the_citations() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol(
+        "ANSWER: First sentence.\nStill the answer.\nCITE [1] aaa111 :: quoted words\n"
+    )
+
+    assert payload["answer"] == "First sentence.\nStill the answer."
+    assert len(payload["citations"]) == 1
+
+
+def test_line_protocol_rejects_prose_that_ignored_the_format() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    assert parse_line_protocol("Sure! Hybrid retrieval combines sparse and dense.") is None
+
+
+def test_verification_forgives_quote_wrappers_but_not_paraphrase() -> None:
+    from verbatim.answers import verify_quote
+
+    source = "Magnetic flux can move through a region of zero magnetic field."
+
+    # Presentation differences: the words are unchanged.
+    assert verify_quote('"Magnetic flux can move"', source) is None
+    assert verify_quote("Magnetic flux can move.", source) is None
+    assert verify_quote('"Magnetic flux can move through a region of zero magnetic field."', source) is None
+    assert verify_quote("Magnetic   flux\n can move", source) is None
+    assert verify_quote("“Magnetic flux can move”", source) is None
+
+    # Different words: still rejected.
+    assert verify_quote("Magnetic flux cannot move", source) is not None
+    assert verify_quote("flux moves through zero fields", source) is not None
+    assert verify_quote('"the ability of models to handle complex tasks"', source) is not None
+    assert verify_quote('"."', source) == "empty quote"
+
+
+def test_two_quotes_from_one_passage_render_as_a_single_reference(tmp_path: Path) -> None:
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        chunk_id = matches[0].chunk.chunk_id
+        completion = ScriptedCompletion(
+            {
+                "answer": f"Flux [{chunk_id}] threads the ring [{chunk_id}].",
+                "citations": [
+                    {"marker": 1, "chunk_id": chunk_id, "quoted_text": "Magnetic flux"},
+                    {"marker": 2, "chunk_id": chunk_id, "quoted_text": "threads the ring"},
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert len(answer.citations) == 1
+    assert answer.text == "Flux [1] threads the ring [1]."
+    assert answer.rejected == []
+
+
+def test_a_marker_for_a_rejected_citation_is_labelled_unverified(tmp_path: Path) -> None:
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        chunk_id = matches[0].chunk.chunk_id
+        completion = ScriptedCompletion(
+            {
+                "answer": f"Flux threads [{chunk_id}] the ring.",
+                "citations": [
+                    {"marker": 1, "chunk_id": chunk_id, "quoted_text": "invented wording"}
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert answer.citations == []
+    assert len(answer.rejected) == 1
+    assert answer.text == "Flux threads [unverified] the ring."
+    assert chunk_id not in answer.text
