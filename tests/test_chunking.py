@@ -3,7 +3,7 @@ from hashlib import sha256
 
 import pytest
 
-from verbatim.chunking import chunk_text, extract_pdf_chunks
+from verbatim.chunking import chunk_page, chunk_text, extract_pdf_chunks
 from verbatim.downloads import DownloadedPaper
 from verbatim.storage import save_chunks
 
@@ -79,3 +79,71 @@ def test_extract_pdf_chunks_rejects_a_file_that_does_not_match_its_manifest(tmp_
 
     with pytest.raises(ValueError, match="Checksum mismatch"):
         extract_pdf_chunks([paper], extract_pages=lambda _: ["not reached"])
+
+
+def marked(pages: list[str]) -> list[str]:
+    """Chunk one paper's pages and return the kind of each chunk."""
+    from verbatim.chunking import mark_references
+    from verbatim.chunking import Chunk
+
+    chunks = []
+    for page_number, text in enumerate(pages, start=1):
+        for index, span in enumerate(chunk_page(text, chunk_size=200, overlap=20)):
+            chunks.append(
+                Chunk(
+                    chunk_id=f"c{page_number}{index}",
+                    arxiv_id="2608.11111v1",
+                    source_url="u",
+                    license_url=None,
+                    pdf_sha256="s",
+                    page_number=page_number,
+                    chunk_index=index,
+                    char_start=span.char_start,
+                    char_end=span.char_end,
+                    text=span.text,
+                    chunker_version="3:200:20",
+                )
+            )
+    return [chunk.kind for chunk in mark_references(chunks)]
+
+
+def test_bibliography_and_everything_after_it_are_marked_as_references() -> None:
+    kinds = marked(
+        [
+            "Introduction. We study flux.",
+            "Method. We measure flux carefully.",
+            "Conclusion follows. References [1] A. Smith, Flux, 2020.",
+            "[2] B. Jones, More flux, 2021.",
+        ]
+    )
+
+    assert kinds[0] == "body" and kinds[1] == "body"
+    assert kinds[2] == "references" and kinds[3] == "references"
+
+
+def test_prose_merely_mentioning_references_is_not_marked() -> None:
+    kinds = marked(
+        [
+            "Introduction to flux.",
+            "We follow the References section of prior work when reporting results.",
+            "Discussion of the measured flux values and their implications here.",
+        ]
+    )
+
+    assert set(kinds) == {"body"}
+
+
+def test_an_early_bibliography_mention_does_not_swallow_the_paper() -> None:
+    kinds = marked(
+        [
+            "References [1] A. Smith, 2020. (a quoted reference list in the abstract)",
+            "Body text about flux measurements.",
+            "More body text about flux measurements and their meaning.",
+        ]
+    )
+
+    assert kinds[0] == "body"
+
+
+def test_a_paper_with_no_bibliography_is_left_alone() -> None:
+    assert set(marked(["Only body text.", "Still only body text about flux."])) == {"body"}

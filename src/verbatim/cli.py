@@ -83,6 +83,11 @@ def run() -> None:
         help="keyword mode only: require every term (default) or any term",
     )
     search_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model for --mode vector")
+    search_parser.add_argument(
+        "--include-references",
+        action="store_true",
+        help="Also search bibliographies, which are excluded by default",
+    )
 
     ask_parser = subparsers.add_parser("ask", help="Answer a question from the corpus, with citations")
     ask_parser.add_argument("question")
@@ -99,6 +104,11 @@ def run() -> None:
     ask_parser.add_argument(
         "--llm",
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
+    )
+    ask_parser.add_argument(
+        "--include-references",
+        action="store_true",
+        help="Also search bibliographies, which are excluded by default",
     )
     ask_parser.add_argument(
         "--max-per-paper",
@@ -191,7 +201,11 @@ def run() -> None:
         with CorpusStore(args.state) as corpus:
             if args.mode == "keyword":
                 matches = corpus.search_chunks(
-                    args.query, limit=args.limit, arxiv_id=args.arxiv_id, match=args.match
+                    args.query,
+                    limit=args.limit,
+                    arxiv_id=args.arxiv_id,
+                    match=args.match,
+                    include_references=args.include_references,
                 )
             else:
                 search = vector_search if args.mode == "vector" else hybrid_search
@@ -201,6 +215,7 @@ def run() -> None:
                     args.query,
                     limit=args.limit,
                     arxiv_id=args.arxiv_id,
+                    include_references=args.include_references,
                 )
         if not matches:
             print(f"No passages matched {args.query!r}.")
@@ -215,6 +230,7 @@ def run() -> None:
                 limit=args.passages,
                 arxiv_id=args.arxiv_id,
                 max_per_paper=args.max_per_paper,
+                include_references=args.include_references,
             )
             completion = (
                 OllamaCompletion(args.llm)

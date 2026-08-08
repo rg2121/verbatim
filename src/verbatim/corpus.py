@@ -15,13 +15,14 @@ from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 
 # Columns added to existing databases after their table was first created.
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "chunks": {"kind": "TEXT NOT NULL DEFAULT 'body'"},
     "downloads": {
         "chunked_at": "TEXT",
         "chunked_with": "TEXT",
@@ -253,8 +254,8 @@ class CorpusStore:
                 """
                 INSERT INTO chunks (
                     chunk_id, arxiv_id, pdf_sha256, source_url, license_url, page_number,
-                    chunk_index, char_start, char_end, text, chunker_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chunk_index, char_start, char_end, text, chunker_version, kind, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -269,6 +270,7 @@ class CorpusStore:
                         chunk.char_end,
                         chunk.text,
                         chunk.chunker_version,
+                        chunk.kind,
                         now,
                     )
                     for chunk in chunks
@@ -316,6 +318,16 @@ class CorpusStore:
             f"SELECT * FROM chunks WHERE chunk_id IN ({placeholders})", tuple(chunk_ids)
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
+
+    def body_chunk_ids(self, arxiv_id: str | None = None) -> list[str]:
+        """Chunk ids excluding bibliographies, for filtering vector search."""
+        if arxiv_id is None:
+            rows = self.connection.execute("SELECT chunk_id FROM chunks WHERE kind = 'body'")
+        else:
+            rows = self.connection.execute(
+                "SELECT chunk_id FROM chunks WHERE kind = 'body' AND arxiv_id = ?", (arxiv_id,)
+            )
+        return [row["chunk_id"] for row in rows]
 
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
@@ -393,6 +405,7 @@ class CorpusStore:
         limit: int = 10,
         arxiv_id: str | None = None,
         match: str = "all",
+        include_references: bool = False,
     ) -> list[ChunkMatch]:
         """Rank chunks by BM25 relevance to a keyword query.
 
@@ -409,6 +422,8 @@ class CorpusStore:
         if arxiv_id is not None:
             clauses.append("c.arxiv_id = ?")
             parameters.append(arxiv_id)
+        if not include_references:
+            clauses.append("c.kind = 'body'")
         parameters.append(limit)
         rows = self.connection.execute(
             f"""
@@ -495,6 +510,7 @@ class CorpusStore:
                     char_end INTEGER NOT NULL,
                     text TEXT NOT NULL,
                     context TEXT,
+                    kind TEXT NOT NULL DEFAULT 'body',
                     chunker_version TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     UNIQUE (arxiv_id, pdf_sha256, page_number, chunk_index)
@@ -674,6 +690,7 @@ def _chunk_from_row(row: sqlite3.Row) -> Chunk:
         char_end=row["char_end"],
         text=row["text"],
         chunker_version=row["chunker_version"],
+        kind=row["kind"],
     )
 
 

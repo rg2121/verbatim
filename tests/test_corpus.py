@@ -84,7 +84,8 @@ def test_corpus_stores_chunks_and_replaces_them_when_a_pdf_is_rechunked(tmp_path
     assert after_first == 1
     assert corpus_chunk_texts(stored) == ["alpha beta gamma"]
     assert stored[0].char_start == 0 and stored[0].char_end == len("alpha beta gamma")
-    assert stored[0].chunker_version.startswith("2:")
+    assert stored[0].chunker_version == chunker_fingerprint(1_200, 200)
+    assert stored[0].kind == "body"
 
 
 def corpus_chunk_texts(chunks: list) -> list[str]:

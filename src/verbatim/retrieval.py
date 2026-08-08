@@ -20,6 +20,7 @@ def vector_search(
     *,
     limit: int = 10,
     arxiv_id: str | None = None,
+    include_references: bool = False,
     index: VectorIndex | None = None,
 ) -> list[ChunkMatch]:
     """Rank passages by embedding similarity rather than shared words.
@@ -35,9 +36,16 @@ def vector_search(
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
     ensure_current(index, stored, model.model_id)
 
+    # Bibliographies match almost any technical query, so they are excluded by
+    # scoping the search rather than by filtering afterwards, which would
+    # silently shorten the result list.
     scope = None
-    if arxiv_id is not None:
-        scope = [chunk.chunk_id for chunk in corpus.chunks_for_paper(arxiv_id)]
+    if arxiv_id is not None or not include_references:
+        scope = (
+            [chunk.chunk_id for chunk in corpus.chunks_for_paper(arxiv_id)]
+            if include_references and arxiv_id is not None
+            else corpus.body_chunk_ids(arxiv_id)
+        )
         if not scope:
             return []
     hits = index.search(embedder.embed_query(query), limit=limit, chunk_ids=scope)
@@ -66,6 +74,7 @@ def hybrid_search(
     candidates: int = 50,
     smoothing: int = RRF_SMOOTHING,
     max_per_paper: int | None = None,
+    include_references: bool = False,
     index: VectorIndex | None = None,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
@@ -80,10 +89,20 @@ def hybrid_search(
     if limit < 1:
         raise ValueError("limit must be at least 1")
     keyword = corpus.search_chunks(
-        query, limit=candidates, arxiv_id=arxiv_id, match="any"
+        query,
+        limit=candidates,
+        arxiv_id=arxiv_id,
+        match="any",
+        include_references=include_references,
     )
     vector = vector_search(
-        corpus, embedder, query, limit=candidates, arxiv_id=arxiv_id, index=index
+        corpus,
+        embedder,
+        query,
+        limit=candidates,
+        arxiv_id=arxiv_id,
+        include_references=include_references,
+        index=index,
     )
 
     fused: dict[str, float] = defaultdict(float)

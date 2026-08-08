@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from pathlib import Path
+import re
 from typing import Callable, Iterable
 import unicodedata
 
@@ -12,7 +13,21 @@ import pymupdf
 
 from verbatim.downloads import DownloadedPaper, file_sha256
 
-CHUNKER_VERSION = "2"
+CHUNKER_VERSION = "3"
+
+BODY = "body"
+REFERENCES = "references"
+
+# A bibliography heading immediately followed by the start of a citation: a
+# bracketed number, an author surname, or an initial.  Matching the heading
+# alone also fires on prose that merely mentions references; requiring what
+# follows it is what makes this precise enough to filter on.
+REFERENCES_HEADING = re.compile(
+    r"\b(?:REFERENCES|References|Bibliography|BIBLIOGRAPHY)\s+(?=\[\d|[A-Z][a-z]+[,.]|[A-Z]\.)"
+)
+# Bibliographies sit at the back; a "References" mention earlier is a citation
+# to someone else's reference list, not the start of this paper's.
+REFERENCES_EARLIEST_FRACTION = 0.4
 
 
 def chunker_fingerprint(chunk_size: int, overlap: int) -> str:
@@ -48,6 +63,7 @@ class Chunk:
     char_end: int
     text: str
     chunker_version: str
+    kind: str = BODY
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -72,10 +88,11 @@ def extract_pdf_chunks(
             raise ValueError(
                 f"Checksum mismatch for {download.arxiv_id}: manifest={download.sha256}, file={actual_checksum}"
             )
+        paper_chunks: list[Chunk] = []
         for page_number, page_text in enumerate(page_extractor(pdf_path), start=1):
             spans = chunk_page(page_text, chunk_size=chunk_size, overlap=overlap)
             for chunk_index, span in enumerate(spans):
-                chunks.append(
+                paper_chunks.append(
                     Chunk(
                         chunk_id=_chunk_id(download, page_number, chunk_index, fingerprint),
                         arxiv_id=download.arxiv_id,
@@ -90,7 +107,35 @@ def extract_pdf_chunks(
                         chunker_version=fingerprint,
                     )
                 )
+        chunks.extend(mark_references(paper_chunks))
     return chunks
+
+
+def mark_references(paper_chunks: list[Chunk]) -> list[Chunk]:
+    """Label the bibliography of one paper, and everything after it.
+
+    Detection is deliberately conservative: it fires only on a heading that is
+    immediately followed by the start of a citation, in the back of the paper.
+    That misses papers whose heading did not survive extraction, but it does not
+    mislabel body text — and dropping real content would be worse than the
+    over-representation this exists to fix.
+    """
+    last_page = max((chunk.page_number for chunk in paper_chunks), default=0)
+    start: tuple[int, int] | None = None
+    for chunk in paper_chunks:
+        if chunk.page_number < last_page * REFERENCES_EARLIEST_FRACTION:
+            continue
+        if REFERENCES_HEADING.search(chunk.text):
+            start = (chunk.page_number, chunk.chunk_index)
+            break
+    if start is None:
+        return paper_chunks
+    return [
+        replace(chunk, kind=REFERENCES)
+        if (chunk.page_number, chunk.chunk_index) >= start
+        else chunk
+        for chunk in paper_chunks
+    ]
 
 
 def extract_pages_from_pdf(pdf_path: Path) -> list[str]:
