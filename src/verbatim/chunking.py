@@ -110,7 +110,10 @@ def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
         if next_start > 0 and next_start < len(normalized) and normalized[next_start - 1] != " ":
             next_space = normalized.find(" ", next_start)
             next_start = len(normalized) if next_space == -1 else next_space + 1
-        start = next_start
+        # A token longer than chunk_size has no interior space to advance to, so
+        # the search above can land beyond `end`.  Clamping keeps the spans
+        # contiguous; such a token is split mid-word rather than dropped.
+        start = min(next_start, end)
     return chunks
 
 

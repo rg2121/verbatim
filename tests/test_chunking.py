@@ -57,6 +57,13 @@ def test_extract_pdf_chunks_preserves_page_provenance(tmp_path: Path) -> None:
     assert len(destination.read_text().splitlines()) == 2
 
 
+def test_chunk_text_keeps_every_character_of_a_token_longer_than_the_chunk() -> None:
+    chunks = chunk_text("aa " + "b" * 24 + " cc", chunk_size=10, overlap=3)
+
+    assert sum(chunk.count("b") for chunk in chunks) == 24
+    assert chunks == ["aa", "bbbbbbbbb", "bbbbbbbbbb", "bbbbb cc"]
+
+
 @pytest.mark.parametrize(
     ("chunk_size", "overlap"),
     [(0, 0), (20, -1), (20, 20)],
