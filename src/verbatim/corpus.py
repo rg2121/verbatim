@@ -10,9 +10,10 @@ import re
 import sqlite3
 
 from verbatim.arxiv import Paper
+from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 
 
@@ -178,6 +179,59 @@ class CorpusStore:
             for row in rows
         ]
 
+    def record_chunks(self, chunks: list[Chunk]) -> None:
+        """Replace the stored chunks for every PDF represented in `chunks`.
+
+        Re-chunking a PDF supersedes its previous chunks entirely, so the table
+        always holds exactly one chunking of each file.
+        """
+        now = _timestamp()
+        with self.connection:
+            for arxiv_id, pdf_sha256 in {(chunk.arxiv_id, chunk.pdf_sha256) for chunk in chunks}:
+                self.connection.execute(
+                    "DELETE FROM chunks WHERE arxiv_id = ? AND pdf_sha256 = ?",
+                    (arxiv_id, pdf_sha256),
+                )
+            self.connection.executemany(
+                """
+                INSERT INTO chunks (
+                    chunk_id, arxiv_id, pdf_sha256, source_url, license_url, page_number,
+                    chunk_index, char_start, char_end, text, chunker_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        chunk.chunk_id,
+                        chunk.arxiv_id,
+                        chunk.pdf_sha256,
+                        chunk.source_url,
+                        chunk.license_url,
+                        chunk.page_number,
+                        chunk.chunk_index,
+                        chunk.char_start,
+                        chunk.char_end,
+                        chunk.text,
+                        chunk.chunker_version,
+                        now,
+                    )
+                    for chunk in chunks
+                ],
+            )
+
+    def all_chunks(self) -> list[Chunk]:
+        """Return every stored chunk in a stable, citable order."""
+        rows = self.connection.execute(
+            """
+            SELECT c.* FROM chunks AS c
+            JOIN papers AS p ON p.arxiv_id = c.arxiv_id
+            ORDER BY p.updated DESC, c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
+            """
+        ).fetchall()
+        return [_chunk_from_row(row) for row in rows]
+
+    def chunk_count(self) -> int:
+        return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+
     def _initialize(self) -> None:
         with self.connection:
             self.connection.executescript(
@@ -218,10 +272,33 @@ class CorpusStore:
                     byte_count INTEGER NOT NULL,
                     downloaded_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS chunks (
+                    chunk_id TEXT PRIMARY KEY,
+                    arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
+                    pdf_sha256 TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    license_url TEXT,
+                    page_number INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    char_start INTEGER NOT NULL,
+                    char_end INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    context TEXT,
+                    chunker_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (arxiv_id, pdf_sha256, page_number, chunk_index)
+                );
+
+                CREATE INDEX IF NOT EXISTS chunks_by_paper
+                    ON chunks (arxiv_id, page_number, chunk_index);
                 """
             )
             self.connection.execute(
-                "INSERT OR IGNORE INTO schema_metadata (key, value) VALUES ('schema_version', ?)",
+                """
+                INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
                 (SCHEMA_VERSION,),
             )
 
@@ -246,6 +323,22 @@ def _paper_from_row(row: sqlite3.Row) -> Paper:
         source_url=row["source_url"],
         pdf_url=row["pdf_url"],
         license_url=row["license_url"],
+    )
+
+
+def _chunk_from_row(row: sqlite3.Row) -> Chunk:
+    return Chunk(
+        chunk_id=row["chunk_id"],
+        arxiv_id=row["arxiv_id"],
+        source_url=row["source_url"],
+        license_url=row["license_url"],
+        pdf_sha256=row["pdf_sha256"],
+        page_number=row["page_number"],
+        chunk_index=row["chunk_index"],
+        char_start=row["char_start"],
+        char_end=row["char_end"],
+        text=row["text"],
+        chunker_version=row["chunker_version"],
     )
 
 

@@ -44,7 +44,8 @@ def main() -> None:
     )
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
-    chunk_parser.add_argument("--manifest", type=Path, default=Path("data/pdfs/manifest.json"))
+    chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
+    chunk_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
     chunk_parser.add_argument("--output", type=Path, default=Path("data/chunks.jsonl"))
     chunk_parser.add_argument("--chunk-size", type=int, default=1_200)
     chunk_parser.add_argument("--overlap", type=int, default=200)
@@ -96,14 +97,28 @@ def main() -> None:
         print(f"Downloaded {len(new_downloads)} new PDFs; corpus manifest has {len(downloads)} PDFs: {manifest_path}")
 
     if args.command == "chunk":
-        downloads = load_download_manifest(args.manifest)
-        chunks = extract_pdf_chunks(
-            downloads,
-            chunk_size=args.chunk_size,
-            overlap=args.overlap,
-        )
-        save_chunks(chunks, args.output)
-        print(f"Saved {len(chunks)} page-aware chunks to {args.output}")
+        if args.manifest is not None:
+            chunks = extract_pdf_chunks(
+                load_download_manifest(args.manifest),
+                chunk_size=args.chunk_size,
+                overlap=args.overlap,
+            )
+            save_chunks(chunks, args.output)
+            print(f"Saved {len(chunks)} page-aware chunks to {args.output}")
+        else:
+            with CorpusStore(args.state) as corpus:
+                new_chunks = extract_pdf_chunks(
+                    corpus.all_downloads(),
+                    chunk_size=args.chunk_size,
+                    overlap=args.overlap,
+                )
+                corpus.record_chunks(new_chunks)
+                chunks = corpus.all_chunks()
+            save_chunks(chunks, args.output)
+            print(
+                f"Chunked {len(new_chunks)} passages; corpus holds {len(chunks)}. "
+                f"Exported to {args.output}"
+            )
 
 
 def _merge_downloads(
