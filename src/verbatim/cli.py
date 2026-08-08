@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from verbatim.answers import HostedCompletion, answer_from_matches
 from verbatim.arxiv import fetch_metadata
+from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import DEFAULT_MODEL_NAME, FastEmbedEmbedder, embed_pending
@@ -70,6 +72,13 @@ def main() -> None:
         help="keyword mode only: require every term (default) or any term",
     )
     search_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model for --mode vector")
+
+    ask_parser = subparsers.add_parser("ask", help="Answer a question from the corpus, with citations")
+    ask_parser.add_argument("question")
+    ask_parser.add_argument("--state", type=Path, default=Path("data/corpus.db"))
+    ask_parser.add_argument("--passages", type=int, default=8, help="Passages to retrieve")
+    ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
+    ask_parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Embedding model")
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -162,6 +171,21 @@ def main() -> None:
             print(f"No passages matched {args.query!r}.")
         for rank, match in enumerate(matches, start=1):
             print(format_match(rank, match, full=args.full))
+    if args.command == "ask":
+        with CorpusStore(args.state) as corpus:
+            matches = hybrid_search(
+                corpus,
+                FastEmbedEmbedder(model_name=args.model),
+                args.question,
+                limit=args.passages,
+                arxiv_id=args.arxiv_id,
+            )
+            answer = answer_from_matches(corpus, HostedCompletion(), args.question, matches)
+        print(answer.text)
+        if answer.citations:
+            print("\nReferences")
+            print(render_bibliography(answer.citations))
+
     if args.command == "chunk":
         if args.manifest is not None:
             chunks = extract_pdf_chunks(
