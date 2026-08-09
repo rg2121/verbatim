@@ -14,7 +14,7 @@ import pymupdf4llm
 
 from verbatim.downloads import DownloadedPaper, file_sha256
 
-CHUNKER_VERSION = "5"
+CHUNKER_VERSION = "6"
 
 BODY = "body"
 REFERENCES = "references"
@@ -35,6 +35,9 @@ MARKDOWN_MARKUP = re.compile(r"\*{1,3}|_+|`+|<[^>]{1,40}>|^\s*[-*+]\s+", re.M)
 # Font-size heading detection sometimes swallows an author block into the
 # title; a real section heading is short.
 MAX_HEADING_LENGTH = 80
+# PDF text extraction can emit lone surrogates, which are valid Python str but
+# cannot be encoded as UTF-8. They reach neither SQLite nor the JSONL export.
+SURROGATES = re.compile(r"[\ud800-\udfff]")
 
 
 def chunker_fingerprint(chunk_size: int, overlap: int) -> str:
@@ -242,9 +245,13 @@ def normalize_page_text(text: str) -> str:
     """Fold typographic ligatures and collapse whitespace.
 
     PDF extraction yields presentation glyphs such as U+FB02 "ﬂ", which break
-    both keyword search and embedding similarity against ordinary "fl".
+    both keyword search and embedding similarity against ordinary "fl", and
+    occasionally lone surrogates, which cannot be encoded as UTF-8 at all. One
+    such character used to abort a whole chunking batch when the insert failed,
+    discarding every paper processed alongside it.
     """
-    return " ".join(unicodedata.normalize("NFKC", text).split())
+    without_surrogates = SURROGATES.sub("", text)
+    return " ".join(unicodedata.normalize("NFKC", without_surrogates).split())
 
 
 def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:

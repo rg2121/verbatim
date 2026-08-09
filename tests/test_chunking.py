@@ -181,3 +181,33 @@ def test_markdown_emphasis_is_stripped_from_text_and_headings() -> None:
     sections, _ = parse_markdown_sections("## **3 Results**\n\nWe found **flux**.", [])
     assert sections[0].path == ("3 Results",)
     assert sections[0].text == "We found flux."
+
+
+def test_lone_surrogates_are_removed_so_text_can_be_stored_and_exported() -> None:
+    """PDF extraction emits them; SQLite and JSON both refuse to encode them."""
+    from verbatim.chunking import normalize_page_text
+
+    contaminated = "magnetic \ud835\udc65 flux"  # a lone surrogate pair, not a real char
+    with pytest.raises(UnicodeEncodeError):
+        contaminated.encode("utf-8")
+
+    cleaned = normalize_page_text(contaminated)
+
+    assert cleaned == "magnetic flux"
+    assert cleaned.encode("utf-8")  # must not raise
+
+
+def test_one_unencodable_paper_does_not_discard_a_whole_chunking_batch(tmp_path: Path) -> None:
+    """A surrogate used to abort the insert, rolling back every paper with it."""
+    import json
+    from verbatim.storage import save_chunks
+
+    chunks = extract_pdf_chunks(
+        [download(tmp_path / "test.pdf")],
+        extract_pages=lambda _: ["## S\n\nvalue \ud835\udc65 here"],
+    )
+    destination = tmp_path / "chunks.jsonl"
+    save_chunks(chunks, destination)
+
+    rows = [json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()]
+    assert rows and "value here" in rows[0]["text"]

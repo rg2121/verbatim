@@ -206,7 +206,9 @@ class CorpusStore:
         ).fetchall()
         return [_download_from_row(row) for row in rows]
 
-    def pending_chunking(self, fingerprint: str) -> list[DownloadedPaper]:
+    def pending_chunking(
+        self, fingerprint: str, *, limit: int | None = None
+    ) -> list[DownloadedPaper]:
         """Return PDFs whose stored chunks do not match the current chunker.
 
         Re-chunking is needed when a PDF has never been chunked, when the
@@ -220,8 +222,9 @@ class CorpusStore:
                OR d.chunked_with IS NOT ?
                OR d.chunked_sha256 IS NOT d.sha256
             ORDER BY d.arxiv_id ASC
+            LIMIT ?
             """,
-            (fingerprint,),
+            (fingerprint, -1 if limit is None else limit),
         ).fetchall()
         return [_download_from_row(row) for row in rows]
 
@@ -414,6 +417,22 @@ class CorpusStore:
                 "SELECT chunk_id FROM chunks WHERE kind = 'body' AND arxiv_id = ?", (arxiv_id,)
             )
         return [row["chunk_id"] for row in rows]
+
+    def iter_chunks(self):
+        """Yield every chunk without holding the corpus in memory.
+
+        all_chunks() materialises a list, which is fine for inspection and
+        wrong for exporting a corpus of hundreds of thousands of passages.
+        """
+        cursor = self.connection.execute(
+            """
+            SELECT c.* FROM chunks AS c
+            JOIN papers AS p ON p.arxiv_id = c.arxiv_id
+            ORDER BY p.updated DESC, c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
+            """
+        )
+        for row in cursor:
+            yield _chunk_from_row(row)
 
     def chunk_count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])

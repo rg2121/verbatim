@@ -152,6 +152,9 @@ def run() -> None:
     chunk_parser.add_argument("--output", type=Path, default=config.CHUNKS_PATH)
     chunk_parser.add_argument("--chunk-size", type=int, default=config.CHUNK_SIZE)
     chunk_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
+    chunk_parser.add_argument("--limit", type=int, help="Chunk at most this many PDFs this run")
+    chunk_parser.add_argument("--batch-size", type=int, default=config.CHUNK_BATCH_SIZE,
+                              help="PDFs held in memory at once; bounds peak memory")
     args = parser.parse_args()
 
     if args.command == "fetch":
@@ -348,23 +351,30 @@ def run() -> None:
         else:
             fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
             with CorpusStore(args.state) as corpus:
-                pending = corpus.pending_chunking(fingerprint)
-                new_chunks = (
-                    extract_pdf_chunks(
-                        pending,
-                        chunk_size=args.chunk_size,
-                        overlap=args.overlap,
+                pending = corpus.pending_chunking(fingerprint, limit=args.limit)
+                # Extraction holds roughly 11MB per PDF and never plateaus, so
+                # chunking five thousand at once would need tens of gigabytes.
+                # Batching bounds peak memory and commits as it goes, which also
+                # makes an interrupted run resume rather than restart.
+                written = 0
+                for start in range(0, len(pending), args.batch_size):
+                    batch = pending[start : start + args.batch_size]
+                    produced = extract_pdf_chunks(
+                        batch, chunk_size=args.chunk_size, overlap=args.overlap
                     )
-                    if pending
-                    else []
-                )
-                corpus.record_chunks(new_chunks)
-                corpus.mark_chunked(pending, fingerprint)
-                chunks = corpus.all_chunks()
-            save_chunks(chunks, args.output)
+                    corpus.record_chunks(produced)
+                    corpus.mark_chunked(batch, fingerprint)
+                    written += len(produced)
+                    print(
+                        f"  chunked {min(start + len(batch), len(pending))}/{len(pending)} PDFs",
+                        end="\r",
+                        flush=True,
+                    )
+                new_chunks = range(written)  # only its length is used below
+                exported = save_chunks(corpus.iter_chunks(), args.output)
             print(
                 f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
-                f"corpus holds {len(chunks)}. Exported to {args.output}"
+                f"corpus holds {exported}. Exported to {args.output}"
             )
 
 

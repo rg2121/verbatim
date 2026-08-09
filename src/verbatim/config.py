@@ -49,6 +49,9 @@ PAPERS_SNAPSHOT_PATH = _path("VERBATIM_PAPERS_SNAPSHOT_PATH", "data/papers.json"
 # are part of the chunker fingerprint.
 CHUNK_SIZE = _integer("VERBATIM_CHUNK_SIZE", 1_200)
 CHUNK_OVERLAP = _integer("VERBATIM_CHUNK_OVERLAP", 200)
+# PDFs held in memory at once. Extraction costs ~11MB per PDF and does not
+# plateau, so the whole corpus in one pass would need tens of gigabytes.
+CHUNK_BATCH_SIZE = _integer("VERBATIM_CHUNK_BATCH_SIZE", 100)
 
 # Retrieval.
 EMBEDDING_MODEL = _text("VERBATIM_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
