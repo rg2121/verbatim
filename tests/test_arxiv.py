@@ -134,3 +134,23 @@ def test_license_class_separates_reusable_from_merely_present(url, expected) -> 
     from verbatim.arxiv import license_class
 
     assert license_class(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://creativecommons.org/licenses/by/4.0/", "open"),
+        ("http://creativecommons.org/licenses/by-sa/4.0/", "open"),
+        ("http://creativecommons.org/publicdomain/zero/1.0/", "open"),
+        # NC and ND are not reusable for training or commercial work.
+        ("http://creativecommons.org/licenses/by-nc/4.0/", "noncommercial"),
+        ("http://creativecommons.org/licenses/by-nc-sa/4.0/", "noncommercial"),
+        ("http://creativecommons.org/licenses/by-nd/4.0/", "no-derivatives"),
+        ("http://creativecommons.org/licenses/by-nc-nd/4.0/", "no-derivatives"),
+        ("http://arxiv.org/licenses/nonexclusive-distrib/1.0/", "arxiv-nonexclusive"),
+    ],
+)
+def test_restrictive_creative_commons_terms_are_not_called_open(url, expected) -> None:
+    from verbatim.arxiv import license_class
+
+    assert license_class(url) == expected

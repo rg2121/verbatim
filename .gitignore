@@ -9,3 +9,9 @@ data/
 
 # Secrets and local overrides
 .env
+
+# Local ingest driver and its log
+ingest.sh
+ingest.log
+overnight.sh
+overnight.log

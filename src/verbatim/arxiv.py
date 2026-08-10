@@ -170,8 +170,16 @@ def license_class(license_url: str | None) -> str:
     The distinction matters more than presence: arXiv's default
     non-exclusive-distrib licence grants *arXiv* the right to distribute and
     grants a third party nothing, so treating "has a licence" as "is reusable"
-    would be wrong. Only the `open` class permits redistribution or training,
-    and even then usually with attribution conditions.
+    would be wrong. Nor is every Creative Commons licence equivalent:
+
+    - `open` — CC0, CC-BY, CC-BY-SA. Redistribution and derivatives permitted,
+      subject to attribution and, for SA, share-alike.
+    - `noncommercial` — carries -NC. No commercial use.
+    - `no-derivatives` — carries -ND. A trained model is arguably a derivative,
+      so this excludes training regardless of commercial intent.
+    - `arxiv-nonexclusive` — arXiv may distribute it; you may not.
+
+    Only `open` is safe for redistribution or training.
     """
     if not license_url:
         return "unknown"
@@ -179,6 +187,13 @@ def license_class(license_url: str | None) -> str:
     if "creativecommons.org/publicdomain" in url or "/zero/" in url:
         return "open"
     if "creativecommons.org/licenses/" in url:
+        # NC and ND are not "open" for the uses this project cares about, and
+        # lumping them in with CC-BY would misreport a third of the licensed
+        # corpus as reusable. The stricter term wins when both are present.
+        if "-nd" in url:
+            return "no-derivatives"
+        if "-nc" in url:
+            return "noncommercial"
         return "open"
     if "arxiv.org/licenses/nonexclusive-distrib" in url:
         return "arxiv-nonexclusive"
