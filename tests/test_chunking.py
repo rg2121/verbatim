@@ -107,7 +107,7 @@ def marked(pages: list[str]) -> list[str]:
     return [chunk.kind for chunk in chunks]
 
 
-def test_a_references_heading_marks_it_and_everything_after() -> None:
+def test_a_bibliography_continuing_onto_the_next_page_stays_marked() -> None:
     kinds = marked(
         [
             "## Introduction\n\nWe study flux.",
@@ -133,16 +133,30 @@ def test_a_section_that_merely_mentions_references_is_not_marked() -> None:
     assert set(kinds) == {"body"}
 
 
-def test_a_bibliography_quoted_early_does_not_swallow_the_paper() -> None:
+def test_only_the_bibliography_is_marked_not_what_follows_it() -> None:
+    """Appendices commonly sit after the references and are real content."""
     kinds = marked(
         [
-            "## References\n\n[1] A. Smith, 2020. (quoted in the abstract)",
             "## Introduction\n\nBody text about flux measurements.",
-            "## Method\n\nMore body text about flux and its meaning.",
+            "## References\n\n[1] A. Smith, Flux, 2020.",
+            "## Appendix A\n\nSupplementary derivation of the flux equation.",
         ]
     )
 
     assert kinds[0] == "body"
+    assert kinds[1] == "references"
+    assert kinds[2] == "body"  # the appendix must remain searchable
+
+
+def test_a_bibliography_mid_document_is_still_found() -> None:
+    """A paper with long appendices puts its references well before the end."""
+    pages = ["## References\n\n[1] A. Smith, 2020."] + [
+        f"## Appendix {n}\n\nMore supplementary material about flux." for n in range(9)
+    ]
+    kinds = marked(pages)
+
+    assert kinds[0] == "references"
+    assert set(kinds[1:]) == {"body"}
 
 
 def test_a_paper_with_no_bibliography_is_left_alone() -> None:

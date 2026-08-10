@@ -26,9 +26,6 @@ REFERENCES_TITLE = re.compile(
     r"^(?:\d+\s*\.?\s*)?(?:references|bibliography|works cited|literature cited)\s*$",
     re.I,
 )
-# Bibliographies sit at the back; a "References" mention earlier is a citation
-# to someone else's reference list, not the start of this paper's.
-REFERENCES_EARLIEST_FRACTION = 0.4
 MARKDOWN_HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*\S)\s*$")
 # Emphasis, inline HTML, and link syntax; the words inside are kept.
 MARKDOWN_MARKUP = re.compile(r"\*{1,3}|_+|`+|<[^>]{1,40}>|^\s*[-*+]\s+", re.M)
@@ -139,30 +136,29 @@ def extract_pdf_chunks(
 
 
 def mark_references(paper_chunks: list[Chunk]) -> list[Chunk]:
-    """Label the bibliography of one paper, and everything after it.
+    """Label the chunks that sit inside a paper's bibliography.
 
-    A chunk belongs to the bibliography when one of its section headings *is*
-    "References" (or a synonym), rather than merely mentions it — so a section
-    called "Reference-Assisted Human Audit" is not swept up. Requiring the
-    heading to sit in the back of the paper rules out a bibliography quoted in
-    an abstract.
+    A chunk belongs to the bibliography when one of its own section headings
+    *is* "References" (or a synonym), so a section called "Reference-Assisted
+    Human Audit" is not swept up.
+
+    Only the bibliography itself is marked. Marking everything that follows it
+    was wrong twice over: papers often place appendices and supplementary
+    material after the references, which hid roughly 72,000 chunks of real
+    content from search, and the positional guard that came with it missed
+    bibliographies sitting mid-document in papers with long appendices.
     """
-    last_page = max((chunk.page_number for chunk in paper_chunks), default=0)
-    start: tuple[int, int] | None = None
-    for chunk in paper_chunks:
-        if chunk.page_number < last_page * REFERENCES_EARLIEST_FRACTION:
-            continue
-        if any(REFERENCES_TITLE.match(title) for title in chunk.section_path.split(" > ")):
-            start = (chunk.page_number, chunk.chunk_index)
-            break
-    if start is None:
-        return paper_chunks
     return [
-        replace(chunk, kind=REFERENCES)
-        if (chunk.page_number, chunk.chunk_index) >= start
-        else chunk
+        replace(chunk, kind=REFERENCES) if is_bibliography(chunk.section_path) else chunk
         for chunk in paper_chunks
     ]
+
+
+def is_bibliography(section_path: str) -> bool:
+    """Whether a section path names a bibliography at any level."""
+    if not section_path:
+        return False
+    return any(REFERENCES_TITLE.match(part.strip()) for part in section_path.split(" > "))
 
 
 def extract_pages_from_pdf(pdf_path: Path) -> list[str]:
