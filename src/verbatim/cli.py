@@ -69,7 +69,15 @@ def run() -> None:
     download_parser.add_argument(
         "--require-license",
         action="store_true",
-        help="Download only papers whose metadata explicitly reports a licence",
+        help="Download only papers that report a licence at all (weaker than --license)",
+    )
+    download_parser.add_argument(
+        "--license",
+        dest="license_classes",
+        nargs="+",
+        choices=("open", "noncommercial", "no-derivatives", "arxiv-nonexclusive", "unknown"),
+        help="Download only papers whose licence permits this. 'open' is the only "
+             "class that permits redistribution or training",
     )
 
     stats_parser = subparsers.add_parser("stats", help="Show corpus size and work remaining")
@@ -121,9 +129,10 @@ def run() -> None:
     )
     search_parser.add_argument(
         "--match",
-        choices=("all", "any"),
-        default="all",
-        help="keyword mode only: require every term (default) or any term",
+        choices=("any", "all"),
+        default="any",
+        help="keyword mode only: rank by matched terms (default), or require every term. "
+             "Requiring every term scored mrr 0.214 against 0.845 on the eval set",
     )
     search_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model for --mode vector")
     search_parser.add_argument(
@@ -215,7 +224,11 @@ def run() -> None:
             downloads = _merge_downloads(existing_downloads, report.downloaded)
         else:
             with CorpusStore(args.state) as corpus:
-                papers = corpus.pending_downloads(args.limit, require_license=args.require_license)
+                papers = corpus.pending_downloads(
+                    args.limit,
+                    require_license=args.require_license,
+                    license_classes=args.license_classes,
+                )
                 report = (
                     download_papers(
                         papers,

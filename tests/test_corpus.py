@@ -174,3 +174,27 @@ def test_license_backfill_records_absence_so_it_is_not_retried(tmp_path: Path) -
     assert sorted(pending) == ["2608.12345", "2608.99999"]
     assert remaining == []  # absence recorded, so neither is looked up again
     assert all(p is not None and p.license_url is not None for p in both_versions)
+
+
+def test_downloads_can_be_gated_on_what_a_licence_permits(tmp_path: Path) -> None:
+    """Having a licence is not the same as being allowed to reuse the paper."""
+    from verbatim.arxiv import Paper
+
+    def licensed(arxiv_id: str, url: str | None) -> Paper:
+        return Paper(**{**paper(arxiv_id).to_dict(), "license_url": url})
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([
+            licensed("2608.00001v1", "http://creativecommons.org/licenses/by/4.0/"),
+            licensed("2608.00002v1", "http://creativecommons.org/licenses/by-nc-nd/4.0/"),
+            licensed("2608.00003v1", "http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+            licensed("2608.00004v1", None),
+        ])
+
+        ungated = corpus.pending_downloads(10)
+        reported = corpus.pending_downloads(10, require_license=True)
+        open_only = corpus.pending_downloads(10, license_classes=["open"])
+
+    assert len(ungated) == 4
+    assert len(reported) == 3            # any licence at all, including nonexclusive
+    assert [p.arxiv_id for p in open_only] == ["2608.00001v1"]

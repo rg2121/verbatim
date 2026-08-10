@@ -64,7 +64,12 @@ everything already fetched committed and the watermark recorded.
 downloaded. Cached PDFs are reused only after their checksum matches the
 previous manifest, and downloads and generated artifacts are written
 atomically. Add `--require-license` to restrict downloads to records with an
-explicit licence in arXiv metadata.
+explicit licence in arXiv metadata, or `--license open` to restrict to papers
+whose licence actually permits redistribution and derivatives. The two are not
+the same: arXiv's default licence grants **arXiv** the right to distribute and
+grants you nothing, and CC terms carrying NC or ND rule out commercial use and
+training respectively. Across 5,050 papers the split is 49% open, 40%
+arXiv-nonexclusive, 5% no-derivatives, 4% noncommercial.
 
 `chunk` re-verifies each PDF checksum, then extracts page-aware passages for
 only those files whose chunker version, chunker parameters, or bytes have
@@ -85,8 +90,9 @@ source URL needed to cite it. Use `--arxiv-id` to search within one paper and
 | `keyword` | exact terms, identifiers, notation | paraphrases |
 | `vector` | meaning, without shared words | rare exact tokens |
 
-Keyword mode requires every term by default; `--match any` ranks by how many
-matched. The index matches whole tokens and does not stem, so `field` does not
+Keyword mode ranks by how many terms matched; `--match all` requires every one.
+Requiring every term scored mrr 0.214 against 0.845 on the eval set, which is
+why it is no longer the default. The index matches whole tokens and does not stem, so `field` does not
 match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
 every word of a natural-language question matches nothing at all.
 

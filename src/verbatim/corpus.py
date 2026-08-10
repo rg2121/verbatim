@@ -11,11 +11,11 @@ import re
 import sqlite3
 import struct
 
-from verbatim.arxiv import Paper
+from verbatim.arxiv import Paper, license_class
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 
-SCHEMA_VERSION = "9"
+SCHEMA_VERSION = "10"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -26,7 +26,7 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "kind": "TEXT NOT NULL DEFAULT 'body'",
         "section_path": "TEXT NOT NULL DEFAULT ''",
     },
-    "papers": {"license_checked_at": "TEXT"},
+    "papers": {"license_checked_at": "TEXT", "license_class": "TEXT"},
     "downloads": {
         "chunked_at": "TEXT",
         "chunked_with": "TEXT",
@@ -105,8 +105,8 @@ class CorpusStore:
                     INSERT INTO papers (
                         arxiv_id, base_arxiv_id, version, title, summary, authors_json,
                         categories_json, published, updated, source_url, pdf_url, license_url,
-                        is_latest, first_seen_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        license_class, is_latest, first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(arxiv_id) DO UPDATE SET
                         title = excluded.title,
                         summary = excluded.summary,
@@ -117,6 +117,7 @@ class CorpusStore:
                         source_url = excluded.source_url,
                         pdf_url = excluded.pdf_url,
                         license_url = excluded.license_url,
+                        license_class = excluded.license_class,
                         is_latest = excluded.is_latest,
                         last_seen_at = excluded.last_seen_at
                     """,
@@ -133,6 +134,7 @@ class CorpusStore:
                         paper.source_url,
                         paper.pdf_url,
                         paper.license_url,
+                        license_class(paper.license_url),
                         int(is_latest),
                         now,
                         now,
@@ -145,13 +147,29 @@ class CorpusStore:
                     )
         return SyncSummary(inserted=inserted, updated=updated)
 
-    def pending_downloads(self, limit: int, *, require_license: bool = False) -> list[Paper]:
-        """Return newest current versions that do not yet have a local PDF."""
+    def pending_downloads(
+        self,
+        limit: int,
+        *,
+        require_license: bool = False,
+        license_classes: Sequence[str] | None = None,
+    ) -> list[Paper]:
+        """Return newest current versions that do not yet have a local PDF.
+
+        `license_classes` gates on what a licence *permits*, which is not the
+        same as having one: arXiv's default grants arXiv distribution rights
+        and grants the caller nothing.
+        """
         if limit < 1:
             raise ValueError("limit must be at least 1")
         clauses = ["p.is_latest = 1", "p.pdf_url IS NOT NULL", "d.arxiv_id IS NULL"]
+        parameters: list[object] = []
         if require_license:
             clauses.append("p.license_url IS NOT NULL")
+        if license_classes:
+            placeholders = ",".join("?" * len(license_classes))
+            clauses.append(f"p.license_class IN ({placeholders})")
+            parameters.extend(license_classes)
         rows = self.connection.execute(
             f"""
             SELECT p.* FROM papers AS p
@@ -160,7 +178,7 @@ class CorpusStore:
             ORDER BY p.updated DESC, p.arxiv_id ASC
             LIMIT ?
             """,
-            (limit,),
+            (*parameters, limit),
         ).fetchall()
         return [_paper_from_row(row) for row in rows]
 
@@ -324,10 +342,12 @@ class CorpusStore:
             self.connection.execute(
                 """
                 UPDATE papers
-                SET license_url = COALESCE(?, license_url), license_checked_at = ?
+                SET license_url = COALESCE(?, license_url),
+                    license_class = ?,
+                    license_checked_at = ?
                 WHERE base_arxiv_id = ?
                 """,
-                (license_url, _timestamp(), base_arxiv_id),
+                (license_url, license_class(license_url), _timestamp(), base_arxiv_id),
             )
 
     def pipeline_stats(self, chunker_fingerprint: str, model_id: str) -> dict[str, int]:
@@ -693,6 +713,7 @@ class CorpusStore:
                     source_url TEXT NOT NULL,
                     pdf_url TEXT,
                     license_url TEXT,
+                    license_class TEXT,
                     is_latest INTEGER NOT NULL CHECK (is_latest IN (0, 1)),
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
