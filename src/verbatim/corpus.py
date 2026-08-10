@@ -377,6 +377,79 @@ class CorpusStore:
         ).fetchall()
         return {row["license"]: row["n"] for row in rows}
 
+    def papers_updated_since(
+        self,
+        since: str | None = None,
+        *,
+        category: str | None = None,
+        limit: int = 20,
+        latest_only: bool = True,
+    ) -> list[Paper]:
+        """Papers by recency — the question vector search cannot answer.
+
+        Similarity search returns things that resemble a query; it has no
+        notion of "this week" and cannot promise completeness. Recency and
+        exhaustiveness are SQL questions, so they are answered in SQL.
+        """
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if latest_only:
+            clauses.append("is_latest = 1")
+        if since is not None:
+            clauses.append("updated >= ?")
+            parameters.append(since)
+        if category is not None:
+            clauses.append("categories_json LIKE ?")
+            parameters.append(f'%"{category}"%')
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit)
+        rows = self.connection.execute(
+            f"SELECT * FROM papers {where} ORDER BY updated DESC, arxiv_id ASC LIMIT ?",
+            parameters,
+        ).fetchall()
+        return [_paper_from_row(row) for row in rows]
+
+    def latest_version_of(self, base_arxiv_id: str) -> Paper | None:
+        """Resolve a version-less identifier to the current version.
+
+        People and models both write "2608.05440" while the catalogue keys on
+        "2608.05440v1", so an exact-match-only lookup fails on the form
+        everyone actually uses.
+        """
+        row = self.connection.execute(
+            """
+            SELECT * FROM papers WHERE base_arxiv_id = ?
+            ORDER BY is_latest DESC, version DESC LIMIT 1
+            """,
+            (base_arxiv_id.strip(),),
+        ).fetchone()
+        return None if row is None else _paper_from_row(row)
+
+    def find_papers_by_title(self, text: str, *, limit: int = 5) -> list[Paper]:
+        """Resolve a paper from a partial or approximate title."""
+        rows = self.connection.execute(
+            """
+            SELECT * FROM papers WHERE is_latest = 1 AND title LIKE ?
+            ORDER BY LENGTH(title) ASC, updated DESC LIMIT ?
+            """,
+            (f"%{text.strip()}%", limit),
+        ).fetchall()
+        return [_paper_from_row(row) for row in rows]
+
+    def chunks_on_pages(self, arxiv_id: str, pages: Sequence[int]) -> list[Chunk]:
+        """Every passage on the given pages of one paper, in reading order."""
+        if not pages:
+            return []
+        placeholders = ",".join("?" * len(pages))
+        rows = self.connection.execute(
+            f"""
+            SELECT * FROM chunks WHERE arxiv_id = ? AND page_number IN ({placeholders})
+            ORDER BY page_number, chunk_index
+            """,
+            (arxiv_id, *pages),
+        ).fetchall()
+        return [_chunk_from_row(row) for row in rows]
+
     def get_paper(self, arxiv_id: str) -> Paper | None:
         row = self.connection.execute(
             "SELECT * FROM papers WHERE arxiv_id = ?", (arxiv_id,)

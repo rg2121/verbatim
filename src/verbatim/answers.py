@@ -127,6 +127,44 @@ class Completion(Protocol):
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]: ...
 
 
+class OllamaToolCaller:
+    """Picks a tool with Ollama's tool calling.
+
+    Tool calling was measured unreliable on long prompts on this model, but an
+    agent's routing turn is short - a question plus the tool schemas - and it
+    chose correctly for recency, single-paper and literature questions alike.
+    Returning None when no tool is chosen lets the loop stop rather than force
+    a call the model did not want to make.
+    """
+
+    def __init__(self, model: str | None = None, *, host: str | None = None,
+                 timeout: float | None = None) -> None:
+        self._client = OllamaCompletion(model, host=host, timeout=timeout)
+
+    @property
+    def model(self) -> str:
+        return self._client.model
+
+    def choose_tool(self, system, messages, tools):
+        body = self._client._post(
+            "/api/chat",
+            {
+                "model": self._client.model,
+                "stream": False,
+                "tools": [{"type": "function", "function": tool} for tool in tools],
+                "messages": [{"role": "system", "content": system}, *messages],
+            },
+        )
+        for call in body.get("message", {}).get("tool_calls") or []:
+            function = call.get("function", {})
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            if function.get("name"):
+                return function["name"], (arguments or {})
+        return None
+
+
 class OllamaCompletion:
     """A local model served by Ollama.
 

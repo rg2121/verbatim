@@ -6,7 +6,13 @@ import argparse
 from pathlib import Path
 import time
 
-from verbatim.answers import HostedCompletion, OllamaCompletion, answer_from_matches
+from verbatim.agent import answer_question
+from verbatim.answers import (
+    HostedCompletion,
+    OllamaCompletion,
+    OllamaToolCaller,
+    answer_from_matches,
+)
 from verbatim.arxiv import fetch_license, fetch_metadata, license_class
 from verbatim.sync import format_sync_report, sync_category
 from verbatim.citations import render_bibliography
@@ -141,6 +147,12 @@ def run() -> None:
     ask_parser.add_argument(
         "--llm",
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
+    )
+    ask_parser.add_argument(
+        "--tools",
+        action="store_true",
+        help="Let the model route the question: recency and single-paper questions "
+             "go to metadata rather than passage search",
     )
     ask_parser.add_argument(
         "--include-references",
@@ -334,6 +346,25 @@ def run() -> None:
             print(format_match(rank, match, full=args.full))
     if args.command == "ask":
         with CorpusStore(args.state) as corpus:
+            if args.tools:
+                embedder = FastEmbedEmbedder(model_name=args.model)
+                completion = (
+                    OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+                    if args.backend == "ollama"
+                    else HostedCompletion(args.llm or config.HOSTED_MODEL)
+                )
+                answer, trace = answer_question(
+                    corpus, embedder, OllamaToolCaller(args.llm or config.OLLAMA_MODEL),
+                    completion, args.question,
+                )
+                print(f"[route: {trace.describe()}]\n")
+                print(answer.text)
+                if answer.citations:
+                    print("\nReferences")
+                    print(render_bibliography(answer.citations))
+                for item in answer.rejected:
+                    print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+                return
             matches = hybrid_search(
                 corpus,
                 FastEmbedEmbedder(model_name=args.model),

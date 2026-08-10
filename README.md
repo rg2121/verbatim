@@ -129,6 +129,22 @@ rather than rendered. Citations always pin the paper *version*. At most three
 passages come from any one paper by default (`--max-per-paper`), so a
 corpus-wide question is not answered from a single source.
 
+Pass `--tools` and the model routes the question itself, which is what lets one
+command serve three different kinds of question:
+
+```bash
+uv run verbatim ask "what came out in the last 10 days?" --tools
+uv run verbatim ask "what is arXiv:2608.05440 about?" --tools
+uv run verbatim ask "what do papers say about hybrid retrieval?" --tools
+```
+
+Recency and completeness are SQL questions — similarity search returns things
+that *resemble* a query and has no notion of "this week" — so those go to the
+catalogue rather than the vector index. The route taken is printed above each
+answer. Tools only gather evidence: the answer still goes through the same
+citation verification, so a claim whose quote is not in its passage is still
+rejected.
+
 `ask` uses a local model through **Ollama** by default, so the whole pipeline
 runs offline once the corpus is built. It picks `$OLLAMA_MODEL`, or the first
 pulled model; override with `--llm`. Use `--backend hosted` to answer with the
