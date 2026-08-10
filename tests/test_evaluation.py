@@ -94,3 +94,44 @@ def test_report_names_the_best_mode() -> None:
 
     assert "best by mrr: good" in report
     assert report.index("bad") < report.index("best by mrr")  # sorted worst first
+
+
+def test_unanswerable_cases_are_excluded_from_retrieval_scoring() -> None:
+    """Scoring recall against a question with no answer would be meaningless."""
+    cases = [
+        EvalCase("answerable", ("A",)),
+        EvalCase("unanswerable", (), expect_none=True),
+    ]
+
+    score = score_mode("m", cases, lambda q: [match("A")])
+
+    assert score.cases == 1        # only the answerable one counted
+    assert score.recall_at[1] == 1.0
+    assert score.mrr == 1.0
+
+
+def test_a_case_must_declare_either_papers_or_that_none_exist(tmp_path: Path) -> None:
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"question": "q", "expect_papers": []}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="set expect_none"):
+        load_cases(path)
+
+
+def test_a_case_cannot_both_expect_papers_and_expect_none(tmp_path: Path) -> None:
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        '{"question": "q", "expect_papers": ["A"], "expect_none": true}\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="cannot both"):
+        load_cases(path)
+
+
+def test_an_unanswerable_case_loads(tmp_path: Path) -> None:
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"question": "q", "expect_none": true}\n', encoding="utf-8")
+
+    (case,) = load_cases(path)
+
+    assert case.expect_none and case.expect_papers == ()

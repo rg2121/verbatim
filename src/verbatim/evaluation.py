@@ -25,20 +25,39 @@ CUTOFFS = (1, 5, 10)
 
 @dataclass(frozen=True)
 class EvalCase:
-    """One question and the papers that genuinely answer it."""
+    """One question, and either the papers that answer it or nothing at all.
+
+    A case with `expect_none` is a question the corpus genuinely cannot answer.
+    Those matter as much as the rest: retrieval always returns something, and
+    its scores do not separate a real hit from a coincidental one, so the only
+    defence is the answer stage declining. Measuring that is measuring whether
+    the tool can be trusted on the edge of its own coverage.
+    """
 
     question: str
-    expect_papers: tuple[str, ...]
+    expect_papers: tuple[str, ...] = ()
+    expect_none: bool = False
     note: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> EvalCase:
+        expect_none = bool(payload.get("expect_none", False))
         papers = payload.get("expect_papers") or []
-        if not isinstance(papers, list) or not papers:
-            raise ValueError(f"case {payload.get('question')!r} lists no expected papers")
+        if not isinstance(papers, list):
+            raise ValueError(f"case {payload.get('question')!r} has a malformed expect_papers")
+        if not papers and not expect_none:
+            raise ValueError(
+                f"case {payload.get('question')!r} lists no expected papers; "
+                "set expect_none if the corpus cannot answer it"
+            )
+        if papers and expect_none:
+            raise ValueError(
+                f"case {payload.get('question')!r} cannot both expect papers and expect none"
+            )
         return cls(
             question=str(payload["question"]),
             expect_papers=tuple(str(p) for p in papers),
+            expect_none=expect_none,
             note=str(payload.get("note", "")),
         )
 
@@ -96,10 +115,11 @@ def score_mode(
     that answers the question", which is what matters when the answer is then
     written from those passages.
     """
+    answerable = [case for case in cases if not case.expect_none]
     hits = {k: 0 for k in cutoffs}
     reciprocal = 0.0
     misses: list[str] = []
-    for case in cases:
+    for case in answerable:
         rank = rank_of_first_hit(retrieve(case.question), case.expect_papers)
         if rank is None:
             misses.append(case.question)
@@ -108,10 +128,10 @@ def score_mode(
         for k in cutoffs:
             if rank <= k:
                 hits[k] += 1
-    total = len(cases)
+    total = len(answerable) or 1
     return ModeScore(
         mode=mode,
-        cases=total,
+        cases=len(answerable),
         recall_at={k: hits[k] / total for k in cutoffs},
         mrr=reciprocal / total,
         misses=tuple(misses),

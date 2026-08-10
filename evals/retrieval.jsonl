@@ -33,3 +33,30 @@
 {"question": "tracking English loanwords appearing in Spanish-language newspapers automatically", "expect_papers": ["2608.00713v1"], "note": "source=paraphrase"}
 {"question": "making text unusable as training data for language models through reinforcement learning", "expect_papers": ["2607.28862v1"], "note": "source=paraphrase"}
 {"question": "concentration bounds for roots using incidence geometry", "expect_papers": ["2608.01670v1"], "note": "source=paraphrase"}
+# source=user: Rishab's own questions, 2026-08-10. Most concern relativity,
+# cosmology and nuclear physics, which this cs.*-heavy corpus barely covers —
+# so many are expect_none. Those are not filler: retrieval always returns
+# something and its scores do not separate a real hit from a coincidental one,
+# so declining to answer is the only defence, and it is worth measuring.
+# The answerable calls below are mine from reading the retrieved passages;
+# correct any you disagree with.
+{"question": "what is the einstein field equation in flat space approximation?", "expect_papers": ["2608.04063v1"], "note": "source=user; introductory GR paper covering the weak-field treatment"}
+{"question": "what is the speed of light near jupiter?", "expect_none": true, "note": "source=user; corpus has no planetary-scale relativity measurement"}
+{"question": "what is the penrose diagram?", "expect_none": true, "note": "source=user; no causal-structure diagram paper in corpus"}
+{"question": "what is quantum field theory in curved spacetime?", "expect_none": true, "note": "source=user; borderline — relativity papers exist but none treat QFT in curved spacetime"}
+{"question": "what are fiber bundles?", "expect_none": true, "note": "source=user; differential geometry appears only as ML machinery, not as subject"}
+{"question": "what is a tensor?", "expect_none": true, "note": "source=user; tensors are used throughout but never defined"}
+{"question": "what is the tensor space of information?", "expect_none": true, "note": "source=user; no such construction in corpus"}
+{"question": "what is entropy?", "expect_papers": ["2407.12288v5"], "note": "source=user; information-theoretic foundations paper defines it"}
+{"question": "what is information theory?", "expect_papers": ["2407.12288v5"], "note": "source=user"}
+{"question": "what is the role of entropy in information theory?", "expect_papers": ["2407.12288v5"], "note": "source=user; section 4.4 covers differential entropy"}
+{"question": "what is artificial intelligence?", "expect_papers": ["2608.03413v1"], "note": "source=user"}
+{"question": "what is the role of AI in cosmology?", "expect_none": true, "note": "source=user; borderline — a paper covers AI in physics research, none in cosmology"}
+{"question": "what is cosmology in curved spacetime?", "expect_none": true, "note": "source=user"}
+{"question": "what is the cosmological constant?", "expect_papers": ["2512.16941v3"], "note": "source=user; dynamical tension strings paper discusses its role"}
+{"question": "what is the nature of time near a black hole?", "expect_none": true, "note": "source=user; no black hole physics in corpus"}
+{"question": "what is neuroscience?", "expect_none": true, "note": "source=user; neural-dynamics papers are ML, not neuroscience as a field"}
+{"question": "what is the name of the farthest star from the earth?", "expect_none": true, "note": "source=user; observational astronomy absent"}
+{"question": "what is nuclear fusion?", "expect_none": true, "note": "source=user; 'NuclearDiffusion' matches the word, not the topic"}
+{"question": "what is nuclear fission?", "expect_none": true, "note": "source=user; borderline — a nuclear structure paper exists but does not treat fission"}
+{"question": "what is the nuclear force?", "expect_papers": ["2608.03976v1"], "note": "source=user; lattice nuclear structure paper discusses the NN potential. Retrieval currently misses it — a real failure case"}
