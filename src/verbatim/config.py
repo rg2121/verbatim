@@ -44,6 +44,8 @@ STATE_PATH = _path("VERBATIM_STATE_PATH", "data/corpus.db")
 PDF_DIR = _path("VERBATIM_PDF_DIR", "data/pdfs")
 CHUNKS_PATH = _path("VERBATIM_CHUNKS_PATH", "data/chunks.jsonl")
 PAPERS_SNAPSHOT_PATH = _path("VERBATIM_PAPERS_SNAPSHOT_PATH", "data/papers.json")
+# The retrieval answer key. Committed, unlike the corpus it scores.
+EVAL_PATH = _path("VERBATIM_EVAL_PATH", "evals/retrieval.jsonl")
 
 # Chunking. Changing either forces affected PDFs to be re-chunked, because both
 # are part of the chunker fingerprint.

@@ -1,0 +1,35 @@
+# Retrieval answer key. Each line: a question and the papers that answer it.
+# Relevance is per-paper, so this survives re-chunking.
+# source=title cases are an auto-generated FLOOR: finding a paper from its own
+# title is the easiest possible task. Add your own questions below them.
+{"question": "Shape-Aware Oriented Bounding Box (OBB) to Horizontal Bounding Box (HBB) Conversion", "expect_papers": ["2608.05858v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Machian MOND: a variable $a_0$ in galaxy clusters", "expect_papers": ["2608.04894v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Occluded Oculus: Operationalizing Stylistic Obscurement", "expect_papers": ["2607.24411v2"], "note": "source=title (auto-seeded floor)"}
+{"question": "YOLO-PVC: 2D-to-3D Consolidation of Slice-wise Detections for Volumetric Liver Tumor Localization in MRI", "expect_papers": ["2608.04642v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Solver-Aware Decompositions for Programming-by-Example: When Dividing Requires Knowing how to Conquer", "expect_papers": ["2608.03461v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Tight Worst-Case Bounds for the Smallest Eigenvalue of ReLU NTK Gram Matrices", "expect_papers": ["2608.03368v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Observatorio Lazaro: A self-populating database of anglicism usage in the Spanish press", "expect_papers": ["2608.00713v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Preverbal Uninflected and Underived Roots in Mapudungun. Wuno and Its Implications", "expect_papers": ["2608.04869v2"], "note": "source=title (auto-seeded floor)"}
+{"question": "Sharp Root Anti-Concentration via Projective Incidence and Ordered Root Laws", "expect_papers": ["2608.01670v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "TextCloak: Thwarting Unauthorized LLM Exploitation via RL-Driven Unlearnable Text", "expect_papers": ["2607.28862v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "AllSERP: Exhaustive Per-Element Enrichment of the Versatile AdSERP Dataset", "expect_papers": ["2605.04949v3"], "note": "source=title (auto-seeded floor)"}
+{"question": "StegoStylo: Squelching Stylometric Scrutiny through Steganographic Stitching", "expect_papers": ["2601.09056v5"], "note": "source=title (auto-seeded floor)"}
+{"question": "Galaxy Phase-Space and Field-Level Cosmology: The Strength of Semi-Analytic Models", "expect_papers": ["2512.10222v2"], "note": "source=title (auto-seeded floor)"}
+{"question": "Lighting the Way for BRIGHT: Reproducible Baselines with Anserini, Pyserini, and RankLLM", "expect_papers": ["2509.02558v2"], "note": "source=title (auto-seeded floor)"}
+{"question": "PD-GS: Phoneme-Driven 3DGS for Audio-Driven Talking Heads", "expect_papers": ["2608.05218v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "A Modular Part-of-Speech Tagger for Scottish Gaelic using spaCy", "expect_papers": ["2608.04808v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "DiffImaginE: Imagine to Verify Entity Types with Diffusio", "expect_papers": ["2608.03025v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "MechGeo: Autoformalizing and Proving Euclidean Geometry in Lean 4", "expect_papers": ["2608.02295v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "The Fourth Quadrant: A Stylized View of Benign Misfitting", "expect_papers": ["2608.01032v1"], "note": "source=title (auto-seeded floor)"}
+{"question": "Caliber: Cross-Architecture Extraction-Cost Control for Score-Returning APIs", "expect_papers": ["2608.01023v1"], "note": "source=title (auto-seeded floor)"}
+# source=paraphrase: the same papers asked about WITHOUT reusing title vocabulary.
+# These are the cases that actually discriminate between retrieval modes; the
+# title cases above cannot, because keyword search trivially wins on them.
+{"question": "how can rotated detection rectangles be turned into axis-aligned ones without losing shape information", "expect_papers": ["2608.05858v1"], "note": "source=paraphrase"}
+{"question": "does the modified gravity acceleration constant change between galaxy clusters", "expect_papers": ["2608.04894v1"], "note": "source=paraphrase"}
+{"question": "combining per-slice detections into a single volumetric tumour location in the liver", "expect_papers": ["2608.04642v1"], "note": "source=paraphrase"}
+{"question": "splitting a synthesis task into subproblems when the splitting depends on the solver itself", "expect_papers": ["2608.03461v1"], "note": "source=paraphrase"}
+{"question": "lower bound on the least eigenvalue of the neural tangent kernel matrix for rectified linear networks", "expect_papers": ["2608.03368v1"], "note": "source=paraphrase"}
+{"question": "tracking English loanwords appearing in Spanish-language newspapers automatically", "expect_papers": ["2608.00713v1"], "note": "source=paraphrase"}
+{"question": "making text unusable as training data for language models through reinforcement learning", "expect_papers": ["2607.28862v1"], "note": "source=paraphrase"}
+{"question": "concentration bounds for roots using incidence geometry", "expect_papers": ["2608.01670v1"], "note": "source=paraphrase"}

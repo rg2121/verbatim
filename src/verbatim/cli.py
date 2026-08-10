@@ -14,6 +14,7 @@ from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
 from verbatim.embedding import FastEmbedEmbedder, embed_pending
+from verbatim.evaluation import evaluate, load_cases, render_report
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.vectors import SqliteVecIndex
 from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
@@ -70,6 +71,13 @@ def run() -> None:
     stats_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     stats_parser.add_argument("--chunk-size", type=int, default=config.CHUNK_SIZE)
     stats_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
+
+    eval_parser = subparsers.add_parser("eval", help="Score every retrieval mode on an answer key")
+    eval_parser.add_argument("--cases", type=Path, default=config.EVAL_PATH)
+    eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
+    eval_parser.add_argument("--max-per-paper", type=int, help="Diversity cap for hybrid")
 
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -237,6 +245,17 @@ def run() -> None:
             for category, watermark, seen in synced:
                 mark = (watermark or "never")[:19]
                 print(f"    {category:<18} {seen:>7,} ingested   up to {mark}")
+
+    if args.command == "eval":
+        cases = load_cases(args.cases)
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        with CorpusStore(args.state) as corpus:
+            scores = evaluate(
+                corpus, embedder, cases,
+                limit=args.limit, max_per_paper=args.max_per_paper,
+            )
+        print(f"{len(cases)} cases from {args.cases}\n")
+        print(render_report(scores))
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)
