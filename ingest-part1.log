@@ -1,0 +1,13 @@
+22:46:45 === downloading ===
+23:16:01 Downloaded 395 new PDFs; corpus manifest has 5420 PDFs: data/pdfs/manifest.json
+23:54:04 Downloaded 380 new PDFs; corpus manifest has 5800 PDFs: data/pdfs/manifest.json
+00:23:54 Downloaded 378 new PDFs; corpus manifest has 6178 PDFs: data/pdfs/manifest.json
+00:54:11 Downloaded 374 new PDFs; corpus manifest has 6552 PDFs: data/pdfs/manifest.json
+01:21:41 Downloaded 373 new PDFs; corpus manifest has 6925 PDFs: data/pdfs/manifest.json
+01:54:31 Downloaded 369 new PDFs; corpus manifest has 7294 PDFs: data/pdfs/manifest.json
+02:12:27 Downloaded 224 new PDFs; corpus manifest has 7518 PDFs: data/pdfs/manifest.json
+02:12:32 Downloaded 0 new PDFs; corpus manifest has 7518 PDFs: data/pdfs/manifest.json
+02:12:32 === chunking (fresh process per batch, so memory returns to baseline) ===
+03:03:57   chunked 100/300 PDFs  chunked 200/300 PDFs  chunked 300/300 PDFsChunked 300 PDFs into 26093 new passages; corpus holds 488566. Exported to data/chunks.jsonl
+03:29:48   chunked 200/300 PDFs  chunked 300/300 PDFsChunked 300 PDFs into 27601 new passages; corpus holds 516167. Exported to data/chunks.jsonl
+03:50:20   chunked 100/300 PDFs  chunked 200/300 PDFs  chunked 300/300 PDFsChunked 300 PDFs into 23240 new passages; corpus holds 539407. Exported to data/chunks.jsonl
