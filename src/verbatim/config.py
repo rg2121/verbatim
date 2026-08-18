@@ -60,6 +60,10 @@ EMBEDDING_MODEL = _text("VERBATIM_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 SEARCH_LIMIT = _integer("VERBATIM_SEARCH_LIMIT", 10)
 ASK_PASSAGES = _integer("VERBATIM_ASK_PASSAGES", 8)
 ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)
+# Below this, the passages' own subject is far enough from the question to be
+# worth warning about. Chosen conservatively: it flags the clearest mismatches
+# without suppressing anything, because the ranges genuinely overlap.
+SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))
 
 # Answer generation. HOSTED_API_KEY is read by the hosted SDK itself and
 # is deliberately not mirrored here, so the secret is never held in a module.

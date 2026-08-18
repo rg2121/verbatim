@@ -421,6 +421,34 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+SUBJECT_SYSTEM = (
+    "Name the single subject these passages are about, in at most six words. "
+    "Describe only what they discuss. Do not mention the question."
+)
+
+
+def describe_subject(
+    completion: Completion, matches: list[ChunkMatch], *, sample: int = 5
+) -> str:
+    """Ask what the passages are about, without mentioning the question.
+
+    Asked whether passages are relevant, every model tested says yes: they were
+    retrieved because they matched, and the model reads that as evidence. Asked
+    only what they discuss, the same model answers accurately - it called the
+    passages behind "what is a tensor?" multidimensional arrays, and those
+    behind "the farthest star" neutron star properties.
+    """
+    passages = "\n\n".join(f"<passage>{m.chunk.text[:500]}</passage>" for m in matches[:sample])
+    reply = completion.judge(SUBJECT_SYSTEM, f"{passages}\n\nSubject:")
+    return " ".join((reply or "").split())[:120]
+
+
+def subject_similarity(embedder: Any, question: str, subject: str) -> float:
+    """Compare question and subject arithmetically, so no model judges the match."""
+    a, b = embedder.embed_query(question), embedder.embed_query(subject)
+    return sum(x * y for x, y in zip(a, b))
+
+
 def judge_relevance(
     completion: Completion, question: str, matches: list[ChunkMatch]
 ) -> bool | None:

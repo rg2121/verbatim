@@ -396,3 +396,53 @@ def test_the_line_protocol_still_reads_a_verdict_when_one_is_given() -> None:
 
     assert payload["relevant"] is False
     assert payload["citations"] == []
+
+
+class SubjectCompletion(ScriptedCompletion):
+    """A completion whose judge() returns a fixed subject description."""
+
+    def __init__(self, payload: dict, subject: str) -> None:
+        super().__init__(payload)
+        self.subject = subject
+        self.judged: str | None = None
+
+    def judge(self, system, user):
+        self.judged = user
+        return self.subject
+
+
+def test_the_subject_call_never_mentions_the_question(tmp_path: Path) -> None:
+    """Asked whether passages are relevant, every model tested said yes."""
+    from verbatim.answers import describe_subject
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Multidimensional arrays in deep learning."]}) as corpus:
+        matches = matches_for(corpus)
+        completion = SubjectCompletion({}, "Multidimensional arrays")
+
+        subject = describe_subject(completion, matches)
+
+    assert subject == "Multidimensional arrays"
+    assert "Multidimensional arrays in deep learning." in completion.judged
+    assert "?" not in completion.judged  # no question leaked into the prompt
+
+
+def test_subject_similarity_is_arithmetic_not_judgement() -> None:
+    from verbatim.answers import subject_similarity
+
+    class UnitEmbedder:
+        def embed_query(self, text):
+            return [1.0, 0.0] if "flux" in text else [0.0, 1.0]
+
+    assert subject_similarity(UnitEmbedder(), "flux", "flux physics") == 1.0
+    assert subject_similarity(UnitEmbedder(), "flux", "neutron stars") == 0.0
+
+
+def test_a_long_subject_is_truncated_and_whitespace_collapsed(tmp_path: Path) -> None:
+    from verbatim.answers import describe_subject
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Body text here."]}) as corpus:
+        completion = SubjectCompletion({}, "  a   very\nlong " + "x" * 300)
+        subject = describe_subject(completion, matches_for(corpus))
+
+    assert len(subject) <= 120
+    assert "\n" not in subject and "  " not in subject

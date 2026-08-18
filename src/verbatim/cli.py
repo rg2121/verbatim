@@ -9,6 +9,8 @@ import time
 from verbatim.agent import answer_question
 from verbatim.answers import (
     HostedCompletion,
+    describe_subject,
+    subject_similarity,
     OllamaCompletion,
     OllamaToolCaller,
     answer_from_matches,
@@ -167,6 +169,11 @@ def run() -> None:
         "--include-references",
         action="store_true",
         help="Also search bibliographies, which are excluded by default",
+    )
+    ask_parser.add_argument(
+        "--no-subject-check",
+        action="store_true",
+        help="Skip naming what the passages are about (saves one short model call)",
     )
     ask_parser.add_argument(
         "--max-per-paper",
@@ -378,9 +385,10 @@ def run() -> None:
                 for item in answer.rejected:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
                 return
+            embedder = FastEmbedEmbedder(model_name=args.model)
             matches = hybrid_search(
                 corpus,
-                FastEmbedEmbedder(model_name=args.model),
+                embedder,
                 args.question,
                 limit=args.passages,
                 arxiv_id=args.arxiv_id,
@@ -393,6 +401,12 @@ def run() -> None:
                 else HostedCompletion(args.llm or config.HOSTED_MODEL)
             )
             answer = answer_from_matches(corpus, completion, args.question, matches)
+            subject = None
+            if matches and not args.no_subject_check:
+                # Asked what the passages discuss rather than whether they are
+                # relevant: every model tested says yes to the latter.
+                subject = describe_subject(completion, matches)
+                closeness = subject_similarity(embedder, args.question, subject)
         print(answer.text)
         if answer.citations:
             print("\nReferences")
@@ -402,6 +416,11 @@ def run() -> None:
             # reader can weigh it; the tool should not silently drop answers.
             if answer.supporting_papers == 1:
                 print("\n  (supported by a single paper - treat with more caution)")
+        if subject is not None and closeness < config.SUBJECT_WARN_BELOW:
+            # A warning, never a suppression: the ranges for answerable and
+            # unanswerable questions overlap, so this cannot decide, only show.
+            print(f"\n  ! these passages are about: {subject}")
+            print(f"    which may not be what you asked ({closeness:.2f} similarity)")
         for item in answer.rejected:
             # Loud on purpose: an unverifiable citation is the failure this
             # tool exists to catch.
