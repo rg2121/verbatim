@@ -131,7 +131,23 @@ References
 
 Every citation is checked in code before it is printed: the quoted words must
 appear in the passage the claim names, or the citation is reported as rejected
-rather than rendered. Citations always pin the paper *version*. At most three
+rather than rendered.
+
+That proves a quote is real. It does not prove the source is *about* your
+question, and search always returns its closest passages even when the corpus
+covers nothing on the subject. So `ask` also names what the passages actually
+discuss, and says so when that is far from what you asked:
+
+```
+The name of the farthest star is not mentioned in the provided passages.
+
+  ! these passages are about: Neutron star properties and distribution
+    which may not be what you asked (0.53 similarity)
+```
+
+It warns rather than refuses, because the measurement does not support
+refusing — see "What was tried and rejected" below. `--no-subject-check` skips
+the extra call. Citations always pin the paper *version*. At most three
 passages come from any one paper by default (`--max-per-paper`), so a
 corpus-wide question is not answered from a single source.
 
@@ -166,6 +182,32 @@ format and parses that.
 For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and
 bypass the catalogue.
+
+## What was tried and rejected
+
+Kept here because the negative results are the useful part.
+
+**Asking a model whether passages are relevant does not work.** Four variants
+were measured against questions the corpus cannot answer. Every one failed the
+same way: the passages were retrieved *because* they matched, and the model
+reads that as evidence they are relevant.
+
+| approach | declines correctly | keeps real answers |
+|---|---|---|
+| no check at all | 2/6 | 14/14 |
+| verdict inside the answering call | 1/6 | 13/14 |
+| separate judging call, 4B model | 2/6 | 14/14 |
+| separate judging call, 13.8GB model | 0/6 | 14/14 |
+| require two supporting papers | 4/6 | 8/14 |
+
+The bigger model was worse, so this is not a matter of model size. What does
+work is not asking the question: ask only what the passages discuss, and compare
+that to the question arithmetically.
+
+**Cross-encoder reranking makes retrieval worse here**, on all three local
+models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the right
+passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
+demote. Available behind `--rerank` for when that changes.
 
 ## Principles
 
