@@ -490,9 +490,14 @@ def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
         f"{rank}. arXiv:{chunk.arxiv_id}  p.{chunk.page_number}  "
         f"[chars {chunk.char_start}-{chunk.char_end}]  score {match.score:.2f}"
     )
-    licence = chunk.license_url or "no licence reported"
+    # The deepest heading, not the whole ancestry: the outermost element is the
+    # paper title, which every passage shares and so tells the reader nothing.
+    section = chunk.section_path.split(" > ")[-1] if chunk.section_path else ""
+    where = f"   {chunk.source_url}  ({chunk.license_url or 'no licence reported'})"
+    if section:
+        where += f"\n   section: {section}"
     body = chunk.text if full else match.snippet
-    return f"{header}\n   {chunk.source_url}  ({licence})\n   {body}\n"
+    return f"{header}\n{where}\n   {body}\n"
 
 
 def _merge_downloads(

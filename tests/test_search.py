@@ -148,3 +148,26 @@ def test_format_match_renders_a_traceable_citation_header() -> None:
     assert "no licence reported" in rendered
     assert "…compresses the [flux] into…" in rendered
     assert "Lorentz contraction compresses" in full
+
+
+def test_a_result_shows_the_section_it_came_from() -> None:
+    """Which part of a paper a passage came from is context the reader needs."""
+    from verbatim.chunking import Chunk
+    from verbatim.cli import format_match
+    from verbatim.corpus import ChunkMatch
+
+    def rendered(section_path: str) -> str:
+        chunk = Chunk(
+            chunk_id="abc", arxiv_id="2608.05440v1",
+            source_url="https://arxiv.org/abs/2608.05440v1", license_url=None,
+            pdf_sha256="f" * 64, page_number=6, chunk_index=0, char_start=0,
+            char_end=10, text="body text", chunker_version="6:1200:200",
+            section_path=section_path,
+        )
+        return format_match(1, ChunkMatch(chunk=chunk, score=1.0, snippet="body text"))
+
+    deep = rendered("Paper Title > 3 Results > 3.1 Ablations")
+    assert "section: 3.1 Ablations" in deep
+    # The title is shared by every passage in a paper, so it is not shown.
+    assert "Paper Title" not in deep
+    assert "section:" not in rendered("")
