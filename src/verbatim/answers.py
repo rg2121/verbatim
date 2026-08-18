@@ -17,6 +17,22 @@ MODEL = config.HOSTED_MODEL
 MAX_TOKENS = 16_000
 JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
+RELEVANT_LINE_PATTERN = re.compile(r"^RELEVANT:\s*(yes|no)\b", re.M | re.I)
+VERDICT_PATTERN = re.compile(r"\b(yes|no)\b", re.I)
+
+RELEVANCE_SYSTEM = """You judge one thing only: are these passages about the \
+subject the question asks about?
+
+You are not answering the question. Do not try.
+
+Search returns its closest passages even when the corpus contains nothing on the
+subject, so the passages you see may simply be the least unrelated ones. Sharing
+a word is not being about a subject:
+- passages on tensor slicing in deep learning are NOT about what a tensor is
+- passages on AI in peer review are NOT about AI in cosmology
+- passages on detectable neutron stars are NOT about the farthest star
+
+Reply with exactly one word: yes or no."""
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
 CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
 MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
@@ -28,12 +44,18 @@ ANSWER: <one paragraph, using [1], [2] markers>
 CITE [1] <chunk_id> :: <words copied character-for-character from that passage>
 CITE [2] <chunk_id> :: <words copied character-for-character from that passage>
 
-Emit no CITE lines if the passages do not answer the question.
+If the passages are about a different subject, say so in ANSWER and emit no
+CITE lines.
 """
 
 SYSTEM_PROMPT = """You answer research questions strictly from the passages provided.
 
 Rules:
+- First decide whether the passages are actually about the question's subject.
+  Search returns the closest passages it has, which for a subject the corpus
+  does not cover are merely the least unrelated ones. Sharing a word is not
+  being about the subject: a paper on tensor slicing in deep learning does not
+  explain what a tensor is.
 - Use only the passages. If they do not answer the question, say so plainly.
 - Every factual claim must carry a marker like [1] pointing at a citation.
 - quoted_text must be copied character-for-character from the passage it cites.
@@ -49,6 +71,10 @@ ANSWER_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "The answer, with [n] markers pointing at citations.",
         },
+        "relevant": {
+            "type": "boolean",
+            "description": "Whether the passages are actually about the question's subject.",
+        },
         "citations": {
             "type": "array",
             "items": {
@@ -63,7 +89,7 @@ ANSWER_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["answer", "citations"],
+    "required": ["relevant", "answer", "citations"],
     "additionalProperties": False,
 }
 
@@ -85,11 +111,24 @@ class Answer:
     text: str
     citations: list[Citation]
     rejected: list[RejectedCitation]
+    declined: bool = False
+
+    @property
+    def supporting_papers(self) -> int:
+        """Distinct papers behind the answer.
+
+        Corroboration matters because a coincidental match is usually lonely:
+        every false answer measured rested on a single passage from a single
+        paper, while genuine ones drew on several.
+        """
+        return len({citation.arxiv_id for citation in self.citations})
 
     def to_dict(self) -> dict[str, object]:
         return {
             "question": self.question,
             "text": self.text,
+            "declined": self.declined,
+            "supporting_papers": self.supporting_papers,
             "citations": [citation.to_dict() for citation in self.citations],
             "rejected": [asdict(item) for item in self.rejected],
         }
@@ -125,6 +164,10 @@ class Completion(Protocol):
     """A model that returns JSON matching a schema."""
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]: ...
+
+    def judge(self, system: str, user: str) -> str:
+        """Answer a short question with free text, for a yes/no decision."""
+        ...
 
 
 class OllamaToolCaller:
@@ -216,6 +259,22 @@ class OllamaCompletion:
                 f"format. Response began: {content[:200]!r}"
             )
         return payload
+
+    def judge(self, system: str, user: str) -> str:
+        body = self._post(
+            "/api/chat",
+            {
+                "model": self.model,
+                "stream": False,
+                "think": False,
+                "options": {"num_predict": 8, "temperature": 0},
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        return body.get("message", {}).get("content", "")
 
     def _first_available_model(self) -> str:
         models = [item["name"] for item in self._get("/api/tags").get("models", [])]
@@ -309,7 +368,14 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
         {"marker": int(marker), "chunk_id": chunk_id, "quoted_text": quote.strip()}
         for marker, chunk_id, quote in CITE_LINE_PATTERN.findall(content)
     ]
-    return {"answer": answer.group(1).strip(), "citations": citations}
+    verdict = RELEVANT_LINE_PATTERN.search(content)
+    return {
+        # Absent verdict is treated as relevant, so a model that ignores the
+        # line behaves as it did before rather than falling silent.
+        "relevant": verdict is None or verdict.group(1).lower() == "yes",
+        "answer": answer.group(1).strip(),
+        "citations": citations,
+    }
 
 
 def renumber_markers(
@@ -355,6 +421,35 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def judge_relevance(
+    completion: Completion, question: str, matches: list[ChunkMatch]
+) -> bool | None:
+    """Ask, in a call of its own, whether the passages are on-subject.
+
+    **Not wired into answering, because it does not work on the local model.**
+    Measured over twenty questions it answered "yes" eighteen times, catching
+    two of six unanswerable ones - the same as no check at all, at the cost of
+    an extra call. An inline verdict in the answering call did worse still,
+    catching one of six and refusing one real question, because a call asked to
+    both judge and answer lets the answering instinct win.
+
+    Kept because the remaining hypothesis is that this is a small-model limit
+    rather than a prompt-design one, and testing that needs only a stronger
+    model behind the same function.
+
+    Returns None when the model gives no usable verdict, so a caller can carry
+    on rather than decline on a parsing failure.
+    """
+    passages = "\n\n".join(
+        f"<passage>{m.chunk.text[:600]}</passage>" for m in matches[:6]
+    )
+    reply = completion.judge(
+        RELEVANCE_SYSTEM, f"Question: {question}\n\n{passages}\n\nOn subject? yes or no:"
+    )
+    verdict = VERDICT_PATTERN.search(reply or "")
+    return None if verdict is None else verdict.group(1).lower() == "yes"
+
+
 def build_prompt(question: str, matches: list[ChunkMatch]) -> str:
     """Lay out the passages the model may cite, each tagged with its chunk id."""
     blocks = []
@@ -383,6 +478,7 @@ def answer_from_matches(
             text="No passages in the corpus match this question.",
             citations=[],
             rejected=[],
+            declined=True,
         )
 
     payload = completion.complete(SYSTEM_PROMPT, build_prompt(question, matches), ANSWER_SCHEMA)

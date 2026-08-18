@@ -229,6 +229,7 @@ def test_line_protocol_parses_into_the_answer_payload() -> None:
     )
 
     assert payload == {
+        "relevant": True,
         "answer": "Flux moves [1] and charge moves [2].",
         "citations": [
             {"marker": 1, "chunk_id": "aaa111", "quoted_text": "flux can move"},
@@ -320,3 +321,78 @@ def test_a_marker_for_a_rejected_citation_is_labelled_unverified(tmp_path: Path)
     assert len(answer.rejected) == 1
     assert answer.text == "Flux threads [unverified] the ring."
     assert chunk_id not in answer.text
+
+
+def test_an_inline_relevance_verdict_does_not_suppress_the_answer(tmp_path: Path) -> None:
+    """Measured worse than no check: it declined real questions. Verdict is advisory."""
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        completion = ScriptedCompletion(
+            {
+                "relevant": True,
+                "answer": "Flux threads it [1].",
+                "citations": [
+                    {"marker": 1, "chunk_id": matches[0].chunk.chunk_id, "quoted_text": "flux threads"}
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert not answer.declined
+    assert len(answer.citations) == 1
+
+
+def test_a_missing_verdict_is_treated_as_relevant(tmp_path: Path) -> None:
+    """A model that ignores the field must behave as it did before, not fall silent."""
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        matches = matches_for(corpus)
+        completion = ScriptedCompletion(
+            {
+                "answer": "Flux threads it [1].",
+                "citations": [
+                    {"marker": 1, "chunk_id": matches[0].chunk.chunk_id, "quoted_text": "flux threads"}
+                ],
+            }
+        )
+        answer = answer_from_matches(corpus, completion, "?", matches)
+
+    assert not answer.declined
+    assert len(answer.citations) == 1
+
+
+def test_supporting_papers_counts_distinct_sources(tmp_path: Path) -> None:
+    """A lonely citation is the signature of a coincidental match."""
+    with chunked_corpus(
+        tmp_path,
+        {"2608.11111v1": ["Magnetic flux threads.", "Flux moves onward."], "2608.22222v1": ["Flux again here."]},
+    ) as corpus:
+        matches = matches_for(corpus)
+        by_paper = {}
+        for m in matches:
+            by_paper.setdefault(m.chunk.arxiv_id, []).append(m.chunk.chunk_id)
+        one_paper = ScriptedCompletion({
+            "relevant": True, "answer": "a [1] b [2].",
+            "citations": [
+                {"marker": 1, "chunk_id": by_paper["2608.11111v1"][0], "quoted_text": "Magnetic flux"},
+                {"marker": 2, "chunk_id": by_paper["2608.11111v1"][1], "quoted_text": "Flux moves"},
+            ]})
+        two_papers = ScriptedCompletion({
+            "relevant": True, "answer": "a [1] b [2].",
+            "citations": [
+                {"marker": 1, "chunk_id": by_paper["2608.11111v1"][0], "quoted_text": "Magnetic flux"},
+                {"marker": 2, "chunk_id": by_paper["2608.22222v1"][0], "quoted_text": "Flux again"},
+            ]})
+        lonely = answer_from_matches(corpus, one_paper, "?", matches)
+        corroborated = answer_from_matches(corpus, two_papers, "?", matches)
+
+    assert lonely.supporting_papers == 1
+    assert corroborated.supporting_papers == 2
+
+
+def test_the_line_protocol_still_reads_a_verdict_when_one_is_given() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol("RELEVANT: no\nANSWER: The corpus is about something else.")
+
+    assert payload["relevant"] is False
+    assert payload["citations"] == []
