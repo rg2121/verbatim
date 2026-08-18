@@ -117,9 +117,11 @@ class Answer:
     def supporting_papers(self) -> int:
         """Distinct papers behind the answer.
 
-        Corroboration matters because a coincidental match is usually lonely:
-        every false answer measured rested on a single passage from a single
-        paper, while genuine ones drew on several.
+        Reported in to_dict for callers that want it, but deliberately *not*
+        warned on: measured, a lone-paper warning fired on 5 of 14 good answers
+        while catching only 2 of 6 bad ones, and caught nothing the subject
+        check did not already catch. Corroboration reads like a quality signal
+        and is not one here.
         """
         return len({citation.arxiv_id for citation in self.citations})
 

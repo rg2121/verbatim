@@ -425,11 +425,6 @@ def run() -> None:
         if answer.citations:
             print("\nReferences")
             print(render_bibliography(answer.citations))
-            # Shown rather than enforced: measured, requiring two papers caught
-            # more unanswerable questions but refused as many real ones. The
-            # reader can weigh it; the tool should not silently drop answers.
-            if answer.supporting_papers == 1:
-                print("\n  (supported by a single paper - treat with more caution)")
         if subject is not None and closeness < config.SUBJECT_WARN_BELOW:
             # A warning, never a suppression: the ranges for answerable and
             # unanswerable questions overlap, so this cannot decide, only show.

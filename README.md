@@ -200,6 +200,10 @@ reads that as evidence they are relevant.
 | separate judging call, 13.8GB model | 0/6 | 14/14 |
 | require two supporting papers | 4/6 | 8/14 |
 
+Corroboration also fails as a *warning*, not just as a gate: it fires on 5 of 14
+good answers while catching 2 of 6 bad ones, and catches nothing the subject
+check misses. Combining the two is strictly worse than the subject check alone.
+
 The bigger model was worse, so this is not a matter of model size. What does
 work is not asking the question: ask only what the passages discuss, and compare
 that to the question arithmetically.
