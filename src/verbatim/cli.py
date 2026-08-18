@@ -23,6 +23,7 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
 from verbatim.embedding import FastEmbedEmbedder, embed_pending
 from verbatim.evaluation import evaluate, load_cases, render_report
+from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.vectors import SqliteVecIndex
 from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
@@ -91,6 +92,10 @@ def run() -> None:
     eval_parser = subparsers.add_parser("eval", help="Score every retrieval mode on an answer key")
     eval_parser.add_argument("--cases", type=Path, default=config.EVAL_PATH)
     eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    eval_parser.add_argument(
+        "--rerank", action="store_true",
+        help="Re-score with a cross-encoder. Measured worse: mrr 0.940 -> 0.752",
+    )
     eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
     eval_parser.add_argument("--max-per-paper", type=int, help="Diversity cap for hybrid")
@@ -120,6 +125,10 @@ def run() -> None:
     search_parser = subparsers.add_parser("search", help="Keyword-search the chunked corpus")
     search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
     search_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    search_parser.add_argument(
+        "--rerank", action="store_true",
+        help="Re-score with a cross-encoder. Measured worse: mrr 0.940 -> 0.752",
+    )
     search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
     search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
@@ -285,6 +294,7 @@ def run() -> None:
             scores = evaluate(
                 corpus, embedder, cases,
                 limit=args.limit, max_per_paper=args.max_per_paper,
+                reranker=CrossEncoderReranker() if args.rerank else None,
             )
         print(f"{len(cases)} cases from {args.cases}\n")
         print(render_report(scores))
@@ -360,6 +370,10 @@ def run() -> None:
                     arxiv_id=args.arxiv_id,
                     include_references=args.include_references,
                 )
+        if args.rerank and matches:
+            matches = rerank(
+                CrossEncoderReranker(), args.query, matches, limit=args.limit
+            )
         if not matches:
             print(f"No passages matched {args.query!r}.")
         for rank, match in enumerate(matches, start=1):

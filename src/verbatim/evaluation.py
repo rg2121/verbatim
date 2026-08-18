@@ -145,15 +145,26 @@ def evaluate(
     *,
     limit: int = 10,
     max_per_paper: int | None = None,
+    reranker: object | None = None,
 ) -> list[ModeScore]:
-    """Score every retrieval mode on the same cases, so they are comparable."""
+    """Score every retrieval mode on the same cases, so they are comparable.
+
+    With a reranker, hybrid retrieves a wider shortlist and the reranker trims
+    it, which is the only arrangement in which reranking could help.
+    """
+    def hybrid(query: str) -> Sequence[ChunkMatch]:
+        if reranker is None:
+            return hybrid_search(corpus, embedder, query, limit=limit, max_per_paper=max_per_paper)
+        from verbatim.reranking import rerank as _rerank
+
+        wide = hybrid_search(corpus, embedder, query, limit=limit * 3, max_per_paper=max_per_paper)
+        return _rerank(reranker, query, wide, limit=limit)
+
     modes: dict[str, Callable[[str], Sequence[ChunkMatch]]] = {
         "keyword-all": lambda q: corpus.search_chunks(q, limit=limit, match="all"),
         "keyword-any": lambda q: corpus.search_chunks(q, limit=limit, match="any"),
         "vector": lambda q: vector_search(corpus, embedder, q, limit=limit),
-        "hybrid": lambda q: hybrid_search(
-            corpus, embedder, q, limit=limit, max_per_paper=max_per_paper
-        ),
+        "hybrid": hybrid,
     }
     return [score_mode(name, cases, retrieve) for name, retrieve in modes.items()]
 
