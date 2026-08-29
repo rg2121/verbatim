@@ -36,6 +36,8 @@ class Citation:
     license_url: str | None
     retrieved_at: str
     source_kind: str = "pdf"
+    # The author's own heading for this passage, e.g. "III The SuSAM* approach".
+    section_path: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -57,6 +59,7 @@ def citation_from_chunk(chunk: Chunk, paper: Paper, quoted_text: str) -> Citatio
         chunk_id=chunk.chunk_id,
         source_sha256=chunk.source_sha256,
         source_kind=chunk.source_kind,
+        section_path=chunk.section_path,
         source_url=chunk.source_url,
         license_url=chunk.license_url,
         retrieved_at=datetime.now(UTC).isoformat(),
@@ -91,9 +94,14 @@ def locator(citation: Citation) -> str:
     passage is located by section instead; printing "p. 3" for it would be an
     invented page number.
     """
-    if citation.source_kind == "html":
-        return f"section {citation.page_number}"
-    return f"p. {citation.page_number}"
+    if citation.source_kind != "html":
+        return f"p. {citation.page_number}"
+    # page_number is our own counter for HTML. Papers number their own
+    # sections, often as "III", so quoting the counter would send a reader to
+    # a section the paper does not have. The author's heading is what they can
+    # actually look for; the counter is only a fallback.
+    heading = citation.section_path.split(" > ")[-1].strip()
+    return f"section {heading}" if heading else f"section {citation.page_number}"
 
 
 def render_bibliography(citations: list[Citation]) -> str:

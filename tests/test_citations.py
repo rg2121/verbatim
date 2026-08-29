@@ -85,3 +85,45 @@ def test_citation_can_be_built_from_a_stored_chunk(tmp_path: Path) -> None:
     assert isinstance(citation, Citation)
     assert citation.chunk_id == stored.chunk_id
     assert citation.quoted_text in stored.text
+
+
+def _citation(**overrides):
+    """A Citation with only the fields a locator test cares about set."""
+    from verbatim.citations import Citation
+
+    fields = dict(
+        arxiv_id="2608.05440v1", base_arxiv_id="2608.05440", version=1,
+        title="A Paper", authors=["Ada Lovelace"], page_number=1,
+        char_start=0, char_end=10, quoted_text="some words", chunk_id="abc",
+        source_sha256="f" * 64, source_url="https://arxiv.org/abs/2608.05440v1",
+        license_url=None, retrieved_at="2026-08-29T00:00:00+00:00",
+    )
+    fields.update(overrides)
+    return Citation(**fields)
+
+def test_an_html_citation_names_the_section_the_paper_gave_it() -> None:
+    """Our ordinal is not the paper's numbering, and papers use Roman numerals.
+
+    Citing "section 4" of a paper whose sections run I, II, III sends the
+    reader looking for something that is not there.
+    """
+    from verbatim.citations import locator
+
+    cited = _citation(
+        source_kind="html", page_number=4,
+        section_path="Global superscaling analysis > III The SuSAM* approach",
+    )
+
+    assert locator(cited) == "section III The SuSAM* approach"
+
+
+def test_an_html_citation_falls_back_to_the_ordinal_without_a_heading() -> None:
+    from verbatim.citations import locator
+
+    assert locator(_citation(source_kind="html", page_number=4)) == "section 4"
+
+
+def test_a_pdf_citation_still_cites_a_page() -> None:
+    from verbatim.citations import locator
+
+    assert locator(_citation(page_number=7, section_path="2 Method")) == "p. 7"
