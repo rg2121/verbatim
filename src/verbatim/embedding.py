@@ -110,17 +110,22 @@ def embed_pending(
     *,
     batch_size: int = 64,
     limit: int | None = None,
+    chunker_version: str | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
     """Embed every chunk that has no vector from this model yet.
 
     Returns the number embedded, so a caller can tell a fresh run from a no-op.
+    `chunker_version` skips passages an older chunker produced, which are due
+    to be replaced and whose vectors would be discarded with them.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
     model = embedder.model
     corpus.register_embedding_model(model)
-    pending = corpus.pending_embeddings(model.model_id, limit=limit)
+    pending = corpus.pending_embeddings(
+        model.model_id, limit=limit, chunker_version=chunker_version
+    )
     with_context = getattr(embedder, "with_context", False)
     titles = _titles_for(corpus, pending) if with_context else {}
     for start in range(0, len(pending), batch_size):

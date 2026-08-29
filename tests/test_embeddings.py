@@ -255,3 +255,28 @@ def test_context_embedding_uses_the_paper_title_from_the_corpus(tmp_path: Path) 
 
     assert embedder.seen[0].startswith("Paper 2608.11111v1")
     assert "Body text about flux." in embedder.seen[0]
+
+
+def test_a_chunk_from_an_older_chunker_can_be_left_unembedded(tmp_path: Path) -> None:
+    """Its paper will be re-chunked and the vector discarded with the chunk.
+
+    Mid-migration on the real corpus this was 490,620 of 729,347 chunks, which
+    is around eleven hours of embedding guaranteed to be thrown away.
+    """
+    from verbatim.embedding import embed_pending
+
+    with chunked_corpus(tmp_path, ["alpha", "beta"]) as corpus:
+        stored = corpus.all_chunks()
+        current = stored[0].chunker_version
+        corpus.connection.execute(
+            "UPDATE chunks SET chunker_version = '1:1200:200' WHERE chunk_id = ?",
+            (stored[0].chunk_id,),
+        )
+        corpus.connection.commit()
+        embedder = StubEmbedder()
+
+        embedded = embed_pending(corpus, embedder, chunker_version=current)
+        everything = embed_pending(corpus, StubEmbedder())
+
+    assert embedded == 1  # only the passage the current chunker produces
+    assert everything == 1  # the stale one, when not filtered

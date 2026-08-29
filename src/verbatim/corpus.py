@@ -763,8 +763,26 @@ class CorpusStore:
                 (model.model_id, model.dimensions, int(model.normalized), model.revision, _timestamp()),
             )
 
-    def pending_embeddings(self, model_id: str, *, limit: int | None = None) -> list[Chunk]:
-        """Return chunks that have no vector from this model yet."""
+    def pending_embeddings(
+        self,
+        model_id: str,
+        *,
+        limit: int | None = None,
+        chunker_version: str | None = None,
+    ) -> list[Chunk]:
+        """Return chunks that have no vector from this model yet.
+
+        `chunker_version` restricts the work to passages the current chunker
+        actually produces. A chunk left over from an older chunker is going to
+        be deleted the next time its paper is chunked, and the vector made from
+        it deleted with it: embedding one is work that is guaranteed to be
+        thrown away. Measured mid-migration here, 490,620 of 729,347 chunks
+        were in that state, which is around eleven hours of embedding.
+
+        Off by default, because those chunks are still the only ones a paper
+        has until it is re-chunked, and a corpus that is not mid-migration
+        should embed everything it holds.
+        """
         rows = self.connection.execute(
             """
             SELECT c.* FROM chunks AS c
@@ -772,10 +790,11 @@ class CorpusStore:
                 SELECT 1 FROM embeddings AS e
                 WHERE e.chunk_id = c.chunk_id AND e.model_id = ?
             )
+              AND (? IS NULL OR c.chunker_version = ?)
             ORDER BY c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
             LIMIT ?
             """,
-            (model_id, -1 if limit is None else limit),
+            (model_id, chunker_version, chunker_version, -1 if limit is None else limit),
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
 

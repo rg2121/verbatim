@@ -225,6 +225,11 @@ def run() -> None:
              "Stored under a separate model id, so both can be measured.",
     )
     embed_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    embed_parser.add_argument(
+        "--only-current", action="store_true",
+        help="Skip passages an older chunker produced, which a later chunk "
+             "run will replace and whose vectors would be discarded with them",
+    )
     embed_parser.add_argument("--batch-size", type=int, default=64)
     embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
 
@@ -598,6 +603,10 @@ def run() -> None:
                 embedder,
                 batch_size=args.batch_size,
                 limit=args.limit,
+                chunker_version=(
+                    chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+                    if args.only_current else None
+                ),
                 on_progress=lambda done, total: print(
                     f"  embedded {done}/{total}", end="\r", flush=True
                 ),
