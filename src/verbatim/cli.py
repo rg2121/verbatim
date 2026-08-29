@@ -17,7 +17,7 @@ from verbatim.answers import (
 )
 from verbatim.arxiv import fetch_license, fetch_metadata, license_class
 from verbatim.sync import format_sync_report, sync_category
-from verbatim.citations import render_bibliography
+from verbatim.citations import render_bibliography, render_locator
 from verbatim.chunking import (
     chunker_fingerprint,
     extract_pdf_chunks,
@@ -567,15 +567,18 @@ def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
     resolves to exactly the version the text came from.
     """
     chunk = match.chunk
+    where_in_paper = render_locator(
+        chunk.source_kind, chunk.page_number, chunk.section_path
+    )
     header = (
-        f"{rank}. arXiv:{chunk.arxiv_id}  p.{chunk.page_number}  "
+        f"{rank}. arXiv:{chunk.arxiv_id}  {where_in_paper}  "
         f"[chars {chunk.char_start}-{chunk.char_end}]  score {match.score:.2f}"
     )
     # The deepest heading, not the whole ancestry: the outermost element is the
     # paper title, which every passage shares and so tells the reader nothing.
     section = chunk.section_path.split(" > ")[-1] if chunk.section_path else ""
     where = f"   {chunk.source_url}  ({chunk.license_url or 'no licence reported'})"
-    if section:
+    if section and section not in where_in_paper:
         where += f"\n   section: {section}"
     body = chunk.text if full else match.snippet
     return f"{header}\n{where}\n   {body}\n"

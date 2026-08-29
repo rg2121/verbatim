@@ -88,20 +88,26 @@ def render_citation(marker: int, citation: Citation) -> str:
 
 
 def locator(citation: Citation) -> str:
-    """Where in the paper this is, in the terms its source actually has.
+    """Where in the paper this is, in the terms its source actually has."""
+    return render_locator(
+        citation.source_kind, citation.page_number, citation.section_path
+    )
+
+
+def render_locator(source_kind: str, page_number: int, section_path: str) -> str:
+    """Where a passage is, in the terms its source actually has.
 
     A PDF has pages. arXiv's HTML rendering does not, so an HTML-sourced
     passage is located by section instead; printing "p. 3" for it would be an
-    invented page number.
+    invented page number. Nor is our own section counter printed: papers number
+    their own sections, often as "III", so the counter would send a reader to a
+    section the paper does not have. The author's heading is what they can
+    look for, and the counter is only a fallback.
     """
-    if citation.source_kind != "html":
-        return f"p. {citation.page_number}"
-    # page_number is our own counter for HTML. Papers number their own
-    # sections, often as "III", so quoting the counter would send a reader to
-    # a section the paper does not have. The author's heading is what they can
-    # actually look for; the counter is only a fallback.
-    heading = citation.section_path.split(" > ")[-1].strip()
-    return f"section {heading}" if heading else f"section {citation.page_number}"
+    if source_kind != "html":
+        return f"p. {page_number}"
+    heading = section_path.split(" > ")[-1].strip()
+    return f"section {heading}" if heading else f"section {page_number}"
 
 
 def render_bibliography(citations: list[Citation]) -> str:

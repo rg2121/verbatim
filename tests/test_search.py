@@ -142,7 +142,7 @@ def test_format_match_renders_a_traceable_citation_header() -> None:
     full = format_match(1, match, full=True)
 
     assert "arXiv:2608.05440v1" in rendered
-    assert "p.16" in rendered
+    assert "p. 16" in rendered
     assert "chars 40-90" in rendered
     assert "https://arxiv.org/abs/2608.05440v1" in rendered
     assert "no licence reported" in rendered
@@ -171,3 +171,25 @@ def test_a_result_shows_the_section_it_came_from() -> None:
     # The title is shared by every passage in a paper, so it is not shown.
     assert "Paper Title" not in deep
     assert "section:" not in rendered("")
+
+
+def test_a_result_from_html_is_not_given_a_page_number() -> None:
+    """page_number is a section ordinal for HTML; printing "p.4" invents a page."""
+    from verbatim.chunking import Chunk
+    from verbatim.cli import format_match
+    from verbatim.corpus import ChunkMatch
+
+    chunk = Chunk(
+        chunk_id="abc", arxiv_id="2410.16588v3",
+        source_url="https://arxiv.org/abs/2410.16588v3", license_url=None,
+        source_sha256="f" * 64, page_number=4, chunk_index=0, char_start=0,
+        char_end=9, text="body text", chunker_version="7:1200:200",
+        section_path="The power spectrum > II Formalism", source_kind="html",
+    )
+
+    rendered = format_match(1, ChunkMatch(chunk=chunk, score=1.0, snippet="body text"))
+
+    assert "p. 4" not in rendered and "p.4" not in rendered
+    assert "section II Formalism" in rendered
+    # The header already says where it is, so it is not repeated below.
+    assert rendered.count("II Formalism") == 1
