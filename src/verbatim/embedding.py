@@ -8,6 +8,7 @@ from typing import Protocol
 
 from verbatim import config
 from verbatim.arxiv import Paper
+from verbatim.chunking import Chunk
 from verbatim.corpus import CorpusStore, EmbeddingModel
 
 DEFAULT_MODEL_NAME = config.EMBEDDING_MODEL
@@ -35,6 +36,13 @@ class FastEmbedEmbedder:
     """
 
     model_name: str = DEFAULT_MODEL_NAME
+    # Whether passages were embedded with their title and section in front.
+    # Part of the model's identity, not a switch beside it: vectors made with
+    # and without context are not interchangeable, and `pending_embeddings`
+    # keys on the model id, so a shared id would let a flipped flag leave the
+    # corpus holding a silent mixture of the two. Separate ids also mean the
+    # two can be measured side by side without either being thrown away.
+    with_context: bool = config.EMBED_WITH_CONTEXT
     _encoder: object | None = None
     _model: EmbeddingModel | None = None
 
@@ -71,7 +79,7 @@ class FastEmbedEmbedder:
             if item["model"] == self.model_name
         )
         self._model = EmbeddingModel(
-            model_id=self.model_name,
+            model_id=f"{self.model_name}+context" if self.with_context else self.model_name,
             dimensions=int(description["dim"]),
             normalized=True,
             revision=str(description.get("sources", {}).get("hf", self.model_name)),
@@ -95,9 +103,18 @@ def embed_pending(
     model = embedder.model
     corpus.register_embedding_model(model)
     pending = corpus.pending_embeddings(model.model_id, limit=limit)
+    with_context = getattr(embedder, "with_context", False)
+    titles = _titles_for(corpus, pending) if with_context else {}
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        vectors = embedder.embed_passages([chunk.text for chunk in batch])
+        vectors = embedder.embed_passages(
+            [
+                passage_text(chunk, titles.get(chunk.arxiv_id, ""))
+                if with_context
+                else chunk.text
+                for chunk in batch
+            ]
+        )
         if len(vectors) != len(batch):
             raise RuntimeError(
                 f"Embedder returned {len(vectors)} vectors for {len(batch)} chunks"
@@ -108,6 +125,26 @@ def embed_pending(
         if on_progress is not None:
             on_progress(start + len(batch), len(pending))
     return len(pending)
+
+
+def passage_text(chunk: Chunk, title: str = "") -> str:
+    """The text embedded for one passage, with the context it sits in.
+
+    A passage is embedded alone by default, which loses what it is part of: a
+    paragraph reading "we improve on this by 4 points" carries no sign of the
+    subject, and a section heading and paper title are exactly the missing
+    words. This is the cheap form of contextual retrieval - the published
+    version writes a context sentence per chunk with a model, which is one
+    inference call per chunk and not affordable over a corpus this size, while
+    the title and section path are already stored and cost nothing.
+
+    Off by default until measured on this corpus, because prefixing every
+    passage with the same title also makes a paper's passages resemble each
+    other, which could cost precision within a paper.
+    """
+    heading = chunk.section_path.split(" > ")[-1].strip()
+    context = " ".join(part for part in (title.strip(), heading) if part)
+    return f"{context}\n\n{chunk.text}" if context else chunk.text
 
 
 def paper_subject_text(paper: Paper) -> str:
@@ -151,6 +188,12 @@ def embed_pending_papers(
         if on_progress is not None:
             on_progress(start + len(batch), len(pending))
     return len(pending)
+
+
+def _titles_for(corpus: CorpusStore, chunks: Sequence[Chunk]) -> dict[str, str]:
+    """Paper titles for a batch of chunks, fetched once rather than per chunk."""
+    papers = corpus.papers_by_id(sorted({chunk.arxiv_id for chunk in chunks}))
+    return {arxiv_id: paper.title for arxiv_id, paper in papers.items()}
 
 
 def _as_lists(vectors: Iterable[object]) -> list[list[float]]:

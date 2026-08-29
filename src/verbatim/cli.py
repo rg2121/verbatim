@@ -193,6 +193,13 @@ def run() -> None:
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
     embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    embed_parser.add_argument(
+        "--with-context",
+        action="store_true",
+        default=config.EMBED_WITH_CONTEXT,
+        help="Embed each passage behind its paper title and section heading. "
+             "Stored under a separate model id, so both can be measured.",
+    )
     embed_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
     embed_parser.add_argument("--batch-size", type=int, default=64)
     embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
@@ -526,7 +533,9 @@ def run() -> None:
         print("Their PDFs and HTML are not fetched yet: run download, html, chunk, embed.")
 
     if args.command == "embed":
-        embedder = FastEmbedEmbedder(model_name=args.model)
+        embedder = FastEmbedEmbedder(
+            model_name=args.model, with_context=args.with_context
+        )
         with CorpusStore(args.state) as corpus:
             embedded = embed_pending(
                 corpus,

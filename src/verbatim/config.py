@@ -66,6 +66,11 @@ ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)
 # without suppressing anything, because the ranges genuinely overlap.
 SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))
 
+# Whether a passage is embedded with its paper title and section heading in
+# front of it. Off until measured on this corpus: it adds the context a bare
+# paragraph lacks, and also makes one paper's passages resemble each other.
+EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "false", "False", ""}
+
 # Answer generation. Every model runs locally through Ollama: the corpus is
 # 26 GB of other people's papers, and sending it to a third party is a decision
 # that should not follow from a default.
