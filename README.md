@@ -224,6 +224,31 @@ The bigger model was worse, so this is not a matter of model size. What does
 work is not asking the question: ask only what the passages discuss, and compare
 that to the question arithmetically.
 
+**Neither abstract-level nor lexical matching detects an unanswerable
+question.** The reasoning was that a passage says what it mentions while an
+abstract says what a paper is *about*, so a paper that quotes sample text about
+nuclear forces on page 27 would be excluded by its abstract. Measured over
+7,551 abstracts and the 22 natural-language eval questions, it separates no
+better than passages do.
+
+| signal | answerable | unanswerable | separated |
+|---|---|---|---|
+| passage similarity | 0.666-0.799 | 0.628-0.798 | no |
+| abstract similarity | 0.598-0.810 | 0.603-0.785 | no |
+| abstracts containing every question word | 0-235 | 0-177 | no |
+
+The measurement did explain why every attempt fails. The `expect_none` cases
+are two different things wearing one label. "What is the farthest star from
+the earth" has no paper on the topic at all - zero abstracts contain its words.
+"What is a tensor" has **177**: the corpus is saturated with tensors and
+defines none of them. Only the first kind is a retrieval problem. The second is
+a question about whether passages *answer*, which no retrieval signal can see,
+and it sits next to "what is entropy?" - 235 matching papers, labelled
+answerable - with nothing measurable between them.
+
+So the next work here is the answer key, not another detector: the two kinds
+need separating before a detector for either can be honestly scored.
+
 **Cross-encoder reranking makes retrieval worse here**, on all three local
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the right
 passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
