@@ -21,7 +21,15 @@ from verbatim.citations import render_bibliography
 from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
+import hashlib
+
 from verbatim.embedding import FastEmbedEmbedder, embed_pending
+from verbatim.html_source import (
+    HtmlSource,
+    extract_html_chunks,
+    fetch_html,
+    html_url_for,
+)
 from verbatim.evaluation import evaluate, load_cases, render_report
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
@@ -115,6 +123,14 @@ def run() -> None:
     licenses_parser.add_argument(
         "--delay", type=float, default=config.LICENSE_LOOKUP_DELAY, help="Seconds between requests; arXiv asks for a pause"
     )
+
+    html_parser = subparsers.add_parser(
+        "html", help="Fetch arXiv HTML renderings, which keep maths as LaTeX"
+    )
+    html_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    html_parser.add_argument("--output-dir", type=Path, default=config.HTML_DIR)
+    html_parser.add_argument("--limit", type=int, default=200, help="Papers to fetch this run")
+    html_parser.add_argument("--delay", type=float, default=config.DOWNLOAD_DELAY)
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
     embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -331,6 +347,35 @@ def run() -> None:
             "'arxiv-nonexclusive' grants arXiv distribution rights, not you."
         )
 
+    if args.command == "html":
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        fetched = missing = 0
+        with CorpusStore(args.state) as corpus:
+            pending = corpus.papers_without_html(args.limit)
+            for position, arxiv_id in enumerate(pending):
+                if position:
+                    time.sleep(args.delay)
+                try:
+                    payload = fetch_html(arxiv_id)
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"  ! {arxiv_id}: {error}")
+                    continue
+                if payload is None:
+                    # No TeX source, so no rendering. The PDF remains the source.
+                    missing += 1
+                    continue
+                path = args.output_dir / f"{arxiv_id.replace('/', '-')}.html"
+                path.write_bytes(payload)
+                corpus.record_html_source(
+                    HtmlSource(
+                        arxiv_id=arxiv_id, url=html_url_for(arxiv_id), local_path=str(path),
+                        sha256=hashlib.sha256(payload).hexdigest(), byte_count=len(payload),
+                    )
+                )
+                fetched += 1
+                print(f"  fetched {fetched}/{len(pending)}", end="\r", flush=True)
+        print(f"Fetched {fetched} HTML renderings; {missing} papers have none (PDF-only).")
+
     if args.command == "embed":
         embedder = FastEmbedEmbedder(model_name=args.model)
         with CorpusStore(args.state) as corpus:
@@ -447,7 +492,26 @@ def run() -> None:
         else:
             fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
             with CorpusStore(args.state) as corpus:
-                pending = corpus.pending_chunking(fingerprint, limit=args.limit)
+                # HTML first: it keeps maths as LaTeX and carries the author's
+                # own sectioning, so a paper with a rendering is chunked from
+                # that and never from its PDF.
+                html_pending = corpus.html_sources_pending_chunking(
+                    fingerprint, limit=args.limit
+                )
+                for start in range(0, len(html_pending), args.batch_size):
+                    batch = html_pending[start : start + args.batch_size]
+                    produced = extract_html_chunks(
+                        batch, chunk_size=args.chunk_size, overlap=args.overlap
+                    )
+                    corpus.record_chunks(produced)
+                    corpus.mark_html_chunked(batch, fingerprint)
+                    print(f"  chunked {min(start + len(batch), len(html_pending))}"
+                          f"/{len(html_pending)} HTML", end="\r", flush=True)
+                remaining = None if args.limit is None else max(args.limit - len(html_pending), 0)
+                pending = (
+                    [] if remaining == 0
+                    else corpus.pending_chunking(fingerprint, limit=remaining)
+                )
                 # Extraction holds roughly 11MB per PDF and never plateaus, so
                 # chunking five thousand at once would need tens of gigabytes.
                 # Batching bounds peak memory and commits as it goes, which also
@@ -466,7 +530,7 @@ def run() -> None:
                         end="\r",
                         flush=True,
                     )
-                new_chunks = range(written)  # only its length is used below
+                new_chunks = range(written + sum(1 for _ in html_pending))
                 exported = save_chunks(corpus.iter_chunks(), args.output)
             print(
                 f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "

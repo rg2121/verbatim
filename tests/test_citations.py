@@ -18,7 +18,7 @@ def chunk(arxiv_id: str = "2608.05440v1") -> Chunk:
         arxiv_id=arxiv_id,
         source_url=f"https://arxiv.org/abs/{arxiv_id}",
         license_url=None,
-        pdf_sha256="f" * 64,
+        source_sha256="f" * 64,
         page_number=6,
         chunk_index=0,
         char_start=40,
@@ -34,7 +34,7 @@ def test_citation_carries_the_version_separately_from_the_base_identifier() -> N
     assert citation.base_arxiv_id == "2608.05440"
     assert citation.version == 1
     assert citation.quoted_text == "generates flux"
-    assert citation.pdf_sha256 == "f" * 64
+    assert citation.source_sha256 == "f" * 64
 
 
 def test_citation_supports_legacy_identifiers() -> None:

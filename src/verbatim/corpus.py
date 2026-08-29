@@ -14,8 +14,9 @@ import struct
 from verbatim.arxiv import Paper, license_class
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
+from verbatim.html_source import HtmlSource
 
-SCHEMA_VERSION = "10"
+SCHEMA_VERSION = "11"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -23,7 +24,9 @@ FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 # Columns added to existing databases after their table was first created.
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "chunks": {
+        "source_sha256": "TEXT NOT NULL DEFAULT ''",
         "kind": "TEXT NOT NULL DEFAULT 'body'",
+        "source_kind": "TEXT NOT NULL DEFAULT 'pdf'",
         "section_path": "TEXT NOT NULL DEFAULT ''",
     },
     "papers": {"license_checked_at": "TEXT", "license_class": "TEXT"},
@@ -32,6 +35,10 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "chunked_with": "TEXT",
         "chunked_sha256": "TEXT",
     },
+}
+# Columns renamed after data was already stored: (old, new).
+RENAMED_COLUMNS: dict[str, tuple[str, str]] = {
+    "chunks": ("pdf_sha256", "source_sha256"),
 }
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 
@@ -224,6 +231,67 @@ class CorpusStore:
         ).fetchall()
         return [_download_from_row(row) for row in rows]
 
+    def record_html_source(self, source: HtmlSource) -> None:
+        """Record one locally held HTML rendering."""
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO html_sources (
+                    arxiv_id, url, local_path, sha256, byte_count, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(arxiv_id) DO UPDATE SET
+                    url = excluded.url, local_path = excluded.local_path,
+                    sha256 = excluded.sha256, byte_count = excluded.byte_count,
+                    fetched_at = excluded.fetched_at
+                """,
+                (source.arxiv_id, source.url, source.local_path, source.sha256,
+                 source.byte_count, _timestamp()),
+            )
+
+    def papers_without_html(self, limit: int) -> list[str]:
+        """Downloaded papers whose HTML has not been fetched or ruled out."""
+        rows = self.connection.execute(
+            """
+            SELECT d.arxiv_id FROM downloads AS d
+            LEFT JOIN html_sources AS h ON h.arxiv_id = d.arxiv_id
+            WHERE h.arxiv_id IS NULL
+            ORDER BY d.arxiv_id LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [row["arxiv_id"] for row in rows]
+
+    def html_sources_pending_chunking(
+        self, fingerprint: str, *, limit: int | None = None
+    ) -> list[HtmlSource]:
+        """HTML renderings whose chunks are missing or out of date."""
+        rows = self.connection.execute(
+            """
+            SELECT * FROM html_sources
+            WHERE chunked_at IS NULL
+               OR chunked_with IS NOT ?
+               OR chunked_sha256 IS NOT sha256
+            ORDER BY arxiv_id LIMIT ?
+            """,
+            (fingerprint, -1 if limit is None else limit),
+        ).fetchall()
+        return [
+            HtmlSource(
+                arxiv_id=r["arxiv_id"], url=r["url"], local_path=r["local_path"],
+                sha256=r["sha256"], byte_count=r["byte_count"],
+            )
+            for r in rows
+        ]
+
+    def mark_html_chunked(self, sources: list[HtmlSource], fingerprint: str) -> None:
+        now = _timestamp()
+        with self.connection:
+            self.connection.executemany(
+                """UPDATE html_sources SET chunked_at = ?, chunked_with = ?,
+                   chunked_sha256 = ? WHERE arxiv_id = ?""",
+                [(now, fingerprint, s.sha256, s.arxiv_id) for s in sources],
+            )
+
     def pending_chunking(
         self, fingerprint: str, *, limit: int | None = None
     ) -> list[DownloadedPaper]:
@@ -236,9 +304,14 @@ class CorpusStore:
         rows = self.connection.execute(
             """
             SELECT d.* FROM downloads AS d
-            WHERE d.chunked_at IS NULL
-               OR d.chunked_with IS NOT ?
-               OR d.chunked_sha256 IS NOT d.sha256
+            WHERE NOT EXISTS (
+                -- HTML is the better source where it exists, so a paper with
+                -- one is never chunked from its PDF.
+                SELECT 1 FROM html_sources AS h WHERE h.arxiv_id = d.arxiv_id
+            )
+              AND (d.chunked_at IS NULL
+                   OR d.chunked_with IS NOT ?
+                   OR d.chunked_sha256 IS NOT d.sha256)
             ORDER BY d.arxiv_id ASC
             LIMIT ?
             """,
@@ -270,23 +343,23 @@ class CorpusStore:
         """
         now = _timestamp()
         with self.connection:
-            for arxiv_id, pdf_sha256 in {(chunk.arxiv_id, chunk.pdf_sha256) for chunk in chunks}:
+            for arxiv_id, source_sha256 in {(chunk.arxiv_id, chunk.source_sha256) for chunk in chunks}:
                 self.connection.execute(
-                    "DELETE FROM chunks WHERE arxiv_id = ? AND pdf_sha256 = ?",
-                    (arxiv_id, pdf_sha256),
+                    "DELETE FROM chunks WHERE arxiv_id = ? AND source_sha256 = ?",
+                    (arxiv_id, source_sha256),
                 )
             self.connection.executemany(
                 """
                 INSERT INTO chunks (
-                    chunk_id, arxiv_id, pdf_sha256, source_url, license_url, page_number,
-                    chunk_index, char_start, char_end, text, chunker_version, kind, section_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    chunk_id, arxiv_id, source_sha256, source_url, license_url, page_number,
+                    chunk_index, char_start, char_end, text, chunker_version, kind, section_path, source_kind, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         chunk.chunk_id,
                         chunk.arxiv_id,
-                        chunk.pdf_sha256,
+                        chunk.source_sha256,
                         chunk.source_url,
                         chunk.license_url,
                         chunk.page_number,
@@ -297,6 +370,7 @@ class CorpusStore:
                         chunk.chunker_version,
                         chunk.kind,
                         chunk.section_path,
+                        chunk.source_kind,
                         now,
                     )
                     for chunk in chunks
@@ -740,7 +814,7 @@ class CorpusStore:
                 CREATE TABLE IF NOT EXISTS chunks (
                     chunk_id TEXT PRIMARY KEY,
                     arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
-                    pdf_sha256 TEXT NOT NULL,
+                    source_sha256 TEXT NOT NULL,
                     source_url TEXT NOT NULL,
                     license_url TEXT,
                     page_number INTEGER NOT NULL,
@@ -750,14 +824,27 @@ class CorpusStore:
                     text TEXT NOT NULL,
                     context TEXT,
                     kind TEXT NOT NULL DEFAULT 'body',
+                    source_kind TEXT NOT NULL DEFAULT 'pdf',
                     section_path TEXT NOT NULL DEFAULT '',
                     chunker_version TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    UNIQUE (arxiv_id, pdf_sha256, page_number, chunk_index)
+                    UNIQUE (arxiv_id, source_sha256, page_number, chunk_index)
                 );
 
                 CREATE INDEX IF NOT EXISTS chunks_by_paper
                     ON chunks (arxiv_id, page_number, chunk_index);
+
+                CREATE TABLE IF NOT EXISTS html_sources (
+                    arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
+                    url TEXT NOT NULL,
+                    local_path TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    byte_count INTEGER NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    chunked_at TEXT,
+                    chunked_with TEXT,
+                    chunked_sha256 TEXT
+                );
 
                 CREATE TABLE IF NOT EXISTS sync_state (
                     category TEXT PRIMARY KEY,
@@ -814,6 +901,7 @@ class CorpusStore:
             if not search_index_existed:
                 self._backfill_search_index()
             self._add_missing_columns()
+            self._retire_renamed_columns()
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
@@ -836,6 +924,92 @@ class CorpusStore:
         database upgraded in place would otherwise never match its own chunks.
         """
         self.connection.execute("INSERT INTO chunks_fts (chunks_fts) VALUES ('rebuild')")
+
+    def _retire_renamed_columns(self) -> None:
+        """Finish the pdf_sha256 -> source_sha256 rename on an older database.
+
+        Adding the new column is not enough: the old one is NOT NULL, so every
+        insert fails on a constraint for a field the code no longer sets. Nor
+        can it simply be dropped, because it sits inside a UNIQUE constraint,
+        which SQLite refuses to alter.
+
+        So the table is rebuilt. That also corrects the constraint itself: it
+        keyed on the source checksum alone, but a paper may now hold both a PDF
+        chunking and an HTML one, so source_kind belongs in the key. Values are
+        carried across first, and the row count is checked before the old table
+        is dropped.
+        """
+        present = {row["name"] for row in self.connection.execute("PRAGMA table_info(chunks)")}
+        if "pdf_sha256" not in present or "source_sha256" not in present:
+            return
+        before = self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        embeddings_before = self.connection.execute(
+            "SELECT COUNT(*) FROM embeddings"
+        ).fetchone()[0]
+        # embeddings.chunk_id cascades on delete, so dropping the old chunks
+        # table would take every vector with it - hours of work, silently. The
+        # rows are still valid because chunk_id is preserved by the copy, so
+        # the constraint is suspended for the swap rather than obeyed.
+        self.connection.execute("PRAGMA foreign_keys = OFF")
+        self.connection.executescript(
+            """
+            DROP TRIGGER IF EXISTS chunks_fts_after_insert;
+            DROP TRIGGER IF EXISTS chunks_fts_after_delete;
+            DROP TRIGGER IF EXISTS chunks_fts_after_update;
+
+            CREATE TABLE chunks_rebuilt (
+                chunk_id TEXT PRIMARY KEY,
+                arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
+                source_sha256 TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                license_url TEXT,
+                page_number INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                char_start INTEGER NOT NULL,
+                char_end INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                context TEXT,
+                chunker_version TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'body',
+                section_path TEXT NOT NULL DEFAULT '',
+                source_kind TEXT NOT NULL DEFAULT 'pdf',
+                created_at TEXT NOT NULL,
+                UNIQUE (arxiv_id, source_kind, source_sha256, page_number, chunk_index)
+            );
+
+            INSERT INTO chunks_rebuilt
+            SELECT chunk_id, arxiv_id,
+                   CASE WHEN source_sha256 = '' THEN pdf_sha256 ELSE source_sha256 END,
+                   source_url, license_url, page_number, chunk_index, char_start,
+                   char_end, text, context, chunker_version, kind, section_path,
+                   source_kind, created_at
+            FROM chunks;
+            """
+        )
+        after = self.connection.execute("SELECT COUNT(*) FROM chunks_rebuilt").fetchone()[0]
+        if after != before:
+            self.connection.execute("DROP TABLE chunks_rebuilt")
+            raise RuntimeError(
+                f"Refusing to migrate chunks: rebuilt {after} rows from {before}"
+            )
+        self.connection.executescript(
+            """
+            DROP TABLE chunks;
+            ALTER TABLE chunks_rebuilt RENAME TO chunks;
+            CREATE INDEX IF NOT EXISTS chunks_by_paper
+                ON chunks (arxiv_id, page_number, chunk_index);
+            """
+        )
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        embeddings_after = self.connection.execute(
+            "SELECT COUNT(*) FROM embeddings"
+        ).fetchone()[0]
+        if embeddings_after != embeddings_before:
+            raise RuntimeError(
+                f"Migration lost embeddings: {embeddings_before} -> {embeddings_after}"
+            )
+        # Rowids changed, so the external-content search index must be reloaded.
+        self._backfill_search_index()
 
     def _add_missing_columns(self) -> None:
         """Bring databases created by an earlier schema up to date.
@@ -930,7 +1104,7 @@ def _chunk_from_row(row: sqlite3.Row) -> Chunk:
         arxiv_id=row["arxiv_id"],
         source_url=row["source_url"],
         license_url=row["license_url"],
-        pdf_sha256=row["pdf_sha256"],
+        source_sha256=row["source_sha256"],
         page_number=row["page_number"],
         chunk_index=row["chunk_index"],
         char_start=row["char_start"],
@@ -939,6 +1113,7 @@ def _chunk_from_row(row: sqlite3.Row) -> Chunk:
         chunker_version=row["chunker_version"],
         kind=row["kind"],
         section_path=row["section_path"],
+        source_kind=row["source_kind"],
     )
 
 

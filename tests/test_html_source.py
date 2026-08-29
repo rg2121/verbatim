@@ -77,3 +77,71 @@ def test_a_deeper_heading_nests_and_a_shallower_one_pops() -> None:
     )
 
     assert [" > ".join(s.path) for s in sections] == ["A", "A > A.1", "B"]
+
+
+def _source(tmp_path, html: str):
+    from hashlib import sha256
+    from verbatim.html_source import HtmlSource
+
+    path = tmp_path / "paper.html"
+    path.write_text(html, encoding="utf-8")
+    data = path.read_bytes()
+    return HtmlSource(
+        arxiv_id="2608.11111v1", url="https://arxiv.org/html/2608.11111v1",
+        local_path=str(path), sha256=sha256(data).hexdigest(), byte_count=len(data),
+    )
+
+
+def test_html_chunks_are_located_by_section_not_by_page(tmp_path) -> None:
+    """arXiv HTML has no pages, so a page number would be invented."""
+    from verbatim.html_source import extract_html_chunks
+
+    chunks = extract_html_chunks(
+        [_source(tmp_path, "<h1>T</h1><p>One.</p><h2>2 Method</h2><p>Two.</p>")],
+        chunk_size=200, overlap=20,
+    )
+
+    assert [c.page_number for c in chunks] == [1, 2]      # section ordinals
+    assert all(c.source_kind == "html" for c in chunks)
+
+
+def test_html_chunks_verify_the_bytes_before_emitting_text(tmp_path) -> None:
+    import pytest
+    from verbatim.html_source import extract_html_chunks
+
+    source = _source(tmp_path, "<p>Original.</p>")
+    (tmp_path / "paper.html").write_text("<p>Tampered.</p>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Checksum mismatch"):
+        extract_html_chunks([source])
+
+
+def test_an_html_chunk_id_cannot_collide_with_a_pdf_one(tmp_path) -> None:
+    """Both forms of the same paper coexist; their ids must stay distinct."""
+    from verbatim.html_source import extract_html_chunks
+
+    chunks = extract_html_chunks([_source(tmp_path, "<h1>T</h1><p>Body.</p>")])
+    assert chunks
+    assert all(len(c.chunk_id) == 20 for c in chunks)
+    # Same paper, section and position, but derived from a different namespace.
+    from verbatim.html_source import _html_chunk_id
+    source = _source(tmp_path, "<h1>T</h1><p>Body.</p>")
+    assert _html_chunk_id(source, 1, 0, "6:1200:200") == chunks[0].chunk_id
+
+
+def test_a_citation_from_html_says_section_not_page() -> None:
+    from verbatim.chunking import Chunk
+    from verbatim.citations import citation_from_chunk, render_citation
+    from helpers import paper
+
+    def rendered(source_kind: str) -> str:
+        chunk = Chunk(
+            chunk_id="c", arxiv_id="2608.11111v1", source_url="u", license_url=None,
+            source_sha256="s", page_number=3, chunk_index=0, char_start=0, char_end=4,
+            text="text", chunker_version="6:1200:200", source_kind=source_kind,
+        )
+        return render_citation(1, citation_from_chunk(chunk, paper("2608.11111v1"), "text"))
+
+    assert "p. 3" in rendered("pdf")
+    assert "section 3" in rendered("html")
+    assert "p. 3" not in rendered("html")

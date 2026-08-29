@@ -42,6 +42,8 @@ def _integer(name: str, default: int) -> int:
 # derived and can be rebuilt from it.
 STATE_PATH = _path("VERBATIM_STATE_PATH", "data/corpus.db")
 PDF_DIR = _path("VERBATIM_PDF_DIR", "data/pdfs")
+# arXiv HTML renderings, preferred over PDFs where they exist.
+HTML_DIR = _path("VERBATIM_HTML_DIR", "data/html")
 CHUNKS_PATH = _path("VERBATIM_CHUNKS_PATH", "data/chunks.jsonl")
 PAPERS_SNAPSHOT_PATH = _path("VERBATIM_PAPERS_SNAPSHOT_PATH", "data/papers.json")
 # The retrieval answer key. Committed, unlike the corpus it scores.

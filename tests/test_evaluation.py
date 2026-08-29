@@ -16,7 +16,7 @@ from verbatim.evaluation import (
 def match(arxiv_id: str) -> ChunkMatch:
     chunk = Chunk(
         chunk_id=f"c-{arxiv_id}", arxiv_id=arxiv_id, source_url="u", license_url=None,
-        pdf_sha256="s", page_number=1, chunk_index=0, char_start=0, char_end=1,
+        source_sha256="s", page_number=1, chunk_index=0, char_start=0, char_end=1,
         text="t", chunker_version="6:1200:200",
     )
     return ChunkMatch(chunk=chunk, score=1.0, snippet="")

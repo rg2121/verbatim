@@ -8,7 +8,7 @@ from verbatim.reranking import rerank
 def match(chunk_id: str, text: str, score: float) -> ChunkMatch:
     chunk = Chunk(
         chunk_id=chunk_id, arxiv_id="2608.11111v1", source_url="u", license_url=None,
-        pdf_sha256="s", page_number=1, chunk_index=0, char_start=0, char_end=len(text),
+        source_sha256="s", page_number=1, chunk_index=0, char_start=0, char_end=len(text),
         text=text, chunker_version="6:1200:200",
     )
     return ChunkMatch(chunk=chunk, score=score, snippet=text[:40])

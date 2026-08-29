@@ -126,7 +126,7 @@ def test_format_match_renders_a_traceable_citation_header() -> None:
             arxiv_id="2608.05440v1",
             source_url="https://arxiv.org/abs/2608.05440v1",
             license_url=None,
-            pdf_sha256="f" * 64,
+            source_sha256="f" * 64,
             page_number=16,
             chunk_index=2,
             char_start=40,
@@ -160,7 +160,7 @@ def test_a_result_shows_the_section_it_came_from() -> None:
         chunk = Chunk(
             chunk_id="abc", arxiv_id="2608.05440v1",
             source_url="https://arxiv.org/abs/2608.05440v1", license_url=None,
-            pdf_sha256="f" * 64, page_number=6, chunk_index=0, char_start=0,
+            source_sha256="f" * 64, page_number=6, chunk_index=0, char_start=0,
             char_end=10, text="body text", chunker_version="6:1200:200",
             section_path=section_path,
         )

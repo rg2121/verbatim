@@ -20,11 +20,27 @@ from.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from collections.abc import Callable
 from html.parser import HTMLParser
+from urllib.error import HTTPError
 import re
 
-from verbatim.chunking import Section, clean_markdown_text
+from hashlib import sha256
+from pathlib import Path
+
+from verbatim.chunking import (
+    Chunk,
+    Section,
+    chunk_page,
+    chunker_fingerprint,
+    clean_markdown_text,
+    mark_references,
+)
+from verbatim.downloads import file_sha256
+from verbatim.fetching import fetch
+
+ARXIV_HTML_URL = "https://arxiv.org/html"
 
 HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 # Chrome and navigation arXiv wraps around the paper.
@@ -141,3 +157,106 @@ def parse_html_sections(html: str) -> list[Section]:
     parser.feed(html)
     parser.close()
     return parser.sections
+
+
+@dataclass(frozen=True)
+class HtmlSource:
+    """An auditable record of one paper's HTML rendering, held locally.
+
+    Mirrors DownloadedPaper: a chunk may only claim to come from bytes we have
+    and can re-verify, whichever form those bytes take.
+    """
+
+    arxiv_id: str
+    url: str
+    local_path: str
+    sha256: str
+    byte_count: int
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def html_url_for(arxiv_id: str) -> str:
+    return f"{ARXIV_HTML_URL}/{arxiv_id}"
+
+
+def fetch_html(arxiv_id: str, *, get: Callable[[str], bytes] | None = None) -> bytes | None:
+    """Fetch one paper's HTML, or None when arXiv has no rendering for it.
+
+    A missing rendering is normal - a PDF-only submission has no TeX source to
+    convert - so it is reported rather than raised, and the caller falls back
+    to the PDF.
+    """
+    fetcher = get or fetch
+    try:
+        return fetcher(html_url_for(arxiv_id))
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def extract_html_chunks(
+    sources: list[HtmlSource],
+    *,
+    chunk_size: int = 1_200,
+    overlap: int = 200,
+    read_html: Callable[[Path], str] | None = None,
+) -> list[Chunk]:
+    """Chunk papers from their HTML rendering, verifying the bytes first.
+
+    Same discipline as the PDF path: the file on disk is re-hashed before any
+    text is emitted, so a passage can never claim to come from bytes that have
+    since changed.
+
+    Sections are numbered in place of pages. `page_number` therefore holds a
+    section ordinal here, and `source_kind` records which meaning applies.
+    """
+    reader = read_html or _read_text
+    fingerprint = chunker_fingerprint(chunk_size, overlap)
+    chunks: list[Chunk] = []
+
+    for source in sources:
+        path = Path(source.local_path)
+        actual = file_sha256(path)
+        if actual != source.sha256:
+            raise ValueError(
+                f"Checksum mismatch for {source.arxiv_id}: "
+                f"recorded={source.sha256}, file={actual}"
+            )
+        paper_chunks: list[Chunk] = []
+        for ordinal, section in enumerate(parse_html_sections(reader(path)), start=1):
+            for index, span in enumerate(
+                chunk_page(section.text, chunk_size=chunk_size, overlap=overlap)
+            ):
+                paper_chunks.append(
+                    Chunk(
+                        chunk_id=_html_chunk_id(source, ordinal, index, fingerprint),
+                        arxiv_id=source.arxiv_id,
+                        source_url=f"https://arxiv.org/abs/{source.arxiv_id}",
+                        license_url=None,
+                        source_sha256=source.sha256,
+                        page_number=ordinal,
+                        chunk_index=index,
+                        char_start=section.char_start + span.char_start,
+                        char_end=section.char_start + span.char_end,
+                        text=span.text,
+                        chunker_version=fingerprint,
+                        section_path=" > ".join(section.path),
+                        source_kind="html",
+                    )
+                )
+        chunks.extend(mark_references(paper_chunks))
+    return chunks
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _html_chunk_id(source: HtmlSource, ordinal: int, index: int, fingerprint: str) -> str:
+    # "html" is part of the identity so an HTML chunk can never collide with the
+    # PDF chunk of the same paper, section and position.
+    identifier = f"html:{source.arxiv_id}:{source.sha256}:{ordinal}:{index}:{fingerprint}"
+    return sha256(identifier.encode("utf-8")).hexdigest()[:20]

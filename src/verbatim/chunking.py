@@ -72,7 +72,10 @@ class Chunk:
     arxiv_id: str
     source_url: str
     license_url: str | None
-    pdf_sha256: str
+    # The checksum of whatever this passage was read from - a PDF or an arXiv
+    # HTML rendering. Named for the role, not one of the two forms.
+    source_sha256: str
+    # A page for a PDF, a section ordinal for HTML, which has none.
     page_number: int
     chunk_index: int
     char_start: int
@@ -81,6 +84,9 @@ class Chunk:
     chunker_version: str
     kind: str = BODY
     section_path: str = ""
+    # "pdf" or "html". page_number means a page for a PDF and a section
+    # ordinal for HTML, which has no pages, so a citation must know which.
+    source_kind: str = "pdf"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -118,7 +124,7 @@ def extract_pdf_chunks(
                             arxiv_id=download.arxiv_id,
                             source_url=download.source_url,
                             license_url=download.license_url,
-                            pdf_sha256=download.sha256,
+                            source_sha256=download.sha256,
                             page_number=page_number,
                             chunk_index=chunk_index,
                             # Offsets stay relative to the page, not the section,

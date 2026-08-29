@@ -31,10 +31,11 @@ class Citation:
     char_end: int
     quoted_text: str
     chunk_id: str
-    pdf_sha256: str
+    source_sha256: str
     source_url: str
     license_url: str | None
     retrieved_at: str
+    source_kind: str = "pdf"
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -54,7 +55,8 @@ def citation_from_chunk(chunk: Chunk, paper: Paper, quoted_text: str) -> Citatio
         char_end=chunk.char_end,
         quoted_text=quoted_text,
         chunk_id=chunk.chunk_id,
-        pdf_sha256=chunk.pdf_sha256,
+        source_sha256=chunk.source_sha256,
+        source_kind=chunk.source_kind,
         source_url=chunk.source_url,
         license_url=chunk.license_url,
         retrieved_at=datetime.now(UTC).isoformat(),
@@ -77,9 +79,21 @@ def render_citation(marker: int, citation: Citation) -> str:
     return (
         f"[{marker}] {format_authors(citation.authors)}, "
         f'"{citation.title}", '
-        f"arXiv:{citation.arxiv_id}, p. {citation.page_number}. "
+        f"arXiv:{citation.arxiv_id}, {locator(citation)}. "
         f"{citation.source_url}"
     )
+
+
+def locator(citation: Citation) -> str:
+    """Where in the paper this is, in the terms its source actually has.
+
+    A PDF has pages. arXiv's HTML rendering does not, so an HTML-sourced
+    passage is located by section instead; printing "p. 3" for it would be an
+    invented page number.
+    """
+    if citation.source_kind == "html":
+        return f"section {citation.page_number}"
+    return f"p. {citation.page_number}"
 
 
 def render_bibliography(citations: list[Citation]) -> str:

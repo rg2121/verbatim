@@ -53,7 +53,7 @@ def test_extract_pdf_chunks_preserves_page_provenance(tmp_path: Path) -> None:
 
     assert [chunk.page_number for chunk in chunks] == [1, 2]
     assert all(chunk.arxiv_id == "2401.12345v1" for chunk in chunks)
-    assert all(chunk.pdf_sha256 == paper.sha256 for chunk in chunks)
+    assert all(chunk.source_sha256 == paper.sha256 for chunk in chunks)
     assert len(destination.read_text().splitlines()) == 2
 
 
