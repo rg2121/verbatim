@@ -305,6 +305,14 @@ answerable - with nothing measurable between them.
 So the next work here is the answer key, not another detector: the two kinds
 need separating before a detector for either can be honestly scored.
 
+**Embedding a passage with its title and section is still unmeasured.** An A/B
+over 21,414 passages returned mrr 0.982 for both arms, identical to three
+decimals. The inputs did differ; the subset of 259 papers was simply too easy,
+and r@5 saturated at 1.000 with no headroom for a difference to appear in. It
+is recorded here as a failed experiment rather than a negative result, and
+`with_context` stays off because it is unmeasured. Redoing it needs a
+distractor set large enough that r@5 sits well below 1.0.
+
 **Cross-encoder reranking makes retrieval worse here**, on all three local
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the right
 passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
