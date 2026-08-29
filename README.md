@@ -368,16 +368,40 @@ subject the corpus does not cover, the system produces a fluent answer whose
 citations are all individually genuine. Every quote is verified against the
 stored passage, so nothing is fabricated — but a verified quote proves the
 words exist, not that they answer the question. The subject check catches
-roughly half of these. See *What was tried and rejected* for the four
-approaches that did not work.
+roughly half of these.
+
+Six approaches have now failed on the same cases, and measurement says why:
+"unanswerable" was one label over two different problems. A question with no
+paper on its subject is visible to retrieval; a question whose subject the
+corpus covers heavily and answers nowhere is not. "What is a tensor" matches
+177 abstracts here and sits indistinguishably beside "what is entropy", which
+matches 235 and is answerable. The answer key now separates the two, which is
+the prerequisite for scoring any detector honestly. See *What was tried and
+rejected*.
 
 **Scanned PDFs yield nothing.** Text extraction assumes a text layer; OCR is
 not implemented. Affected papers chunk to little or nothing rather than
 failing loudly.
 
-**Retrieval quality is measured on one 48-case set** written alongside the
+**The corpus is a slice of recent work.** It was built from the newest papers
+in each category, so it holds very little of the literature those papers rest
+on: of roughly 11,000 resolvable references, about 70 point at a paper in the
+corpus. `grow` closes this along the citation edges — GPT-4, Adam, BERT, PPO,
+ViT and Planck 2018 were all cited dozens of times and absent until it ran —
+but a corpus assembled this way starts without foundations, and definitional
+questions are the first thing to suffer.
+
+**Retrieval quality is measured on one 68-case set** written alongside the
 system, over a corpus in physics and machine learning. The numbers here do not
-transfer to another corpus without re-measuring.
+transfer to another corpus without re-measuring. Thirteen of the answerable
+cases are natural questions with a verified answering paper; the older ones
+are paper titles, and a title retrieves its own paper for reasons a real
+question does not.
+
+**Vector search is brute force.** sqlite-vec scans every vector, which is
+measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at
+this scale. A corpus several times larger wants a real index behind the
+`VectorIndex` protocol rather than a faster machine.
 
 **Licence classification is only as good as arXiv's metadata**, and the
 `unknown` class is large. `unknown` means unknown, not permissive.
