@@ -30,6 +30,8 @@ from hashlib import sha256
 from pathlib import Path
 
 from verbatim.chunking import (
+    BODY,
+    TABLE,
     Chunk,
     Section,
     chunk_page,
@@ -59,6 +61,14 @@ SPACE_AFTER_OPENING = re.compile(r"([(\[{])\s+")
 MATHS_SPAN = re.compile(r"\$[^$]*\$")
 # Long enough to be prose, short enough to exclude a whole swallowed document.
 MAX_HEADING_LENGTH = 120
+# LaTeXML lays display equations out as tables too, and those are already read
+# through each <math> element's alttext. Only a real tabular is a table.
+TABULAR_CLASS = "ltx_tabular"
+# A cell holding more than this is prose in a layout table, not tabular data.
+MAX_CELL_LENGTH = 200
+# A span wider than any real table, so a malformed attribute cannot make the
+# parser build an enormous row.
+MAX_SPAN = 32
 WHITESPACE = re.compile(r"\s+")
 
 
@@ -82,6 +92,13 @@ class ArxivHTMLParser(HTMLParser):
         self._skip_nesting = 0
         self._math_depth = 0
         self._offset = 0
+        self._table: list[list[str]] | None = None
+        self._table_depth = 0
+        self._row: list[tuple[list[str], int, int]] | None = None
+        self._cell: list[str] | None = None
+        self._cell_spans = (1, 1)
+        # column index -> (text, rows still to fill), for cells spanning down
+        self._pending_spans: dict[int, tuple[str, int]] = {}
 
     # -- structure -------------------------------------------------------
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -100,6 +117,19 @@ class ArxivHTMLParser(HTMLParser):
             self._skip_tag = tag
             self._skip_nesting = 1
             return
+        if tag == "table" and TABULAR_CLASS in (attributes.get("class") or ""):
+            self._table, self._table_depth = [], 1
+            return
+        if self._table is not None:
+            if tag == "table":
+                self._table_depth += 1
+            elif tag == "tr":
+                self._row = []
+            elif tag in ("td", "th"):
+                self._cell = []
+                self._cell_spans = (
+                    _span(attributes.get("rowspan")), _span(attributes.get("colspan"))
+                )
         if tag == "math":
             # Take the LaTeX and ignore the rendered glyphs inside, which would
             # otherwise arrive as unreadable fragments of the same equation.
@@ -125,6 +155,25 @@ class ArxivHTMLParser(HTMLParser):
         if tag == "math":
             self._math_depth = max(0, self._math_depth - 1)
             return
+        if self._table is not None:
+            if tag in ("td", "th") and self._cell is not None:
+                cell = normalize_page_text("".join(self._cell))[:MAX_CELL_LENGTH]
+                rowspan, colspan = self._cell_spans
+                self._cell, self._cell_spans = None, (1, 1)
+                if self._row is not None:
+                    self._row.append(([cell], rowspan, colspan))
+                return
+            if tag == "tr" and self._row is not None:
+                row = self._assemble_row(self._row)
+                self._row = None
+                if any(cell for cell in row):
+                    self._table.append(row)
+                return
+            if tag == "table":
+                self._table_depth -= 1
+                if self._table_depth <= 0:
+                    self._finish_table()
+                return
         if tag in HEADINGS and self._heading is not None:
             title = WHITESPACE.sub(" ", "".join(self._heading)).strip()[:MAX_HEADING_LENGTH]
             self._heading = None
@@ -145,10 +194,78 @@ class ArxivHTMLParser(HTMLParser):
     def _emit(self, text: str) -> None:
         if self._heading is not None:
             self._heading.append(text)
+        elif self._cell is not None:
+            # Text inside a table cell belongs to that cell, including the
+            # LaTeX of any maths in it.
+            self._cell.append(text)
+        elif self._table is not None:
+            # Between cells - alignment padding and stray whitespace. Dropping
+            # it keeps the serialised table to its actual contents.
+            return
         elif self._skip_tag is None:
             self._body.append(text)
 
+    def _assemble_row(self, cells: list[tuple[list[str], int, int]]) -> list[str]:
+        """Place a row's cells in their real columns, honouring spans.
+
+        Nineteen per cent of the tables in this corpus use rowspan and 29% use
+        colspan. Ignoring them does not merely lose formatting: the cells after
+        a span shift left, so a continuation line lands in the first column and
+        the table states something the paper does not.
+        """
+        row: list[str] = []
+        queue = list(cells)
+        column = 0
+        while queue or column in self._pending_spans:
+            carried = self._pending_spans.get(column)
+            if carried is not None:
+                text, remaining = carried
+                row.append(text)
+                if remaining <= 1:
+                    del self._pending_spans[column]
+                else:
+                    self._pending_spans[column] = (text, remaining - 1)
+                column += 1
+                continue
+            if not queue:
+                break
+            parts, rowspan, colspan = queue.pop(0)
+            text = "".join(parts)
+            row.append(text)
+            # A spanned cell is written once and its remaining columns left
+            # empty, so a term is not counted several times by search.
+            row.extend([""] * (colspan - 1))
+            if rowspan > 1:
+                for offset in range(colspan):
+                    self._pending_spans[column + offset] = (
+                        text if offset == 0 else "", rowspan - 1
+                    )
+            column += colspan
+        return row
+
+    def _finish_table(self) -> None:
+        """Close the current table and record it as a section of its own."""
+        rows, self._table = self._table or [], None
+        self._table_depth, self._row, self._cell = 0, None, None
+        self._pending_spans = {}
+        text = render_table(rows)
+        if not text:
+            return
+        self._flush()  # the prose before the table is its own section
+        self.sections.append(
+            Section(
+                path=tuple(block.title for block in self._stack),
+                text=text,
+                char_start=self._offset,
+                kind=TABLE,
+            )
+        )
+        self._offset += len(text) + 1
+
     def _flush(self) -> None:
+        # Cells are normalised as they are read, so a completed table is not
+        # passed through normalisation again: that would collapse the newlines
+        # its rows are made of.
         text = tidy_spacing(normalize_page_text(" ".join(self._body)))
         self._body = []
         if not text:
@@ -165,6 +282,37 @@ class ArxivHTMLParser(HTMLParser):
     def close(self) -> None:  # noqa: D102 - inherited
         super().close()
         self._flush()
+
+
+def _span(value: str | None) -> int:
+    """Read a rowspan or colspan attribute, refusing anything unusable."""
+    try:
+        return max(1, min(int(str(value)), MAX_SPAN))
+    except (TypeError, ValueError):
+        return 1
+
+
+def render_table(rows: list[list[str]]) -> str:
+    """Serialise a table as a Markdown pipe table.
+
+    The rows are what a PDF extractor destroys: flattened, "Person Corp Time
+    Position Musk SpaceX 2002 CEO" gives a reader no way to see that Musk,
+    SpaceX, 2002 and CEO are one row. Pipes are used because a model reads them
+    as a table without being told, and because they survive being quoted back
+    for citation verification.
+    """
+    filled = [row for row in rows if any(cell.strip() for cell in row)]
+    if not filled:
+        return ""
+    width = max(len(row) for row in filled)
+    if width < 2:
+        # A single column is a list, and reads better as one.
+        return "\n".join(row[0] for row in filled if row)
+    padded = [row + [""] * (width - len(row)) for row in filled]
+    lines = ["| " + " | ".join(padded[0]) + " |",
+             "| " + " | ".join(["---"] * width) + " |"]
+    lines.extend("| " + " | ".join(row) + " |" for row in padded[1:])
+    return "\n".join(lines)
 
 
 def tidy_spacing(text: str) -> str:
@@ -301,6 +449,7 @@ def extract_html_chunks(
                         text=span.text,
                         chunker_version=fingerprint,
                         section_path=" > ".join(section.path),
+                        kind=section.kind,
                         source_kind="html",
                     )
                 )

@@ -280,3 +280,69 @@ def test_an_identifier_is_only_taken_when_the_reference_states_one() -> None:
     assert extract_doi("Phys. Rev. D 12, 345 (1975), doi:10.1103/PhysRevD.12.345.") == (
         "10.1103/PhysRevD.12.345"
     )
+
+
+def test_a_table_keeps_its_rows_and_columns() -> None:
+    """Flattened, a table states nothing: the rows are the data."""
+    from verbatim.html_source import parse_html_sections
+
+    sections = parse_html_sections(
+        '<p>Before.</p><table class="ltx_tabular">'
+        "<tr><th>Person</th><th>Corp</th></tr>"
+        "<tr><td>Musk</td><td>SpaceX</td></tr></table>"
+    )
+    table = [s for s in sections if s.kind == "table"]
+
+    assert [s.text for s in sections if s.kind == "body"] == ["Before."]
+    assert table[0].text == (
+        "| Person | Corp |\n| --- | --- |\n| Musk | SpaceX |"
+    )
+
+
+def test_a_cell_spanning_rows_is_carried_down_its_column() -> None:
+    """Without this the cells after a span shift left, and the table lies."""
+    from verbatim.html_source import parse_html_sections
+
+    (table,) = parse_html_sections(
+        '<table class="ltx_tabular">'
+        '<tr><td rowspan="2">Musk</td><td>Tesla</td><td>CEO</td></tr>'
+        "<tr><td>product architect</td></tr></table>"
+    )
+
+    assert table.text.splitlines()[-1] == "| Musk | product architect |  |"
+
+
+def test_a_cell_spanning_columns_is_written_once() -> None:
+    """Repeating it would count the same term several times in search."""
+    from verbatim.html_source import parse_html_sections
+
+    (table,) = parse_html_sections(
+        '<table class="ltx_tabular">'
+        '<tr><td colspan="2">Results</td><td>n</td></tr>'
+        "<tr><td>a</td><td>b</td><td>3</td></tr></table>"
+    )
+
+    assert table.text.splitlines()[0] == "| Results |  | n |"
+
+
+def test_an_equation_laid_out_as_a_table_is_not_read_as_one() -> None:
+    """LaTeXML renders display equations as tables; the LaTeX is the content."""
+    from verbatim.html_source import parse_html_sections
+
+    sections = parse_html_sections(
+        '<table class="ltx_equation"><tr><td>'
+        '<math alttext="E = mc^2">E</math></td></tr></table>'
+    )
+
+    assert all(section.kind != "table" for section in sections)
+    assert "$E = mc^2$" in " ".join(section.text for section in sections)
+
+
+def test_a_malformed_span_cannot_build_an_enormous_row() -> None:
+    from verbatim.html_source import parse_html_sections
+
+    (table,) = parse_html_sections(
+        '<table class="ltx_tabular"><tr><td colspan="99999">x</td></tr></table>'
+    )
+
+    assert len(table.text.splitlines()[0].split("|")) <= 36

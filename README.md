@@ -77,6 +77,17 @@ arXiv-nonexclusive, 5% no-derivatives and 4% noncommercial.
 the author's TeX rather than from a printed page. A paper with no rendering is
 recorded as such, so it is asked for once and never again.
 
+Tables are read as tables. LaTeXML marks up every cell, so a results table
+becomes a Markdown pipe table carried as its own passage rather than being
+flattened into prose - "Person Corp Time Position Musk SpaceX 2002 CEO" gives a
+reader no way to see which four values are one row. Cells spanning rows or
+columns are placed in their real columns, which matters because 19% of the
+tables here use rowspan and 29% colspan, and ignoring a span shifts every later
+cell left so the table states something the paper does not. Display equations
+are laid out as tables too and are deliberately not read as such: their LaTeX
+already comes from each `<math>` element. Measured over 1,547 renderings: 9,343
+tables, 84,829 data rows.
+
 `references` reads each paper's bibliography out of its HTML rendering, where
 LaTeXML marks every entry as its own element rather than leaving a run of text
 to be guessed apart. An entry is resolved to an arXiv identifier or DOI only

@@ -14,10 +14,11 @@ import pymupdf4llm
 
 from verbatim.downloads import DownloadedPaper, file_sha256
 
-CHUNKER_VERSION = "7"
+CHUNKER_VERSION = "8"
 
 BODY = "body"
 REFERENCES = "references"
+TABLE = "table"
 
 # Layout-aware extraction turns the bibliography heading into a section, so a
 # whole-title match is both simpler and far more reliable than the earlier
@@ -57,11 +58,17 @@ class TextSpan:
 
 @dataclass(frozen=True)
 class Section:
-    """One heading's worth of text, and where it sits in the page."""
+    """One heading's worth of text, and where it sits in the page.
+
+    A table is carried as its own section rather than as prose inside one, so
+    that its rows survive chunking intact and a reader can be told that what
+    they are looking at is a table.
+    """
 
     path: tuple[str, ...]
     text: str
     char_start: int
+    kind: str = BODY
 
 
 @dataclass(frozen=True)
