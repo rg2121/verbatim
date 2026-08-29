@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run the test suite
+        # The suite is deliberately offline: every network and model call is
+        # behind an injectable seam, so CI needs no arXiv, no Ollama and no
+        # API key.
+        run: uv run --frozen pytest -q

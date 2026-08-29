@@ -278,3 +278,23 @@ uv run pytest
 
 The ingestion client uses arXiv's public metadata API. Before growing the corpus,
 review arXiv's API and bulk-access guidance.
+
+## Licence
+
+**AGPL-3.0-or-later.** Copyright (c) 2026 Rishab Gupta.
+
+This is not a default choice. The layout-aware PDF parsing depends on
+[PyMuPDF](https://pymupdf.readthedocs.io/), which its authors dual-license as
+AGPL-3.0 or commercial. Copyleft is sticky: a work that imports AGPL code and
+is then distributed must itself be AGPL, so a permissive licence here would
+have been incorrect rather than merely generous.
+
+What that means in practice:
+
+- Read it, run it, fork it, learn from it, modify it privately — freely.
+- Publish a modified version, or run it as a network service — then your source
+  must be available to your users under the same terms.
+
+Replacing PyMuPDF with a permissively licensed extractor (`pypdfium2`,
+`pdfminer.six`) would allow MIT, at the cost of section paths, reference
+detection and reading-order reconstruction. That trade was not worth making.

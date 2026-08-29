@@ -4,6 +4,16 @@ version = "0.1.0"
 description = "A citation-focused scientific literature research assistant"
 readme = "README.md"
 requires-python = ">=3.11"
+# AGPL because PyMuPDF, which does the layout-aware PDF parsing, is dual
+# licensed AGPL-3.0 or commercial. Importing it makes the combined work AGPL.
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "hosted-sdk>=0.121.0",
   "fastembed>=0.8.0",
@@ -21,9 +31,10 @@ dev = [
   "pytest>=8.0",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
 [build-system]
 requires = ["uv_build>=0.7.0,<0.8.0"]
 build-backend = "uv_build"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
