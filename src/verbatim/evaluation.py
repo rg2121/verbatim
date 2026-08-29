@@ -177,12 +177,23 @@ def evaluate(
     limit: int = 10,
     max_per_paper: int | None = None,
     reranker: object | None = None,
+    complete: Callable[[str, str], str] | None = None,
+    rewrites: int = 0,
+    hyde: bool = False,
 ) -> list[ModeScore]:
     """Score every retrieval mode on the same cases, so they are comparable.
 
     With a reranker, hybrid retrieves a wider shortlist and the reranker trims
     it, which is the only arrangement in which reranking could help.
     """
+    def expanded(query: str) -> Sequence[ChunkMatch]:
+        from verbatim.retrieval import expanded_search
+
+        return expanded_search(
+            corpus, embedder, query, complete=complete, rewrites=rewrites,
+            hyde=hyde, limit=limit, max_per_paper=max_per_paper,
+        )
+
     def hybrid(query: str) -> Sequence[ChunkMatch]:
         if reranker is None:
             return hybrid_search(corpus, embedder, query, limit=limit, max_per_paper=max_per_paper)
@@ -197,6 +208,10 @@ def evaluate(
         "vector": lambda q: vector_search(corpus, embedder, q, limit=limit),
         "hybrid": hybrid,
     }
+    # Only offered when a model is available to do the rewriting, so the
+    # comparison is against the same corpus rather than a silently skipped leg.
+    if complete is not None and (rewrites or hyde):
+        modes["hybrid+expansion"] = expanded
     return [score_mode(name, cases, retrieve) for name, retrieve in modes.items()]
 
 

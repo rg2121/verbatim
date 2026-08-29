@@ -230,6 +230,17 @@ For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and
 bypass the catalogue.
 
+`eval --rewrites N` and `eval --hyde` score two query-side treatments beside
+the existing modes. Rewriting asks a local model for other phrasings of the
+question and fuses a ranking from each, so a passage found by several
+phrasings rises; HyDE adds the sentence a paper answering the question would
+contain, which puts the query in the register of the passages rather than of
+the question. Both are off by default and unmeasured on this corpus, for the
+same reason the reranker is: hybrid retrieval scores mrr 0.940 here, and an
+unmeasured change is as likely to cost as to gain. The user's own words are
+always retrieved for and are never displaced by a rewrite, and if the model is
+unreachable both fall back to the original question rather than failing.
+
 ## What was tried and rejected
 
 Kept here because the negative results are the useful part.

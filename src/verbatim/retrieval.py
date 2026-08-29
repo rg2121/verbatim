@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 
 from verbatim.chunking import BODY
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
+from verbatim.expansion import (
+    dedupe_queries,
+    fuse_rankings,
+    hypothetical_answer,
+    rewrite_query,
+)
 from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
 
 # Standard RRF constant: large enough that the top few ranks are not dominated
@@ -120,6 +127,45 @@ def hybrid_search(
     if max_per_paper is not None:
         ordered = cap_per_paper(ordered, max_per_paper)
     return ordered[:limit]
+
+
+def expanded_search(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    query: str,
+    *,
+    complete: Callable[[str, str], str],
+    rewrites: int = 0,
+    hyde: bool = False,
+    limit: int = 10,
+    **options: object,
+) -> list[ChunkMatch]:
+    """Hybrid search over several phrasings of the same question.
+
+    Each phrasing is retrieved for separately and the rankings are fused, so a
+    passage found by more than one phrasing rises. The user's own words are
+    always among the phrasings and are never displaced.
+
+    With `hyde`, the vector leg is additionally given the sentence a paper
+    answering the question would contain, which puts the query in the register
+    of the passages rather than of the question.
+    """
+    queries = (
+        rewrite_query(complete, query, variants=rewrites) if rewrites else [query]
+    )
+    if hyde:
+        queries.append(hypothetical_answer(complete, query))
+    rankings = [
+        hybrid_search(corpus, embedder, phrasing, limit=limit, **options)  # type: ignore[arg-type]
+        for phrasing in dedupe_queries(queries)
+    ]
+    if len(rankings) == 1:
+        return rankings[0]
+    fused = fuse_rankings(rankings)
+    max_per_paper = options.get("max_per_paper")
+    if isinstance(max_per_paper, int):
+        fused = cap_per_paper(fused, max_per_paper)
+    return fused[:limit]
 
 
 def cap_per_paper(matches: list[ChunkMatch], max_per_paper: int) -> list[ChunkMatch]:

@@ -130,6 +130,17 @@ def run() -> None:
     eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
     eval_parser.add_argument("--max-per-paper", type=int, help="Diversity cap for hybrid")
+    eval_parser.add_argument(
+        "--llm", default=None, help="Ollama model used for query rewriting"
+    )
+    eval_parser.add_argument(
+        "--rewrites", type=int, default=0,
+        help="Also score retrieval over this many model-written rephrasings",
+    )
+    eval_parser.add_argument(
+        "--hyde", action="store_true",
+        help="Also score retrieval with a hypothetical answer added to the query",
+    )
 
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -378,10 +389,13 @@ def run() -> None:
         cases = load_cases(args.cases)
         embedder = FastEmbedEmbedder(model_name=args.model)
         with CorpusStore(args.state) as corpus:
+            expanding = args.rewrites or args.hyde
             scores = evaluate(
                 corpus, embedder, cases,
                 limit=args.limit, max_per_paper=args.max_per_paper,
                 reranker=CrossEncoderReranker() if args.rerank else None,
+                complete=_line_completion(args.llm) if expanding else None,
+                rewrites=args.rewrites, hyde=args.hyde,
             )
         print(f"{args.cases}")
         print(describe_case_mix(cases))
@@ -719,6 +733,16 @@ def run() -> None:
                 f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
                 f"corpus holds {exported}. Exported to {args.output}"
             )
+
+
+def _line_completion(model: str | None) -> "Callable[[str, str], str]":
+    """A plain text completion, for the query rewriting that expansion needs.
+
+    Answering uses a line protocol with a schema; rewriting wants prose back,
+    so it asks for the raw reply rather than going through that.
+    """
+    completion = OllamaCompletion(model or config.OLLAMA_MODEL)
+    return lambda system, user: completion.complete_text(system, user)
 
 
 def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:

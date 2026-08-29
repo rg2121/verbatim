@@ -230,6 +230,26 @@ class OllamaCompletion:
         self.timeout = config.OLLAMA_TIMEOUT if timeout is None else timeout
         self.model = model or config.OLLAMA_MODEL or self._first_available_model()
 
+    def complete_text(self, system: str, user: str) -> str:
+        """Ask for prose and return it unparsed.
+
+        Answering needs a structure and gets it through the line protocol.
+        Query rewriting wants sentences back, so it asks plainly rather than
+        being made to fit a protocol it has no use for.
+        """
+        body = self._post(
+            "/api/chat",
+            {
+                "model": self.model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        return str(body.get("message", {}).get("content", "")).strip()
+
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Elicit the answer as flat lines, then shape it like the JSON schema.
 
