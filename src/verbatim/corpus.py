@@ -47,7 +47,10 @@ RENAMED_COLUMNS: dict[str, tuple[str, str]] = {
 }
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Long enough for one stage's write to finish while another stage waits.
-BUSY_TIMEOUT_SECONDS = 60
+# Chunking commits in large batches and holds the write lock for a long time
+# while its FTS triggers run. A minute was not enough: it killed a six-hour
+# HTML fetch outright.
+BUSY_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)

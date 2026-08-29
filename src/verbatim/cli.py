@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 from pathlib import Path
 import time
 
@@ -452,7 +453,7 @@ def run() -> None:
 
     if args.command == "html":
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        fetched = missing = truncated = 0
+        fetched = missing = truncated = deferred = 0
         with CorpusStore(args.state) as corpus:
             pending = corpus.papers_without_html(args.limit)
             for position, arxiv_id in enumerate(pending):
@@ -463,34 +464,45 @@ def run() -> None:
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"  ! {arxiv_id}: {error}")
                     continue
-                if payload is None:
-                    # No TeX source, so no rendering. The PDF remains the
-                    # source, and the absence is recorded so this paper is
-                    # not asked for again on every later run.
-                    corpus.record_html_absent(arxiv_id, html_url_for(arxiv_id))
-                    missing += 1
-                    continue
-                path = args.output_dir / f"{arxiv_id.replace('/', '-')}.html"
-                path.write_bytes(payload)
-                source = HtmlSource(
-                    arxiv_id=arxiv_id, url=html_url_for(arxiv_id), local_path=str(path),
-                    sha256=hashlib.sha256(payload).hexdigest(), byte_count=len(payload),
-                )
-                # A rendering is only better input if it is the whole paper.
-                covered = html_completeness(corpus, source)
-                if covered < MIN_COMPLETENESS:
-                    corpus.record_html_source(
-                        source, usable=False,
-                        note=f"rendering covers {covered:.0%} of the PDF text",
+                # A write can lose a race with a long chunking transaction.
+                # Losing one paper to that is nothing - it is simply fetched
+                # again next run - but losing the remaining six hours of the
+                # run to it is what happened before this guard existed.
+                try:
+                    if payload is None:
+                        # No TeX source, so no rendering. The PDF remains the
+                        # source, and the absence is recorded so this paper is
+                        # not asked for again on every later run.
+                        corpus.record_html_absent(arxiv_id, html_url_for(arxiv_id))
+                        missing += 1
+                        continue
+                    path = args.output_dir / f"{arxiv_id.replace('/', '-')}.html"
+                    path.write_bytes(payload)
+                    source = HtmlSource(
+                        arxiv_id=arxiv_id, url=html_url_for(arxiv_id), local_path=str(path),
+                        sha256=hashlib.sha256(payload).hexdigest(), byte_count=len(payload),
                     )
-                    truncated += 1
-                else:
-                    corpus.record_html_source(source)
-                    fetched += 1
+                    # A rendering is only better input if it is the whole paper.
+                    covered = html_completeness(corpus, source)
+                    if covered < MIN_COMPLETENESS:
+                        corpus.record_html_source(
+                            source, usable=False,
+                            note=f"rendering covers {covered:.0%} of the PDF text",
+                        )
+                        truncated += 1
+                    else:
+                        corpus.record_html_source(source)
+                        fetched += 1
+                except sqlite3.OperationalError as error:
+                    deferred += 1
+                    print(f"  ! {arxiv_id} deferred: {error}")
+                    continue
                 print(f"  fetched {fetched}/{len(pending)}", end="\r", flush=True)
         print(
             f"Fetched {fetched} usable HTML renderings; {missing} papers have none, "
             f"{truncated} were truncated by arXiv's conversion (both use the PDF)."
+            + (f" {deferred} deferred to a later run because the database was busy."
+               if deferred else "")
         )
 
     if args.command == "references":
