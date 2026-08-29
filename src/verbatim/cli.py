@@ -27,7 +27,11 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
 import hashlib
 
-from verbatim.embedding import FastEmbedEmbedder, embed_pending
+from verbatim.embedding import (
+    FastEmbedEmbedder,
+    embed_pending,
+    embed_pending_papers,
+)
 from verbatim.html_source import (
     MIN_COMPLETENESS,
     completeness,
@@ -321,12 +325,17 @@ def run() -> None:
         with CorpusStore(args.state) as corpus:
             model = embedder.model
             index = SqliteVecIndex(corpus.connection, model.dimensions)
+            papers = SqlitePaperIndex(corpus.connection, model.dimensions)
             if args.rebuild:
-                print(f"Rebuilt the index with {index.rebuild(model.model_id)} vectors.")
+                print(
+                    f"Rebuilt the index with {index.rebuild(model.model_id)} passage "
+                    f"vectors and {papers.rebuild(model.model_id)} paper vectors."
+                )
             else:
                 change = index.sync(model.model_id)
+                paper_change = papers.sync(model.model_id)
                 print(f"Index synced: {change.added} added, {change.removed} removed; "
-                      f"{index.count()} vectors total.")
+                      f"{index.count()} passage vectors, {papers.count()} paper vectors.")
 
     if args.command == "licenses":
         with CorpusStore(args.state) as corpus:
@@ -403,11 +412,25 @@ def run() -> None:
                     f"  embedded {done}/{total}", end="\r", flush=True
                 ),
             )
+            # Abstracts are embedded in the same pass: they are one vector per
+            # paper against hundreds per paper of passages, so the cost is
+            # negligible and leaving them for a separate command would mean the
+            # two indexes could silently drift apart.
+            papers = embed_pending_papers(
+                corpus,
+                embedder,
+                batch_size=args.batch_size,
+                on_progress=lambda done, total: print(
+                    f"  embedded {done}/{total} abstracts", end="\r", flush=True
+                ),
+            )
             model = embedder.model
             stored = corpus.embedding_count(model.model_id)
+            stored_papers = corpus.paper_embedding_count(model.model_id)
         print(
-            f"Embedded {embedded} new chunks with {model.model_id} "
-            f"({model.dimensions}d); corpus holds {stored} vectors."
+            f"Embedded {embedded} new chunks and {papers} new abstracts with "
+            f"{model.model_id} ({model.dimensions}d); corpus holds {stored} "
+            f"passage vectors and {stored_papers} paper vectors."
         )
 
     if args.command == "search":

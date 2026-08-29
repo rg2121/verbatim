@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from verbatim import config
+from verbatim.arxiv import Paper
 from verbatim.corpus import CorpusStore, EmbeddingModel
 
 DEFAULT_MODEL_NAME = config.EMBEDDING_MODEL
@@ -103,6 +104,49 @@ def embed_pending(
             )
         corpus.record_embeddings(
             model.model_id, [(chunk.chunk_id, vector) for chunk, vector in zip(batch, vectors)]
+        )
+        if on_progress is not None:
+            on_progress(start + len(batch), len(pending))
+    return len(pending)
+
+
+def paper_subject_text(paper: Paper) -> str:
+    """The text that states what a paper is about.
+
+    Title and abstract together: the title alone is too short to embed well,
+    and the abstract alone loses terms that only appear in the title.
+    """
+    return f"{paper.title.strip()}\n\n{paper.summary.strip()}"
+
+
+def embed_pending_papers(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    *,
+    batch_size: int = 64,
+    limit: int | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Embed the title and abstract of every paper that has no vector yet.
+
+    Mirrors embed_pending, and is incremental on the same terms: a paper is
+    embedded only if it has no vector for this model.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    model = embedder.model
+    corpus.register_embedding_model(model)
+    pending = corpus.pending_paper_embeddings(model.model_id, limit=limit)
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start : start + batch_size]
+        vectors = embedder.embed_passages([paper_subject_text(paper) for paper in batch])
+        if len(vectors) != len(batch):
+            raise RuntimeError(
+                f"Embedder returned {len(vectors)} vectors for {len(batch)} papers"
+            )
+        corpus.record_paper_embeddings(
+            model.model_id,
+            [(paper.arxiv_id, vector) for paper, vector in zip(batch, vectors)],
         )
         if on_progress is not None:
             on_progress(start + len(batch), len(pending))

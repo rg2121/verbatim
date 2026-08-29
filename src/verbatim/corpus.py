@@ -772,6 +772,52 @@ class CorpusStore:
                 [(chunk_id, model_id, pack_vector(vector), now) for chunk_id, vector in vectors],
             )
 
+    def pending_paper_embeddings(
+        self, model_id: str, *, limit: int | None = None
+    ) -> list[Paper]:
+        """Current papers with no abstract vector for this model.
+
+        Only current versions: an abstract index exists to say what the corpus
+        is about, and superseded versions would answer that twice.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT p.* FROM papers AS p
+            WHERE p.is_latest = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM paper_embeddings AS e
+                  WHERE e.arxiv_id = p.arxiv_id AND e.model_id = ?
+              )
+            ORDER BY p.arxiv_id LIMIT ?
+            """,
+            (model_id, -1 if limit is None else limit),
+        ).fetchall()
+        return [_paper_from_row(row) for row in rows]
+
+    def record_paper_embeddings(
+        self, model_id: str, vectors: list[tuple[str, Sequence[float]]]
+    ) -> None:
+        """Store one vector per paper for the given model."""
+        now = _timestamp()
+        with self.connection:
+            self.connection.executemany(
+                """
+                INSERT INTO paper_embeddings (arxiv_id, model_id, vector, embedded_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(arxiv_id, model_id) DO UPDATE SET
+                    vector = excluded.vector,
+                    embedded_at = excluded.embedded_at
+                """,
+                [(arxiv_id, model_id, pack_vector(vector), now) for arxiv_id, vector in vectors],
+            )
+
+    def paper_embedding_count(self, model_id: str) -> int:
+        return int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM paper_embeddings WHERE model_id = ?", (model_id,)
+            ).fetchone()[0]
+        )
+
     def embedding_count(self, model_id: str) -> int:
         return int(
             self.connection.execute(
@@ -940,6 +986,19 @@ class CorpusStore:
                     created_at TEXT NOT NULL
                 );
 
+                -- One vector per paper, over its title and abstract. Separate
+                -- from `embeddings` because it answers a different question:
+                -- a chunk vector says what a passage mentions, a paper vector
+                -- says what the paper is about. A paper can mention anything
+                -- in passing; its abstract states its subject.
+                CREATE TABLE IF NOT EXISTS paper_embeddings (
+                    arxiv_id TEXT NOT NULL
+                        REFERENCES papers(arxiv_id) ON DELETE CASCADE,
+                    model_id TEXT NOT NULL REFERENCES embedding_models(model_id),
+                    vector BLOB NOT NULL,
+                    embedded_at TEXT NOT NULL,
+                    PRIMARY KEY (arxiv_id, model_id)
+                );
                 CREATE TABLE IF NOT EXISTS embeddings (
                     chunk_id TEXT NOT NULL
                         REFERENCES chunks(chunk_id) ON DELETE CASCADE,

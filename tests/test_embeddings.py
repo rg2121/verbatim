@@ -114,9 +114,11 @@ class StubEmbedder:
             model_id="stub", dimensions=dimensions, normalized=True, revision="v0"
         )
         self.batches: list[int] = []
+        self.seen: list[str] = []
 
     def embed_passages(self, texts):
         self.batches.append(len(texts))
+        self.seen.extend(texts)
         return [[float(len(text)), 0.0, 0.0, 0.0] for text in texts]
 
     def embed_query(self, text):
@@ -156,3 +158,38 @@ def test_embed_pending_rejects_a_mismatched_vector_count(tmp_path: Path) -> None
     with chunked_corpus(tmp_path, ["alpha"]) as corpus:
         with pytest.raises(RuntimeError, match="returned 0 vectors"):
             embed_pending(corpus, Broken())
+
+
+def test_abstracts_are_embedded_once_per_paper(tmp_path: Path) -> None:
+    """One vector per paper, and re-running embeds nothing new."""
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.embedding import embed_pending_papers
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1"), paper("2608.22222v1")])
+        embedder = StubEmbedder()
+
+        first = embed_pending_papers(corpus, embedder)
+        second = embed_pending_papers(corpus, embedder)
+        stored = corpus.paper_embedding_count(embedder.model.model_id)
+
+    assert (first, second, stored) == (2, 0, 2)
+    # What is embedded states the paper's subject: title and abstract.
+    assert embedder.seen[0].startswith("Paper 2608.11111v1")
+    assert "A test abstract." in embedder.seen[0]
+
+
+def test_only_the_current_version_of_a_paper_is_embedded(tmp_path: Path) -> None:
+    """The abstract index says what the corpus is about, once per paper."""
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.embedding import embed_pending_papers
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1")])
+        corpus.upsert_papers([paper("2608.11111v2")])
+
+        embedded = embed_pending_papers(corpus, StubEmbedder())
+
+    assert embedded == 1

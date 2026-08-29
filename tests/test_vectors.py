@@ -289,3 +289,48 @@ def test_index_sync_drops_vectors_whose_chunks_are_gone(tmp_path: Path) -> None:
 
     assert before == 2
     assert change.removed == 2
+
+
+def test_the_paper_index_finds_papers_by_subject(tmp_path: Path) -> None:
+    """Nearest-neighbour over abstracts, keyed by paper rather than passage."""
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.vectors import SqlitePaperIndex
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1"), paper("2608.22222v1")])
+        corpus.register_embedding_model(
+            EmbeddingModel(model_id="stub", dimensions=4, normalized=True, revision="v0")
+        )
+        corpus.record_paper_embeddings(
+            "stub", [("2608.11111v1", [1.0, 0.0, 0.0, 0.0]),
+                     ("2608.22222v1", [0.0, 1.0, 0.0, 0.0])]
+        )
+        index = SqlitePaperIndex(corpus.connection, dimensions=4)
+        added = index.sync("stub")
+        nearest = index.search([1.0, 0.0, 0.0, 0.0], limit=1)
+
+    assert added.added == 2
+    assert nearest[0][0] == "2608.11111v1"
+
+
+def test_the_paper_index_drops_vectors_the_corpus_no_longer_has(tmp_path: Path) -> None:
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.vectors import SqlitePaperIndex
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1")])
+        corpus.register_embedding_model(
+            EmbeddingModel(model_id="stub", dimensions=4, normalized=True, revision="v0")
+        )
+        corpus.record_paper_embeddings("stub", [("2608.11111v1", [1.0, 0.0, 0.0, 0.0])])
+        index = SqlitePaperIndex(corpus.connection, dimensions=4)
+        index.sync("stub")
+
+        corpus.connection.execute("DELETE FROM paper_embeddings")
+        corpus.connection.commit()
+        change = index.sync("stub")
+        remaining = index.count()
+
+    assert (change.removed, remaining) == (1, 0)
