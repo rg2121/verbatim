@@ -274,6 +274,34 @@ models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the righ
 passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
 
+## Using the corpus from an MCP client
+
+`verbatim mcp` serves the corpus over the Model Context Protocol on stdio,
+so a desktop assistant, a coding agent or an editor can search it directly. It offers
+the same four tools the built-in agent uses - `search_chunks`, `get_paper`,
+`list_papers`, `read_pages` - because both are front ends onto one set of
+operations rather than two implementations of it. All four are marked read-only.
+
+Results come back as JSON rather than prose, so the arXiv id, page or section
+and chunk id survive intact and the client can cite what it read.
+
+```json
+{
+  "mcpServers": {
+    "verbatim": {
+      "command": "uv",
+      "args": ["run", "verbatim", "mcp"],
+      "cwd": "/path/to/verbatim"
+    }
+  }
+}
+```
+
+The corpus is opened inside a single worker thread and every call is dispatched
+to it: SQLite connections belong to the thread that made them, and the tools
+block on SQLite and ONNX, so they must not run on the event loop serving the
+client.
+
 ## Known limitations
 
 **It will answer a question the corpus cannot answer.** This is the largest

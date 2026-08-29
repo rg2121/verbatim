@@ -185,6 +185,12 @@ def run() -> None:
         "--dry-run", action="store_true", help="List what would be added and stop"
     )
 
+    mcp_parser = subparsers.add_parser(
+        "mcp", help="Serve the corpus over the Model Context Protocol, on stdio"
+    )
+    mcp_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    mcp_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
     embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     embed_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
@@ -477,6 +483,11 @@ def run() -> None:
             )
             for cited, citations in reading_list:
                 print(f"  {citations:>4} citing papers   arXiv:{cited}")
+
+    if args.command == "mcp":
+        from verbatim.mcp_server import serve
+
+        serve(state=args.state, embedding_model=args.model)
 
     if args.command == "grow":
         with CorpusStore(args.state) as corpus:

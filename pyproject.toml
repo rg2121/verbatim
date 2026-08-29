@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
   "fastembed>=0.8.0",
+  "mcp>=1.2.0",
   "pymupdf>=1.26.0",
   "pymupdf4llm>=1.28.2",
   "python-dotenv>=1.2.2",
