@@ -54,6 +54,7 @@ from verbatim.evaluation import (
     render_report,
 )
 from verbatim.references import references_from_file
+from verbatim.research import research
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.vectors import SqliteVecIndex
@@ -262,6 +263,11 @@ def run() -> None:
     ask_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES, help="Passages to retrieve")
     ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
     ask_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    ask_parser.add_argument(
+        "--plan", action="store_true",
+        help="Split the question into parts and retrieve for each, for "
+             "compound questions one retrieval cannot reach all of",
+    )
     ask_parser.add_argument(
         "--llm",
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
@@ -651,17 +657,33 @@ def run() -> None:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
                 return
             embedder = FastEmbedEmbedder(model_name=args.model)
-            matches = hybrid_search(
-                corpus,
-                embedder,
-                args.question,
-                limit=args.passages,
-                arxiv_id=args.arxiv_id,
-                max_per_paper=args.max_per_paper,
-                include_references=args.include_references,
-            )
             completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-            answer = answer_from_matches(corpus, completion, args.question, matches)
+            plan: list[str] = []
+            if args.plan:
+                answer, plan, matches = research(
+                    corpus, embedder, completion,
+                    lambda system, user: completion.complete_text(system, user),
+                    args.question,
+                    per_part=max(args.passages // 3, 2),
+                )
+            else:
+                matches = hybrid_search(
+                    corpus,
+                    embedder,
+                    args.question,
+                    limit=args.passages,
+                    arxiv_id=args.arxiv_id,
+                    max_per_paper=args.max_per_paper,
+                    include_references=args.include_references,
+                )
+                answer = answer_from_matches(corpus, completion, args.question, matches)
+            if len(plan) > 1:
+                # Shown, not hidden: a reader who disagrees with how the
+                # question was split needs to see the split to say so.
+                print("Answered in parts:")
+                for part in plan:
+                    print(f"  - {part}")
+                print()
             subject = None
             if matches and not args.no_subject_check:
                 # Asked what the passages discuss rather than whether they are

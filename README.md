@@ -241,6 +241,20 @@ unmeasured change is as likely to cost as to gain. The user's own words are
 always retrieved for and are never displaced by a rewrite, and if the model is
 unreachable both fall back to the original question rather than failing.
 
+`ask --plan` answers a compound question in parts. One retrieval serves a
+single-subject question well and a two-subject one badly: for "how do MOND and
+dark matter differ in clusters", the passages matching the whole sentence come
+from whichever half the wording leans towards. The question is split, each part
+is retrieved for with its own quota rather than fused - fusion is what lets one
+half crowd out the other - and the answer is written once by the same
+verified-citation path. The split is printed, because a reader who disagrees
+with how a question was divided needs to see the division.
+
+It is a multi-step loop, not a swarm of agents, and it is off by default:
+splitting a question that never needed splitting buys three mediocre
+retrievals in place of one good one. Whether it helps is a measurement waiting
+on the eval set, not a claim.
+
 ## What was tried and rejected
 
 Kept here because the negative results are the useful part.
