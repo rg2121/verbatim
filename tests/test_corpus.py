@@ -198,3 +198,57 @@ def test_downloads_can_be_gated_on_what_a_licence_permits(tmp_path: Path) -> Non
     assert len(ungated) == 4
     assert len(reported) == 3            # any licence at all, including nonexclusive
     assert [p.arxiv_id for p in open_only] == ["2608.00001v1"]
+
+
+def downloaded(corpus: CorpusStore, tmp_path: Path, arxiv_id: str) -> DownloadedPaper:
+    """Store one paper with a PDF, so it is eligible for HTML fetching."""
+    pdf = tmp_path / f"{arxiv_id}.pdf"
+    pdf.write_bytes(f"%PDF-1.7 {arxiv_id}\n%%EOF\n".encode())
+    record = DownloadedPaper(
+        arxiv_id=arxiv_id,
+        source_url=f"https://arxiv.org/abs/{arxiv_id}",
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+        license_url=None,
+        local_path=str(pdf),
+        sha256=file_sha256(pdf),
+        byte_count=pdf.stat().st_size,
+    )
+    corpus.upsert_papers([paper(arxiv_id)])
+    corpus.record_downloads([record])
+    return record
+
+
+def test_a_paper_with_no_html_rendering_is_not_asked_for_twice(tmp_path: Path) -> None:
+    """Most papers have a rendering; the rest must not be re-fetched forever."""
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        downloaded(corpus, tmp_path, "2608.11111v1")
+        assert corpus.papers_without_html(10) == ["2608.11111v1"]
+
+        corpus.record_html_absent("2608.11111v1", "https://arxiv.org/html/2608.11111v1")
+
+        assert corpus.papers_without_html(10) == []
+
+
+def test_a_paper_ruled_out_is_never_offered_for_chunking(tmp_path: Path) -> None:
+    """It has no bytes to chunk, so it must not reach the HTML chunker."""
+    from verbatim.html_source import HtmlSource
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        downloaded(corpus, tmp_path, "2608.11111v1")
+        downloaded(corpus, tmp_path, "2608.22222v1")
+        corpus.record_html_absent("2608.11111v1", "https://arxiv.org/html/2608.11111v1")
+        html = tmp_path / "2608.22222v1.html"
+        html.write_text("<html><body><p>Body.</p></body></html>", encoding="utf-8")
+        corpus.record_html_source(
+            HtmlSource(
+                arxiv_id="2608.22222v1",
+                url="https://arxiv.org/html/2608.22222v1",
+                local_path=str(html),
+                sha256=file_sha256(html),
+                byte_count=html.stat().st_size,
+            )
+        )
+
+        pending = corpus.html_sources_pending_chunking(chunker_fingerprint(1200, 200))
+
+    assert [source.arxiv_id for source in pending] == ["2608.22222v1"]

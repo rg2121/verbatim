@@ -361,7 +361,10 @@ def run() -> None:
                     print(f"  ! {arxiv_id}: {error}")
                     continue
                 if payload is None:
-                    # No TeX source, so no rendering. The PDF remains the source.
+                    # No TeX source, so no rendering. The PDF remains the
+                    # source, and the absence is recorded so this paper is
+                    # not asked for again on every later run.
+                    corpus.record_html_absent(arxiv_id, html_url_for(arxiv_id))
                     missing += 1
                     continue
                 path = args.output_dir / f"{arxiv_id.replace('/', '-')}.html"

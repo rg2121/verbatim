@@ -16,7 +16,7 @@ from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 from verbatim.html_source import HtmlSource
 
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
@@ -248,6 +248,25 @@ class CorpusStore:
                  source.byte_count, _timestamp()),
             )
 
+    def record_html_absent(self, arxiv_id: str, url: str) -> None:
+        """Record that arXiv publishes no HTML rendering of this paper.
+
+        Without this the paper looks unchecked forever, and every later run
+        asks arXiv for a page that has already been shown not to exist. The
+        absence is a finding, so it is stored like any other.
+        """
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO html_sources (arxiv_id, url, fetched_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(arxiv_id) DO UPDATE SET
+                    url = excluded.url, fetched_at = excluded.fetched_at,
+                    local_path = NULL, sha256 = NULL, byte_count = NULL
+                """,
+                (arxiv_id, url, _timestamp()),
+            )
+
     def papers_without_html(self, limit: int) -> list[str]:
         """Downloaded papers whose HTML has not been fetched or ruled out."""
         rows = self.connection.execute(
@@ -268,9 +287,10 @@ class CorpusStore:
         rows = self.connection.execute(
             """
             SELECT * FROM html_sources
-            WHERE chunked_at IS NULL
+            WHERE sha256 IS NOT NULL
+              AND (chunked_at IS NULL
                OR chunked_with IS NOT ?
-               OR chunked_sha256 IS NOT sha256
+               OR chunked_sha256 IS NOT sha256)
             ORDER BY arxiv_id LIMIT ?
             """,
             (fingerprint, -1 if limit is None else limit),
@@ -837,9 +857,12 @@ class CorpusStore:
                 CREATE TABLE IF NOT EXISTS html_sources (
                     arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
                     url TEXT NOT NULL,
-                    local_path TEXT NOT NULL,
-                    sha256 TEXT NOT NULL,
-                    byte_count INTEGER NOT NULL,
+                    -- NULL in all three means arXiv has no rendering for this
+                    -- paper: it was checked and ruled out, so it is not asked
+                    -- for again. The PDF stays its source.
+                    local_path TEXT,
+                    sha256 TEXT,
+                    byte_count INTEGER,
                     fetched_at TEXT NOT NULL,
                     chunked_at TEXT,
                     chunked_with TEXT,
@@ -902,6 +925,7 @@ class CorpusStore:
                 self._backfill_search_index()
             self._add_missing_columns()
             self._retire_renamed_columns()
+            self._relax_html_source_nullability()
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
@@ -924,6 +948,38 @@ class CorpusStore:
         database upgraded in place would otherwise never match its own chunks.
         """
         self.connection.execute("INSERT INTO chunks_fts (chunks_fts) VALUES ('rebuild')")
+
+    def _relax_html_source_nullability(self) -> None:
+        """Let html_sources record a paper arXiv publishes no rendering for.
+
+        The first version of the table required a path and a checksum, so the
+        only representable state was "we hold this rendering". A paper with no
+        rendering could not be written down, and so looked unchecked forever.
+        """
+        columns = self.connection.execute("PRAGMA table_info(html_sources)").fetchall()
+        if not any(c["name"] == "sha256" and c["notnull"] for c in columns):
+            return
+        self.connection.executescript(
+            """
+            CREATE TABLE html_sources_rebuilt (
+                arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
+                url TEXT NOT NULL,
+                local_path TEXT,
+                sha256 TEXT,
+                byte_count INTEGER,
+                fetched_at TEXT NOT NULL,
+                chunked_at TEXT,
+                chunked_with TEXT,
+                chunked_sha256 TEXT
+            );
+            INSERT INTO html_sources_rebuilt
+                SELECT arxiv_id, url, local_path, sha256, byte_count,
+                       fetched_at, chunked_at, chunked_with, chunked_sha256
+                FROM html_sources;
+            DROP TABLE html_sources;
+            ALTER TABLE html_sources_rebuilt RENAME TO html_sources;
+            """
+        )
 
     def _retire_renamed_columns(self) -> None:
         """Finish the pdf_sha256 -> source_sha256 rename on an older database.
