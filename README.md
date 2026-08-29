@@ -10,12 +10,14 @@ snapshot, the PDFs, the chunk export — is derived and can be rebuilt from it.
 ```
 arXiv API ──sync──▶ corpus.db  papers           every version seen, newest current
                               downloads        local PDFs, checksummed
-                              chunks           page-aware passages + char offsets
+                              html_sources     local HTML renderings, checksummed
+                              chunks           passages + char offsets, from either
                               chunks_fts       BM25 keyword index
                               embeddings       one vector per chunk per model
                               vec_chunks       nearest-neighbour index
                     │
            download ──▶ data/pdfs/*.pdf
+               html ──▶ data/html/*.html
               chunk ──▶ data/chunks.jsonl   (export, not the store)
               embed ──▶ vectors in corpus.db
              search ──▶ ranked passages with citations
@@ -68,13 +70,25 @@ explicit licence in arXiv metadata, or `--license open` to restrict to papers
 whose licence actually permits redistribution and derivatives. The two are not
 the same: arXiv's default licence grants **arXiv** the right to distribute and
 grants you nothing, and CC terms carrying NC or ND rule out commercial use and
-training respectively. Across 5,050 papers the split is 49% open, 40%
-arXiv-nonexclusive, 5% no-derivatives, 4% noncommercial.
+training respectively. Of the 5,453 papers looked up so far, 49% are open, 41%
+arXiv-nonexclusive, 5% no-derivatives and 4% noncommercial.
 
-`chunk` re-verifies each PDF checksum, then extracts page-aware passages for
-only those files whose chunker version, chunker parameters, or bytes have
-changed since they were last chunked. It also refreshes `data/chunks.jsonl`,
-which is an export rather than the store.
+`html` fetches arXiv's HTML rendering of each paper, which is generated from
+the author's TeX rather than from a printed page. A paper with no rendering is
+recorded as such, so it is asked for once and never again.
+
+`chunk` re-verifies each file's checksum, then extracts passages for only those
+whose chunker version, chunker parameters, or bytes have changed. **A paper
+with an HTML rendering is read from it in preference to its PDF**, because the
+rendering is better input: maths survives as the author's own LaTeX rather than
+the character soup a PDF extractor produces, sectioning comes from the author's
+commands rather than a guess at font sizes, and none of the ligature or
+reading-order damage of PDF extraction arises. Measured against PDF extraction
+of the same papers, the words that HTML "loses" are almost entirely words the
+PDF broke across lines — `asafunctionoftheeffective`, `characterlevel`. HTML
+has no pages, so such a passage is cited by its section instead. A paper is
+held as exactly one chunking, from one source. `chunk` also refreshes
+`data/chunks.jsonl`, which is an export rather than the store.
 
 `embed` vectorises chunks that have no vector for the chosen model, in batches,
 and is a no-op on re-run. It uses `BAAI/bge-small-en-v1.5` through ONNX, so
@@ -104,6 +118,7 @@ long ingest stays observable:
   papers     59                             59 current
   licences   19 known                       40 to look up          verbatim licenses
   pdfs       35 (0.1 GB)                    24 to fetch            verbatim download
+  html       33 (2 have none)               24 to check            verbatim html
   chunks     3,184 (2,326 body / 858 refs)  0 pdfs to chunk        verbatim chunk
   vectors    3,184                          0 to embed             verbatim embed
 ```
@@ -212,6 +227,29 @@ that to the question arithmetically.
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the right
 passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
+
+## Known limitations
+
+**It will answer a question the corpus cannot answer.** This is the largest
+open defect. Retrieval always returns its best matches, and those matches are
+passed to the model whether or not they bear on the question; asked about a
+subject the corpus does not cover, the system produces a fluent answer whose
+citations are all individually genuine. Every quote is verified against the
+stored passage, so nothing is fabricated — but a verified quote proves the
+words exist, not that they answer the question. The subject check catches
+roughly half of these. See *What was tried and rejected* for the four
+approaches that did not work.
+
+**Scanned PDFs yield nothing.** Text extraction assumes a text layer; OCR is
+not implemented. Affected papers chunk to little or nothing rather than
+failing loudly.
+
+**Retrieval quality is measured on one 48-case set** written alongside the
+system, over a corpus in physics and machine learning. The numbers here do not
+transfer to another corpus without re-measuring.
+
+**Licence classification is only as good as arXiv's metadata**, and the
+`unknown` class is large. `unknown` means unknown, not permissive.
 
 ## Principles
 
