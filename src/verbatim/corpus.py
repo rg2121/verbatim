@@ -326,8 +326,11 @@ class CorpusStore:
             SELECT d.* FROM downloads AS d
             WHERE NOT EXISTS (
                 -- HTML is the better source where it exists, so a paper with
-                -- one is never chunked from its PDF.
-                SELECT 1 FROM html_sources AS h WHERE h.arxiv_id = d.arxiv_id
+                -- one is never chunked from its PDF. A row with no checksum
+                -- records that arXiv has no rendering, and such a paper must
+                -- still be chunked from its PDF or it is never chunked at all.
+                SELECT 1 FROM html_sources AS h
+                WHERE h.arxiv_id = d.arxiv_id AND h.sha256 IS NOT NULL
             )
               AND (d.chunked_at IS NULL
                    OR d.chunked_with IS NOT ?
@@ -466,13 +469,31 @@ class CorpusStore:
                 " ON d.arxiv_id = p.arxiv_id"
                 " WHERE p.is_latest = 1 AND p.pdf_url IS NOT NULL AND d.arxiv_id IS NULL"
             ),
+            "html_available": scalar(
+                "SELECT COUNT(*) FROM html_sources WHERE sha256 IS NOT NULL"
+            ),
+            "html_absent": scalar("SELECT COUNT(*) FROM html_sources WHERE sha256 IS NULL"),
+            "html_pending": scalar(
+                "SELECT COUNT(*) FROM downloads AS d LEFT JOIN html_sources AS h"
+                " ON h.arxiv_id = d.arxiv_id WHERE h.arxiv_id IS NULL"
+            ),
             "chunks": scalar("SELECT COUNT(*) FROM chunks"),
+            "chunks_html": scalar("SELECT COUNT(*) FROM chunks WHERE source_kind = 'html'"),
             "chunks_body": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'body'"),
             "chunks_references": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'references'"),
             "chunking_pending": scalar(
-                "SELECT COUNT(*) FROM downloads"
-                " WHERE chunked_at IS NULL OR chunked_with IS NOT ? OR chunked_sha256 IS NOT sha256",
-                (chunker_fingerprint,),
+                "SELECT ("
+                "  SELECT COUNT(*) FROM downloads AS d WHERE NOT EXISTS ("
+                "    SELECT 1 FROM html_sources AS h"
+                "    WHERE h.arxiv_id = d.arxiv_id AND h.sha256 IS NOT NULL)"
+                "  AND (d.chunked_at IS NULL OR d.chunked_with IS NOT ?"
+                "       OR d.chunked_sha256 IS NOT d.sha256)"
+                ") + ("
+                "  SELECT COUNT(*) FROM html_sources WHERE sha256 IS NOT NULL"
+                "  AND (chunked_at IS NULL OR chunked_with IS NOT ?"
+                "       OR chunked_sha256 IS NOT sha256)"
+                ")",
+                (chunker_fingerprint, chunker_fingerprint),
             ),
             "vectors": scalar("SELECT COUNT(*) FROM embeddings WHERE model_id = ?", (model_id,)),
             "embedding_pending": scalar(

@@ -279,3 +279,14 @@ def test_reading_a_paper_from_html_supersedes_its_pdf_chunks(tmp_path: Path) -> 
 
     assert [c.source_kind for c in remaining] == ["html"]
     assert stale == []  # the superseded text leaves the search index too
+
+
+def test_a_paper_arxiv_has_no_html_for_is_still_chunked_from_its_pdf(tmp_path: Path) -> None:
+    """Ruling a paper out must not remove it from the corpus entirely."""
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        downloaded(corpus, tmp_path, "2608.11111v1")
+        corpus.record_html_absent("2608.11111v1", "https://arxiv.org/html/2608.11111v1")
+
+        pending = corpus.pending_chunking(chunker_fingerprint(1200, 200))
+
+    assert [d.arxiv_id for d in pending] == ["2608.11111v1"]

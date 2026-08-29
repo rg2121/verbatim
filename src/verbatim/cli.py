@@ -580,9 +580,11 @@ def format_stats(counts: dict[str, int]) -> str:
          f"{counts['licences_pending']:,} to look up", "verbatim licenses"),
         ("pdfs", f"{counts['downloaded']:,} ({gigabytes:.1f} GB)",
          f"{counts['downloads_pending']:,} to fetch", "verbatim download"),
+        ("html", f"{counts['html_available']:,} ({counts['html_absent']:,} have none)",
+         f"{counts['html_pending']:,} to check", "verbatim html"),
         ("chunks", f"{counts['chunks']:,} "
                    f"({counts['chunks_body']:,} body / {counts['chunks_references']:,} refs)",
-         f"{counts['chunking_pending']:,} pdfs to chunk", "verbatim chunk"),
+         f"{counts['chunking_pending']:,} papers to chunk", "verbatim chunk"),
         ("vectors", f"{counts['vectors']:,}",
          f"{counts['embedding_pending']:,} to embed", "verbatim embed"),
     ]
