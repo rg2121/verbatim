@@ -34,8 +34,8 @@ from verbatim.chunking import (
     Section,
     chunk_page,
     chunker_fingerprint,
-    clean_markdown_text,
     mark_references,
+    normalize_page_text,
 )
 from verbatim.downloads import file_sha256
 from verbatim.fetching import fetch
@@ -49,6 +49,14 @@ SKIP_CONTENT = {"script", "style", "nav", "header", "footer", "button", "select"
 # arXiv injects a "Report GitHub Issue" dialog whose prose reads like content.
 # Matched on class or id, since it carries no distinguishing tag.
 SKIP_MARKED = ("modal", "ltx_page_navbar", "ltx_align_center ltx_flex")
+# These have no end tag, so a skip started on one would never be closed.
+VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+                 "link", "meta", "param", "source", "track", "wbr"}
+# Inline elements are joined with spaces, which leaves "[ 6 ] ." where the
+# paper reads "[6].". Applied to prose only; maths is kept exactly as written.
+SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([.,;:!?%)\]}])")
+SPACE_AFTER_OPENING = re.compile(r"([(\[{])\s+")
+MATHS_SPAN = re.compile(r"\$[^$]*\$")
 # Long enough to be prose, short enough to exclude a whole swallowed document.
 MAX_HEADING_LENGTH = 120
 WHITESPACE = re.compile(r"\s+")
@@ -70,19 +78,27 @@ class ArxivHTMLParser(HTMLParser):
         self._body: list[str] = []
         self._heading: list[str] | None = None
         self._heading_level = 0
-        self._skip_depth = 0
-        self._skip_tags: list[str] = []
+        self._skip_tag: str | None = None
+        self._skip_nesting = 0
         self._math_depth = 0
         self._offset = 0
 
     # -- structure -------------------------------------------------------
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._skip_tag is not None:
+            # Nothing inside a skipped region is read, not even its maths. A
+            # nested element of the same name is counted so that its end tag
+            # does not close the region early.
+            if tag == self._skip_tag and tag not in VOID_ELEMENTS:
+                self._skip_nesting += 1
+            return
         attributes = dict(attrs)
         marker = f"{attributes.get('class') or ''} {attributes.get('id') or ''}"
         if tag in SKIP_CONTENT or any(m in marker for m in SKIP_MARKED):
-            # Track the tag so the matching end tag closes the right skip.
-            self._skip_tags.append(tag)
-            self._skip_depth += 1
+            if tag in VOID_ELEMENTS:
+                return  # no content to skip, and no end tag to wait for
+            self._skip_tag = tag
+            self._skip_nesting = 1
             return
         if tag == "math":
             # Take the LaTeX and ignore the rendered glyphs inside, which would
@@ -100,11 +116,11 @@ class ArxivHTMLParser(HTMLParser):
             self._heading_level = int(tag[1])
 
     def handle_endtag(self, tag: str) -> None:
-        if self._skip_tags and self._skip_tags[-1] == tag:
-            self._skip_tags.pop()
-            self._skip_depth = max(0, self._skip_depth - 1)
-            return
-        if self._skip_depth:
+        if self._skip_tag is not None:
+            if tag == self._skip_tag:
+                self._skip_nesting -= 1
+                if self._skip_nesting <= 0:
+                    self._skip_tag, self._skip_nesting = None, 0
             return
         if tag == "math":
             self._math_depth = max(0, self._math_depth - 1)
@@ -118,7 +134,7 @@ class ArxivHTMLParser(HTMLParser):
                 self._stack.append(_Block(self._heading_level, title))
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth or self._math_depth:
+        if self._skip_tag is not None or self._math_depth:
             return
         if self._heading is not None:
             self._heading.append(data)
@@ -129,11 +145,11 @@ class ArxivHTMLParser(HTMLParser):
     def _emit(self, text: str) -> None:
         if self._heading is not None:
             self._heading.append(text)
-        elif not self._skip_depth:
+        elif self._skip_tag is None:
             self._body.append(text)
 
     def _flush(self) -> None:
-        text = clean_markdown_text(" ".join(self._body))
+        text = tidy_spacing(normalize_page_text(" ".join(self._body)))
         self._body = []
         if not text:
             return
@@ -149,6 +165,28 @@ class ArxivHTMLParser(HTMLParser):
     def close(self) -> None:  # noqa: D102 - inherited
         super().close()
         self._flush()
+
+
+def tidy_spacing(text: str) -> str:
+    """Close up the spaces left by joining inline elements, sparing maths.
+
+    Every inline element is joined with a space, so a citation the paper prints
+    as "[6]." arrives as "[ 6 ] .". Maths spans are copied through untouched:
+    the LaTeX is the reason for reading HTML at all, and it is not ours to
+    reformat.
+    """
+    pieces: list[str] = []
+    end = 0
+    for span in MATHS_SPAN.finditer(text):
+        pieces.append(_tidy_prose(text[end : span.start()]))
+        pieces.append(span.group(0))
+        end = span.end()
+    pieces.append(_tidy_prose(text[end:]))
+    return "".join(pieces)
+
+
+def _tidy_prose(text: str) -> str:
+    return SPACE_AFTER_OPENING.sub(r"\1", SPACE_BEFORE_PUNCTUATION.sub(r"\1", text))
 
 
 def parse_html_sections(html: str) -> list[Section]:

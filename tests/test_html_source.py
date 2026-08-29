@@ -126,7 +126,8 @@ def test_an_html_chunk_id_cannot_collide_with_a_pdf_one(tmp_path) -> None:
     # Same paper, section and position, but derived from a different namespace.
     from verbatim.html_source import _html_chunk_id
     source = _source(tmp_path, "<h1>T</h1><p>Body.</p>")
-    assert _html_chunk_id(source, 1, 0, "6:1200:200") == chunks[0].chunk_id
+    from verbatim.chunking import chunker_fingerprint
+    assert _html_chunk_id(source, 1, 0, chunker_fingerprint(1200, 200)) == chunks[0].chunk_id
 
 
 def test_a_citation_from_html_says_section_not_page() -> None:
@@ -145,3 +146,63 @@ def test_a_citation_from_html_says_section_not_page() -> None:
     assert "p. 3" in rendered("pdf")
     assert "section 3" in rendered("html")
     assert "p. 3" not in rendered("html")
+
+
+def test_maths_in_a_skipped_region_does_not_silence_the_rest_of_the_paper() -> None:
+    """A table of contents sits inside <nav> and routinely contains maths.
+
+    Its <math> tags used to be counted as open while their end tags were
+    discarded with the rest of the skipped region, so the parser believed it
+    was inside an equation for the remainder of the file and dropped every
+    heading and every character after it. One paper lost 89% of its text.
+    """
+    from verbatim.html_source import parse_html_sections
+
+    sections = parse_html_sections(
+        "<nav><ul><li><a>2 The $g$ term</a>"
+        '<math alttext="g_{\\mu\\nu}">g</math></li></ul></nav>'
+        "<h2>2 The metric</h2><p>The body survives.</p>"
+    )
+
+    assert [s.path for s in sections] == [("2 The metric",)]
+    assert sections[0].text == "The body survives."
+
+
+def test_a_nested_element_does_not_close_a_skipped_region_early() -> None:
+    from verbatim.html_source import parse_html_sections
+
+    sections = parse_html_sections(
+        "<nav><div><div>menu text</div>still menu</div></nav><p>Real body.</p>"
+    )
+
+    assert [s.text for s in sections] == ["Real body."]
+
+
+def test_latex_subscripts_and_operators_survive_intact() -> None:
+    """Markdown cleaning read _ as emphasis and ate every subscript.
+
+    $g_{\\mu\\nu}$ was stored as $g{\\mu\\nu}$ - a different tensor, and not one
+    the author wrote. HTML carries no Markdown, so it must not be stripped.
+    """
+    from verbatim.html_source import parse_html_sections
+
+    (section,) = parse_html_sections(
+        '<p>The metric <math alttext="g_{\\mu\\nu}">g</math> and '
+        '<math alttext="a * b">ab</math> and <math alttext="a &lt; b">a</math>.</p>'
+    )
+
+    assert "$g_{\\mu\\nu}$" in section.text
+    assert "$a * b$" in section.text
+    assert "$a < b$" in section.text
+
+
+def test_joining_inline_elements_does_not_leave_gaps_before_punctuation() -> None:
+    from verbatim.html_source import parse_html_sections, tidy_spacing
+
+    (section,) = parse_html_sections(
+        "<p>a Yang-Mills connection <cite>[<a>6</a>]</cite> .</p>"
+    )
+
+    assert section.text == "a Yang-Mills connection [6]."
+    # Maths is never reformatted: the LaTeX is why HTML is read at all.
+    assert tidy_spacing(r"see ( a ) with $( a , b )$ .") == r"see (a) with $( a , b )$."

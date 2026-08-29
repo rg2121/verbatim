@@ -14,7 +14,7 @@ import pymupdf4llm
 
 from verbatim.downloads import DownloadedPaper, file_sha256
 
-CHUNKER_VERSION = "6"
+CHUNKER_VERSION = "7"
 
 BODY = "body"
 REFERENCES = "references"
