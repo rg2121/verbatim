@@ -30,6 +30,10 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "section_path": "TEXT NOT NULL DEFAULT ''",
     },
     "papers": {"license_checked_at": "TEXT", "license_class": "TEXT"},
+    "html_sources": {
+        "usable": "INTEGER NOT NULL DEFAULT 1",
+        "note": "TEXT",
+    },
     "downloads": {
         "chunked_at": "TEXT",
         "chunked_with": "TEXT",
@@ -231,21 +235,29 @@ class CorpusStore:
         ).fetchall()
         return [_download_from_row(row) for row in rows]
 
-    def record_html_source(self, source: HtmlSource) -> None:
-        """Record one locally held HTML rendering."""
+    def record_html_source(
+        self, source: HtmlSource, *, usable: bool = True, note: str | None = None
+    ) -> None:
+        """Record one locally held HTML rendering.
+
+        An unusable rendering is kept, with its checksum and the reason: the
+        bytes are evidence for the decision and allow it to be revisited when
+        arXiv re-renders the paper.
+        """
         with self.connection:
             self.connection.execute(
                 """
                 INSERT INTO html_sources (
-                    arxiv_id, url, local_path, sha256, byte_count, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    arxiv_id, url, local_path, sha256, byte_count, usable, note, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(arxiv_id) DO UPDATE SET
                     url = excluded.url, local_path = excluded.local_path,
                     sha256 = excluded.sha256, byte_count = excluded.byte_count,
+                    usable = excluded.usable, note = excluded.note,
                     fetched_at = excluded.fetched_at
                 """,
                 (source.arxiv_id, source.url, source.local_path, source.sha256,
-                 source.byte_count, _timestamp()),
+                 source.byte_count, int(usable), note, _timestamp()),
             )
 
     def record_html_absent(self, arxiv_id: str, url: str) -> None:
@@ -258,11 +270,12 @@ class CorpusStore:
         with self.connection:
             self.connection.execute(
                 """
-                INSERT INTO html_sources (arxiv_id, url, fetched_at)
-                VALUES (?, ?, ?)
+                INSERT INTO html_sources (arxiv_id, url, usable, note, fetched_at)
+                VALUES (?, ?, 0, 'arXiv publishes no HTML rendering', ?)
                 ON CONFLICT(arxiv_id) DO UPDATE SET
                     url = excluded.url, fetched_at = excluded.fetched_at,
-                    local_path = NULL, sha256 = NULL, byte_count = NULL
+                    local_path = NULL, sha256 = NULL, byte_count = NULL,
+                    usable = 0, note = excluded.note
                 """,
                 (arxiv_id, url, _timestamp()),
             )
@@ -287,7 +300,7 @@ class CorpusStore:
         rows = self.connection.execute(
             """
             SELECT * FROM html_sources
-            WHERE sha256 IS NOT NULL
+            WHERE usable = 1
               AND (chunked_at IS NULL
                OR chunked_with IS NOT ?
                OR chunked_sha256 IS NOT sha256)
@@ -312,6 +325,13 @@ class CorpusStore:
                 [(now, fingerprint, s.sha256, s.arxiv_id) for s in sources],
             )
 
+    def download_for(self, arxiv_id: str) -> DownloadedPaper | None:
+        """The stored PDF for one paper, if it has been downloaded."""
+        row = self.connection.execute(
+            "SELECT * FROM downloads WHERE arxiv_id = ?", (arxiv_id,)
+        ).fetchone()
+        return None if row is None else _download_from_row(row)
+
     def pending_chunking(
         self, fingerprint: str, *, limit: int | None = None
     ) -> list[DownloadedPaper]:
@@ -330,7 +350,7 @@ class CorpusStore:
                 -- records that arXiv has no rendering, and such a paper must
                 -- still be chunked from its PDF or it is never chunked at all.
                 SELECT 1 FROM html_sources AS h
-                WHERE h.arxiv_id = d.arxiv_id AND h.sha256 IS NOT NULL
+                WHERE h.arxiv_id = d.arxiv_id AND h.usable = 1
             )
               AND (d.chunked_at IS NULL
                    OR d.chunked_with IS NOT ?
@@ -469,10 +489,8 @@ class CorpusStore:
                 " ON d.arxiv_id = p.arxiv_id"
                 " WHERE p.is_latest = 1 AND p.pdf_url IS NOT NULL AND d.arxiv_id IS NULL"
             ),
-            "html_available": scalar(
-                "SELECT COUNT(*) FROM html_sources WHERE sha256 IS NOT NULL"
-            ),
-            "html_absent": scalar("SELECT COUNT(*) FROM html_sources WHERE sha256 IS NULL"),
+            "html_available": scalar("SELECT COUNT(*) FROM html_sources WHERE usable = 1"),
+            "html_absent": scalar("SELECT COUNT(*) FROM html_sources WHERE usable = 0"),
             "html_pending": scalar(
                 "SELECT COUNT(*) FROM downloads AS d LEFT JOIN html_sources AS h"
                 " ON h.arxiv_id = d.arxiv_id WHERE h.arxiv_id IS NULL"
@@ -485,11 +503,11 @@ class CorpusStore:
                 "SELECT ("
                 "  SELECT COUNT(*) FROM downloads AS d WHERE NOT EXISTS ("
                 "    SELECT 1 FROM html_sources AS h"
-                "    WHERE h.arxiv_id = d.arxiv_id AND h.sha256 IS NOT NULL)"
+                "    WHERE h.arxiv_id = d.arxiv_id AND h.usable = 1)"
                 "  AND (d.chunked_at IS NULL OR d.chunked_with IS NOT ?"
                 "       OR d.chunked_sha256 IS NOT d.sha256)"
                 ") + ("
-                "  SELECT COUNT(*) FROM html_sources WHERE sha256 IS NOT NULL"
+                "  SELECT COUNT(*) FROM html_sources WHERE usable = 1"
                 "  AND (chunked_at IS NULL OR chunked_with IS NOT ?"
                 "       OR chunked_sha256 IS NOT sha256)"
                 ")",
@@ -885,6 +903,12 @@ class CorpusStore:
                     local_path TEXT,
                     sha256 TEXT,
                     byte_count INTEGER,
+                    -- Whether this rendering is fit to be the paper's source.
+                    -- 0 covers both "arXiv has none" and "arXiv has one but it
+                    -- is truncated"; either way the PDF is used instead, and
+                    -- note says which it was.
+                    usable INTEGER NOT NULL DEFAULT 1,
+                    note TEXT,
                     fetched_at TEXT NOT NULL,
                     chunked_at TEXT,
                     chunked_with TEXT,
@@ -948,6 +972,13 @@ class CorpusStore:
             self._add_missing_columns()
             self._retire_renamed_columns()
             self._relax_html_source_nullability()
+            # `usable` defaults to 1, which is wrong for rows written before it
+            # existed to record that arXiv has no rendering at all.
+            self.connection.execute(
+                "UPDATE html_sources SET usable = 0,"
+                " note = COALESCE(note, 'arXiv publishes no HTML rendering')"
+                " WHERE sha256 IS NULL AND usable = 1"
+            )
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)

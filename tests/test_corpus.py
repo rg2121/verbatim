@@ -202,20 +202,9 @@ def test_downloads_can_be_gated_on_what_a_licence_permits(tmp_path: Path) -> Non
 
 def downloaded(corpus: CorpusStore, tmp_path: Path, arxiv_id: str) -> DownloadedPaper:
     """Store one paper with a PDF, so it is eligible for HTML fetching."""
-    pdf = tmp_path / f"{arxiv_id}.pdf"
-    pdf.write_bytes(f"%PDF-1.7 {arxiv_id}\n%%EOF\n".encode())
-    record = DownloadedPaper(
-        arxiv_id=arxiv_id,
-        source_url=f"https://arxiv.org/abs/{arxiv_id}",
-        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
-        license_url=None,
-        local_path=str(pdf),
-        sha256=file_sha256(pdf),
-        byte_count=pdf.stat().st_size,
-    )
-    corpus.upsert_papers([paper(arxiv_id)])
-    corpus.record_downloads([record])
-    return record
+    from helpers import store_paper
+
+    return store_paper(corpus, tmp_path, arxiv_id)
 
 
 def test_a_paper_with_no_html_rendering_is_not_asked_for_twice(tmp_path: Path) -> None:

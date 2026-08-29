@@ -215,6 +215,25 @@ class HtmlSource:
         return asdict(self)
 
 
+# arXiv's LaTeXML conversion sometimes fails partway and the partial result is
+# published anyway. Measured over 170 papers, the text of a healthy rendering
+# runs from 0.66 to 4.55 times its PDF's (median 1.09 - LaTeX markup adds
+# characters), while a truncated one measured 0.08. Nothing legitimate came
+# near the threshold from either side.
+MIN_COMPLETENESS = 0.5
+
+
+def completeness(html_text_length: int, pdf_text_length: int) -> float:
+    """How much of the PDF's text the rendering accounts for.
+
+    A rendering covering almost none of its paper is worse than the PDF it
+    would replace, so this decides whether it is used at all.
+    """
+    if pdf_text_length <= 0:
+        return 1.0  # nothing to compare against; trust the rendering
+    return html_text_length / pdf_text_length
+
+
 def html_url_for(arxiv_id: str) -> str:
     return f"{ARXIV_HTML_URL}/{arxiv_id}"
 

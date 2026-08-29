@@ -18,17 +18,25 @@ from verbatim.answers import (
 from verbatim.arxiv import fetch_license, fetch_metadata, license_class
 from verbatim.sync import format_sync_report, sync_category
 from verbatim.citations import render_bibliography
-from verbatim.chunking import chunker_fingerprint, extract_pdf_chunks
+from verbatim.chunking import (
+    chunker_fingerprint,
+    extract_pdf_chunks,
+    extract_plain_pages_from_pdf,
+    normalize_page_text,
+)
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim import config
 import hashlib
 
 from verbatim.embedding import FastEmbedEmbedder, embed_pending
 from verbatim.html_source import (
+    MIN_COMPLETENESS,
+    completeness,
     HtmlSource,
     extract_html_chunks,
     fetch_html,
     html_url_for,
+    parse_html_sections,
 )
 from verbatim.evaluation import evaluate, load_cases, render_report
 from verbatim.reranking import CrossEncoderReranker, rerank
@@ -349,7 +357,7 @@ def run() -> None:
 
     if args.command == "html":
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        fetched = missing = 0
+        fetched = missing = truncated = 0
         with CorpusStore(args.state) as corpus:
             pending = corpus.papers_without_html(args.limit)
             for position, arxiv_id in enumerate(pending):
@@ -369,15 +377,26 @@ def run() -> None:
                     continue
                 path = args.output_dir / f"{arxiv_id.replace('/', '-')}.html"
                 path.write_bytes(payload)
-                corpus.record_html_source(
-                    HtmlSource(
-                        arxiv_id=arxiv_id, url=html_url_for(arxiv_id), local_path=str(path),
-                        sha256=hashlib.sha256(payload).hexdigest(), byte_count=len(payload),
-                    )
+                source = HtmlSource(
+                    arxiv_id=arxiv_id, url=html_url_for(arxiv_id), local_path=str(path),
+                    sha256=hashlib.sha256(payload).hexdigest(), byte_count=len(payload),
                 )
-                fetched += 1
+                # A rendering is only better input if it is the whole paper.
+                covered = html_completeness(corpus, source)
+                if covered < MIN_COMPLETENESS:
+                    corpus.record_html_source(
+                        source, usable=False,
+                        note=f"rendering covers {covered:.0%} of the PDF text",
+                    )
+                    truncated += 1
+                else:
+                    corpus.record_html_source(source)
+                    fetched += 1
                 print(f"  fetched {fetched}/{len(pending)}", end="\r", flush=True)
-        print(f"Fetched {fetched} HTML renderings; {missing} papers have none (PDF-only).")
+        print(
+            f"Fetched {fetched} usable HTML renderings; {missing} papers have none, "
+            f"{truncated} were truncated by arXiv's conversion (both use the PDF)."
+        )
 
     if args.command == "embed":
         embedder = FastEmbedEmbedder(model_name=args.model)
@@ -569,6 +588,30 @@ def _merge_downloads(
     by_id = {download.arxiv_id: download for download in existing_downloads}
     by_id.update({download.arxiv_id: download for download in new_downloads})
     return list(by_id.values())
+
+
+def html_completeness(corpus: CorpusStore, source: HtmlSource) -> float:
+    """Compare a rendering's text against its own PDF's.
+
+    Plain extraction is used rather than the layout-aware path: this only needs
+    a length, and paying 50x for one would make fetching the corpus far slower.
+    """
+    download = corpus.download_for(source.arxiv_id)
+    if download is None:
+        return 1.0  # no PDF to compare against
+    try:
+        pdf_text = normalize_page_text(
+            " ".join(extract_plain_pages_from_pdf(Path(download.local_path)))
+        )
+        html_text = " ".join(
+            section.text
+            for section in parse_html_sections(
+                Path(source.local_path).read_text(encoding="utf-8", errors="replace")
+            )
+        )
+    except (OSError, RuntimeError, ValueError):
+        return 1.0  # unreadable PDF is not evidence against the rendering
+    return completeness(len(html_text), len(pdf_text))
 
 
 def format_stats(counts: dict[str, int]) -> str:

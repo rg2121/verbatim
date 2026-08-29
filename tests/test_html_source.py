@@ -206,3 +206,43 @@ def test_joining_inline_elements_does_not_leave_gaps_before_punctuation() -> Non
     assert section.text == "a Yang-Mills connection [6]."
     # Maths is never reformatted: the LaTeX is why HTML is read at all.
     assert tidy_spacing(r"see ( a ) with $( a , b )$ .") == r"see (a) with $( a , b )$."
+
+
+def test_a_truncated_rendering_is_measured_as_incomplete() -> None:
+    """arXiv publishes partial output when LaTeXML fails partway through."""
+    from verbatim.html_source import MIN_COMPLETENESS, completeness
+
+    assert completeness(11_586, 140_826) < MIN_COMPLETENESS  # a real case
+    assert completeness(21_368, 15_403) >= MIN_COMPLETENESS  # LaTeX adds characters
+    # Nothing to compare against is not evidence against the rendering.
+    assert completeness(5_000, 0) == 1.0
+
+
+def test_an_unusable_rendering_keeps_its_bytes_and_its_reason(tmp_path) -> None:
+    from helpers import store_paper
+    from verbatim.chunking import chunker_fingerprint
+    from verbatim.corpus import CorpusStore
+    from verbatim.html_source import HtmlSource
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        store_paper(corpus, tmp_path, "2608.11111v1")
+        page = tmp_path / "2608.11111v1.html"
+        page.write_text("<p>Only the abstract.</p>", encoding="utf-8")
+        corpus.record_html_source(
+            HtmlSource(arxiv_id="2608.11111v1", url="https://arxiv.org/html/2608.11111v1",
+                       local_path=str(page), sha256="c" * 64, byte_count=page.stat().st_size),
+            usable=False, note="rendering covers 8% of the PDF text",
+        )
+
+        row = corpus.connection.execute(
+            "SELECT * FROM html_sources WHERE arxiv_id = ?", ("2608.11111v1",)
+        ).fetchone()
+        # Not offered as a source, but the paper still gets chunked from its PDF.
+        pending_html = corpus.html_sources_pending_chunking(chunker_fingerprint(1200, 200))
+        pending_pdf = corpus.pending_chunking(chunker_fingerprint(1200, 200))
+
+    assert row["usable"] == 0
+    assert row["sha256"] == "c" * 64  # the evidence for the decision is kept
+    assert "8%" in row["note"]
+    assert pending_html == []
+    assert [d.arxiv_id for d in pending_pdf] == ["2608.11111v1"]

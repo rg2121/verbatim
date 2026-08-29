@@ -50,3 +50,11 @@ def chunked_corpus(tmp_path: Path, pages_by_paper: dict[str, list[str]]) -> Corp
             extract_pdf_chunks([record], extract_pages=lambda _, captured=pages: captured)
         )
     return corpus
+
+
+def store_paper(corpus: CorpusStore, tmp_path: Path, arxiv_id: str) -> DownloadedPaper:
+    """Store one paper and its PDF, so it is eligible for HTML fetching."""
+    record = downloaded(tmp_path, arxiv_id)
+    corpus.upsert_papers([paper(arxiv_id)])
+    corpus.record_downloads([record])
+    return record
