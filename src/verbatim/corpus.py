@@ -356,17 +356,18 @@ class CorpusStore:
             )
 
     def record_chunks(self, chunks: list[Chunk]) -> None:
-        """Replace the stored chunks for every PDF represented in `chunks`.
+        """Replace the stored chunks for every paper represented in `chunks`.
 
-        Re-chunking a PDF supersedes its previous chunks entirely, so the table
-        always holds exactly one chunking of each file.
+        A paper is held as exactly one chunking, from one source. Deleting only
+        the chunks sharing a checksum would leave a paper's PDF chunks behind
+        when it was re-read from its HTML, so the same passages would sit in
+        the index twice, under two sources, and be retrieved twice.
         """
         now = _timestamp()
         with self.connection:
-            for arxiv_id, source_sha256 in {(chunk.arxiv_id, chunk.source_sha256) for chunk in chunks}:
+            for arxiv_id in {chunk.arxiv_id for chunk in chunks}:
                 self.connection.execute(
-                    "DELETE FROM chunks WHERE arxiv_id = ? AND source_sha256 = ?",
-                    (arxiv_id, source_sha256),
+                    "DELETE FROM chunks WHERE arxiv_id = ?", (arxiv_id,)
                 )
             self.connection.executemany(
                 """

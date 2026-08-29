@@ -252,3 +252,30 @@ def test_a_paper_ruled_out_is_never_offered_for_chunking(tmp_path: Path) -> None
         pending = corpus.html_sources_pending_chunking(chunker_fingerprint(1200, 200))
 
     assert [source.arxiv_id for source in pending] == ["2608.22222v1"]
+
+
+def test_reading_a_paper_from_html_supersedes_its_pdf_chunks(tmp_path: Path) -> None:
+    """A paper is one chunking from one source, never both at once."""
+    from verbatim.chunking import Chunk
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        record = downloaded(corpus, tmp_path, "2608.11111v1")
+        corpus.record_chunks(
+            extract_pdf_chunks([record], extract_pages=lambda _: ["From the PDF."])
+        )
+        assert len(corpus.all_chunks()) == 1
+
+        corpus.record_chunks([
+            Chunk(
+                chunk_id="html0001", arxiv_id="2608.11111v1",
+                source_url=record.source_url, license_url=None,
+                source_sha256="a" * 64, page_number=1, chunk_index=0,
+                char_start=0, char_end=13, text="From the HTML.",
+                chunker_version=chunker_fingerprint(1200, 200), source_kind="html",
+            )
+        ])
+        remaining = corpus.all_chunks()
+        stale = corpus.search_chunks("PDF")
+
+    assert [c.source_kind for c in remaining] == ["html"]
+    assert stale == []  # the superseded text leaves the search index too
