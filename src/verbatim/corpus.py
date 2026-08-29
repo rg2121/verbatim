@@ -344,18 +344,30 @@ class CorpusStore:
         return None if row is None else _download_from_row(row)
 
     def pending_chunking(
-        self, fingerprint: str, *, limit: int | None = None
+        self,
+        fingerprint: str,
+        *,
+        limit: int | None = None,
+        require_html_checked: bool = False,
     ) -> list[DownloadedPaper]:
         """Return PDFs whose stored chunks do not match the current chunker.
 
         Re-chunking is needed when a PDF has never been chunked, when the
         chunker version or its parameters changed, or when the file on disk was
         replaced since it was last chunked.
+
+        `require_html_checked` holds back papers whose HTML has not been looked
+        for yet. Without it, chunking during an unfinished `html` run reads a
+        paper from its PDF, and the rendering that arrives minutes later throws
+        that work away along with every vector made from it. It is off by
+        default because a corpus where `html` is never run must still chunk.
         """
         rows = self.connection.execute(
-            """
+            f"""
             SELECT d.* FROM downloads AS d
-            WHERE NOT EXISTS (
+            WHERE {"EXISTS (SELECT 1 FROM html_sources AS c WHERE c.arxiv_id = d.arxiv_id) AND"
+                   if require_html_checked else ""}
+            NOT EXISTS (
                 -- HTML is the better source where it exists, so a paper with
                 -- one is never chunked from its PDF. A row with no checksum
                 -- records that arXiv has no rendering, and such a paper must

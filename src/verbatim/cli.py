@@ -296,6 +296,11 @@ def run() -> None:
     chunk_parser.add_argument("--chunk-size", type=int, default=config.CHUNK_SIZE)
     chunk_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
     chunk_parser.add_argument("--limit", type=int, help="Chunk at most this many PDFs this run")
+    chunk_parser.add_argument(
+        "--only-checked", action="store_true",
+        help="Skip papers whose HTML has not been looked for yet, so an "
+             "unfinished 'html' run cannot cause work to be redone",
+    )
     chunk_parser.add_argument("--batch-size", type=int, default=config.CHUNK_BATCH_SIZE,
                               help="PDFs held in memory at once; bounds peak memory")
     args = parser.parse_args()
@@ -707,7 +712,11 @@ def run() -> None:
                 remaining = None if args.limit is None else max(args.limit - len(html_pending), 0)
                 pending = (
                     [] if remaining == 0
-                    else corpus.pending_chunking(fingerprint, limit=remaining)
+                    else corpus.pending_chunking(
+                        fingerprint,
+                        limit=remaining,
+                        require_html_checked=args.only_checked,
+                    )
                 )
                 # Extraction holds roughly 11MB per PDF and never plateaus, so
                 # chunking five thousand at once would need tens of gigabytes.

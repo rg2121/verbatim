@@ -293,3 +293,27 @@ def test_two_stages_can_write_to_the_corpus_at_once(tmp_path: Path) -> None:
 
     assert mode == "wal"
     assert stored == {"2608.11111v1", "2608.22222v1"}
+
+
+def test_a_paper_whose_html_is_unchecked_can_be_held_back_from_chunking(
+    tmp_path: Path,
+) -> None:
+    """Chunking during an unfinished html run would read the PDF and be redone.
+
+    The rendering arrives minutes later, the paper is re-chunked from it, and
+    every vector made from the PDF passages is thrown away with them.
+    """
+    from verbatim.html_source import HtmlSource
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        downloaded(corpus, tmp_path, "2608.11111v1")  # never checked for HTML
+        downloaded(corpus, tmp_path, "2608.22222v1")
+        corpus.record_html_absent("2608.22222v1", "https://arxiv.org/html/2608.22222v1")
+        fingerprint = chunker_fingerprint(1200, 200)
+
+        everything = corpus.pending_chunking(fingerprint)
+        settled = corpus.pending_chunking(fingerprint, require_html_checked=True)
+
+    assert [d.arxiv_id for d in everything] == ["2608.11111v1", "2608.22222v1"]
+    # Only the paper whose HTML question has been answered, and answered "none".
+    assert [d.arxiv_id for d in settled] == ["2608.22222v1"]
