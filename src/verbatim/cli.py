@@ -185,6 +185,17 @@ def run() -> None:
         "--dry-run", action="store_true", help="List what would be added and stop"
     )
 
+    serve_parser = subparsers.add_parser(
+        "serve", help="Serve the corpus over HTTP, with a search page"
+    )
+    serve_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    serve_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Loopback by default: the corpus is other people's papers under mixed licences",
+    )
+
     mcp_parser = subparsers.add_parser(
         "mcp", help="Serve the corpus over the Model Context Protocol, on stdio"
     )
@@ -490,6 +501,14 @@ def run() -> None:
             )
             for cited, citations in reading_list:
                 print(f"  {citations:>4} citing papers   arXiv:{cited}")
+
+    if args.command == "serve":
+        from verbatim.web import serve as serve_http
+
+        serve_http(
+            state=args.state, embedding_model=args.model,
+            host=args.host, port=args.port,
+        )
 
     if args.command == "mcp":
         from verbatim.mcp_server import serve

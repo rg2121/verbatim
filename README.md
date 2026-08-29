@@ -274,6 +274,27 @@ models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the righ
 passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
 
+## Serving it over HTTP
+
+`verbatim serve` runs a small FastAPI service with a search page at `/`,
+a JSON API under `/api`, and generated OpenAPI docs at `/docs`.
+
+```
+verbatim serve --port 8000
+```
+
+| route | returns |
+|---|---|
+| `GET /api/search?q=&mode=&limit=&arxiv_id=` | passages, each with its locator, licence and source URL |
+| `GET /api/papers/{arxiv_id}` | one paper's metadata, or 404 |
+| `GET /api/stats` | the same pipeline counts `stats` prints |
+
+It binds to loopback unless `--host` says otherwise: the corpus is 26 GB of
+other people's papers under mixed licences, and putting that on a network is a
+decision rather than a default. The page is one file with no bundler and no
+external requests, since the pipeline runs offline once the corpus is built and
+a page that reached a CDN would quietly undo that.
+
 ## Using the corpus from an MCP client
 
 `verbatim mcp` serves the corpus over the Model Context Protocol on stdio,

@@ -20,6 +20,15 @@ class Embedder(Protocol):
     """Anything that can turn text into vectors of a fixed width."""
 
     @property
+    def model_id(self) -> str:
+        """The identity of the vectors this embedder makes, without loading it.
+
+        Callers that only need to name the vectors - counting them, syncing the
+        index - should not pay seconds of ONNX startup to ask.
+        """
+        return f"{self.model_name}+context" if self.with_context else self.model_name
+
+    @property
     def model(self) -> EmbeddingModel: ...
 
     def embed_passages(self, texts: Sequence[str]) -> list[list[float]]: ...
@@ -45,6 +54,15 @@ class FastEmbedEmbedder:
     with_context: bool = config.EMBED_WITH_CONTEXT
     _encoder: object | None = None
     _model: EmbeddingModel | None = None
+
+    @property
+    def model_id(self) -> str:
+        """The identity of the vectors this embedder makes, without loading it.
+
+        Callers that only need to name the vectors - counting them, syncing the
+        index - should not pay seconds of ONNX startup to ask.
+        """
+        return f"{self.model_name}+context" if self.with_context else self.model_name
 
     @property
     def model(self) -> EmbeddingModel:
@@ -79,7 +97,7 @@ class FastEmbedEmbedder:
             if item["model"] == self.model_name
         )
         self._model = EmbeddingModel(
-            model_id=f"{self.model_name}+context" if self.with_context else self.model_name,
+            model_id=self.model_id,
             dimensions=int(description["dim"]),
             normalized=True,
             revision=str(description.get("sources", {}).get("hf", self.model_name)),
