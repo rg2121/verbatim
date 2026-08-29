@@ -279,3 +279,17 @@ def test_a_paper_arxiv_has_no_html_for_is_still_chunked_from_its_pdf(tmp_path: P
         pending = corpus.pending_chunking(chunker_fingerprint(1200, 200))
 
     assert [d.arxiv_id for d in pending] == ["2608.11111v1"]
+
+
+def test_two_stages_can_write_to_the_corpus_at_once(tmp_path: Path) -> None:
+    """Stages run for hours; a second one must wait, not fail immediately."""
+    database = tmp_path / "corpus.db"
+    with CorpusStore(database) as first, CorpusStore(database) as second:
+        mode = first.connection.execute("PRAGMA journal_mode").fetchone()[0]
+        first.upsert_papers([paper("2608.11111v1")])
+        # Under the default journal this read would fail while a write is open.
+        second.upsert_papers([paper("2608.22222v1")])
+        stored = set(second.papers_by_id(["2608.11111v1", "2608.22222v1"]))
+
+    assert mode == "wal"
+    assert stored == {"2608.11111v1", "2608.22222v1"}

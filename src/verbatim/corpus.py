@@ -45,6 +45,8 @@ RENAMED_COLUMNS: dict[str, tuple[str, str]] = {
     "chunks": ("pdf_sha256", "source_sha256"),
 }
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
+# Long enough for one stage's write to finish while another stage waits.
+BUSY_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -77,9 +79,17 @@ class CorpusStore:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path)
+        self.connection = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
+        # Stages run for hours, and the point of `stats` is to watch one while
+        # it runs. Under the default rollback journal a reader and a writer
+        # cannot overlap at all, and a second writer fails at once rather than
+        # waiting - which is how a licence backfill and a chunking run
+        # collided. WAL lets readers proceed during a write, and the busy
+        # timeout makes a second writer wait its turn instead of failing.
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        self.connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
         self._initialize()
 
     def __enter__(self) -> CorpusStore:
