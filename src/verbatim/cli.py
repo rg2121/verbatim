@@ -543,7 +543,7 @@ def run() -> None:
                 # reference can name a withdrawn or mistyped one.
                 missing += len(batch) - len(papers)
                 summary = corpus.upsert_papers(papers)
-                added += summary.added
+                added += summary.inserted
                 print(f"  added {added}/{len(wanted)}", end="\r", flush=True)
         print(
             f"Added {added} papers the corpus was citing and did not hold"
