@@ -42,22 +42,46 @@
 # expect_papers lists every paper that genuinely answers the question, because
 # the question is "did you find an answer", not "did you find this exact paper".
 {"question": "what is the einstein field equation in flat space approximation?", "expect_papers": ["2608.04063v1", "2607.28448v1", "2605.10620v2"], "note": "source=user; gr-qc papers now outrank the educational GR one"}
-{"question": "what is the speed of light near jupiter?", "expect_none": true, "note": "source=user; a gr-qc paper models Jupiter's effect on modified gravity but does not answer this"}
+{"question": "what is the speed of light near jupiter?", "expect_none": true, "note": "source=user; a gr-qc paper models Jupiter's effect on modified gravity but does not answer this; 'jupiter' appears in 2 abstracts of 7,551", "unanswerable_kind": "no_coverage"}
 {"question": "what is the penrose diagram?", "expect_papers": ["2608.02767v1"], "note": "source=user; NOW ANSWERABLE - shows the Penrose diagram of an RN black hole"}
 {"question": "what is quantum field theory in curved spacetime?", "expect_papers": ["2602.07330v3"], "note": "source=user; NOW ANSWERABLE - QFT on a deformed 1+1 spacetime"}
 {"question": "what are fiber bundles?", "expect_papers": ["2608.01283v1", "2607.16099v2"], "note": "source=user; NOW ANSWERABLE but borderline - fiber bundles as ML machinery and as gauge bundles, not as a primer"}
-{"question": "what is a tensor?", "expect_none": true, "note": "source=user; tensors are used everywhere, defined nowhere"}
-{"question": "what is the tensor space of information?", "expect_none": true, "note": "source=user; no such construction in corpus"}
+{"question": "what is a tensor?", "expect_none": true, "note": "source=user; tensors are used everywhere, defined nowhere; 'tensor' appears in 177 abstracts; none defines one", "unanswerable_kind": "no_answer"}
+{"question": "what is the tensor space of information?", "expect_none": true, "note": "source=user; no such construction in corpus; every term is well covered; the concept itself is not a subject here", "unanswerable_kind": "no_answer"}
 {"question": "what is entropy?", "expect_papers": ["2407.12288v5", "2403.14606v4"], "note": "source=user; the differentiable-programming paper defines it directly"}
 {"question": "what is information theory?", "expect_papers": ["2407.12288v5"], "note": "source=user"}
 {"question": "what is the role of entropy in information theory?", "expect_papers": ["2407.12288v5", "2605.21554v3"], "note": "source=user; a cosmic-web paper also applies Shannon entropy"}
 {"question": "what is artificial intelligence?", "expect_papers": ["2608.03413v1", "2602.08079v2"], "note": "source=user"}
-{"question": "what is the role of AI in cosmology?", "expect_none": true, "note": "source=user; AI-in-physics papers exist, none specifically on cosmology"}
-{"question": "what is cosmology in curved spacetime?", "expect_none": true, "note": "source=user; borderline - hep-th spacetime papers are not cosmology"}
+{"question": "what is the role of AI in cosmology?", "expect_none": true, "note": "source=user; AI-in-physics papers exist, none specifically on cosmology; 'cosmology' appears in 120 abstracts; none is about AI's role in it", "unanswerable_kind": "no_answer"}
+{"question": "what is cosmology in curved spacetime?", "expect_none": true, "note": "source=user; borderline - hep-th spacetime papers are not cosmology; 'curved' 24, 'cosmology' 120; covered vocabulary, no paper answers this", "unanswerable_kind": "no_answer"}
 {"question": "what is the cosmological constant?", "expect_papers": ["2512.16941v3", "2605.30139v2", "2607.23374v1"], "note": "source=user; astro-ph.CO papers now state the cosmological constant problem directly"}
 {"question": "what is the nature of time near a black hole?", "expect_papers": ["2607.29662v1", "2606.29704v3"], "note": "source=user; NOW ANSWERABLE - late-time growth near a Schwarzschild horizon"}
 {"question": "what is neuroscience?", "expect_papers": ["2508.10051v2", "2605.12485v2"], "note": "source=user; NOW ANSWERABLE via q-bio.NC"}
-{"question": "what is the name of the farthest star from the earth?", "expect_none": true, "note": "source=user; matches 'farthest' and 'star' but concerns detectable neutron stars"}
+{"question": "what is the name of the farthest star from the earth?", "expect_none": true, "note": "source=user; matches 'farthest' and 'star' but concerns detectable neutron stars; 'farthest' appears in 1 abstract of 7,551", "unanswerable_kind": "no_coverage"}
 {"question": "what is nuclear fusion?", "expect_papers": ["2607.27024v1", "2607.17238v1"], "note": "source=user; NOW ANSWERABLE - a fusion device paper"}
 {"question": "what is nuclear fission?", "expect_papers": ["2607.04148v1", "2504.17275v3"], "note": "source=user; NOW ANSWERABLE - fission product yields, opens by defining it"}
 {"question": "what is the nuclear force?", "expect_papers": ["2608.03976v1", "2607.07551v1", "2607.22887v1"], "note": "source=user; nucl-th papers now outrank the lattice model"}
+# Natural-language questions with a verified answering paper.
+{"question": "how does the coherent motion of a cluster relative to the CMB change the SZ signal?", "expect_papers": ["2608.07404v1"], "note": "source=corpus; kinematic SZ effect, boost operator treatment"}
+{"question": "does a background magnetic field assist chiral symmetry breaking in de Sitter space?", "expect_papers": ["2608.07270v1"], "note": "source=corpus; magnetic catalysis via the NJL model in de Sitter"}
+{"question": "when does tensor backreaction matter for primordial black hole production in inflation?", "expect_papers": ["2608.07264v1"], "note": "source=corpus; second-order backreaction in ultra-slow-roll"}
+{"question": "can entanglement between the inflaton and its perturbations affect observable spectra?", "expect_papers": ["2608.07164v1"], "note": "source=corpus; Wheeler-DeWitt solutions with Gaussian wave packets"}
+{"question": "what happens to the charge state of a barium ion after double-beta decay in xenon?", "expect_papers": ["2608.07156v1"], "note": "source=corpus; barium tagging recombination channels"}
+{"question": "can a generalized entropy be reconstructed as an effective nonlocal gravity?", "expect_papers": ["2608.07046v1"], "note": "source=corpus; entropy-geometry correspondence, several entropy families"}
+{"question": "can gamma-ray burst luminosity correlations be calibrated without assuming a cosmology?", "expect_papers": ["2608.07044v1"], "note": "source=corpus; Dainotti correlations with Bayesian neural networks"}
+{"question": "how is the image of a Schwarzschild black hole with a thin accretion disk simulated?", "expect_papers": ["2608.07031v1"], "note": "source=corpus; photon trajectories in Schwarzschild geometry"}
+{"question": "how would a dark matter halo change the shadow of Sgr A* or M87*?", "expect_papers": ["2608.06924v1"], "note": "source=corpus; cold versus scalar field dark matter halo imprints"}
+{"question": "what causes the finite-time peak in spread complexity?", "expect_papers": ["2608.07412v1"], "note": "source=corpus; spread complexity from local spectral statistics"}
+{"question": "how are quiver-invariant dualities realized on brane tilings?", "expect_papers": ["2608.07269v1"], "note": "source=corpus; tilting mutations across toric phases"}
+{"question": "can the two-sided Bogoliubov inequality be generalized to von Neumann algebras?", "expect_papers": ["2608.07246v1"], "note": "source=corpus; free energy bounds in arbitrary von Neumann algebras"}
+{"question": "can black hole superradiance probe neutrino electromagnetic moments?", "expect_papers": ["2608.07142v1"], "note": "source=corpus; dark photon production from superradiant clouds"}
+# Coverage gaps: no paper is about the subject. Verified by term counts
+# over all 7,551 abstracts. Distinct from no_answer, where the subject is
+# well covered and the question still has no answer.
+{"question": "what is the surface temperature of Venus?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'venus' appears in 0 abstracts; sounds astronomical"}
+{"question": "what is the melting point of tungsten?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'tungsten' appears in 0 abstracts; sounds physical"}
+{"question": "how does superconductivity arise in cuprates?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'cuprates' appears in 0 abstracts; sounds physical"}
+{"question": "how do solar panels convert sunlight into electricity?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'sunlight' appears in 0 abstracts"}
+{"question": "how does CRISPR gene editing work?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'crispr' appears in 0 abstracts; the only biology here is neuroscience"}
+{"question": "how is champagne fermented?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'champagne' and 'fermented' appear in 0 abstracts; plainly off-domain"}
+{"question": "who wrote the Canterbury Tales?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'canterbury' appears in 0 abstracts; plainly off-domain"}

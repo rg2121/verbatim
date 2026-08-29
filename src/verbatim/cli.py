@@ -41,7 +41,12 @@ from verbatim.html_source import (
     html_url_for,
     parse_html_sections,
 )
-from verbatim.evaluation import evaluate, load_cases, render_report
+from verbatim.evaluation import (
+    describe_case_mix,
+    evaluate,
+    load_cases,
+    render_report,
+)
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.vectors import SqliteVecIndex
@@ -317,7 +322,9 @@ def run() -> None:
                 limit=args.limit, max_per_paper=args.max_per_paper,
                 reranker=CrossEncoderReranker() if args.rerank else None,
             )
-        print(f"{len(cases)} cases from {args.cases}\n")
+        print(f"{args.cases}")
+        print(describe_case_mix(cases))
+        print()
         print(render_report(scores))
 
     if args.command == "index":

@@ -130,8 +130,55 @@ def test_a_case_cannot_both_expect_papers_and_expect_none(tmp_path: Path) -> Non
 
 def test_an_unanswerable_case_loads(tmp_path: Path) -> None:
     path = tmp_path / "cases.jsonl"
-    path.write_text('{"question": "q", "expect_none": true}\n', encoding="utf-8")
+    path.write_text(
+        '{"question": "q", "expect_none": true, "unanswerable_kind": "no_coverage"}\n',
+        encoding="utf-8",
+    )
 
     (case,) = load_cases(path)
 
     assert case.expect_none and case.expect_papers == ()
+    assert case.is_coverage_gap
+
+
+def test_an_unanswerable_case_must_say_which_kind_it_is(tmp_path: Path) -> None:
+    """The two kinds are different problems and only one is detectable.
+
+    A detector scored against a label that mixes them is measuring nothing,
+    which is how four of them came to be scored against the same six cases.
+    """
+    path = tmp_path / "cases.jsonl"
+    path.write_text('{"question": "q", "expect_none": true}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must say why it is unanswerable"):
+        load_cases(path)
+
+
+def test_a_covered_but_unanswered_case_is_not_a_coverage_gap(tmp_path: Path) -> None:
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        '{"question": "what is a tensor?", "expect_none": true,'
+        ' "unanswerable_kind": "no_answer"}\n',
+        encoding="utf-8",
+    )
+
+    (case,) = load_cases(path)
+
+    assert case.expect_none and not case.is_coverage_gap
+
+
+def test_the_report_separates_the_two_unanswerable_kinds() -> None:
+    """A single count hides which problem a change actually moved."""
+    from verbatim.evaluation import EvalCase, describe_case_mix
+
+    mix = describe_case_mix([
+        EvalCase(question="a", expect_papers=("2608.11111v1",)),
+        EvalCase(question="b", expect_none=True, unanswerable_kind="no_coverage"),
+        EvalCase(question="c", expect_none=True, unanswerable_kind="no_coverage"),
+        EvalCase(question="d", expect_none=True, unanswerable_kind="no_answer"),
+    ])
+
+    assert "4 cases" in mix
+    assert "1 answerable" in mix
+    assert "2 with no coverage" in mix
+    assert "1 covered but unanswered" in mix

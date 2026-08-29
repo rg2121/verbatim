@@ -22,22 +22,42 @@ from verbatim.retrieval import hybrid_search, vector_search
 
 CUTOFFS = (1, 5, 10)
 
+# The two reasons a question has no answer here. They are different problems
+# and only the first is visible to retrieval, so scoring them together scores
+# nothing: measured over this corpus, "what is the farthest star from the
+# earth" matches no abstract at all, while "what is a tensor" matches 177 and
+# is unanswerable only because none of them defines one.
+NO_COVERAGE = "no_coverage"
+NO_ANSWER = "no_answer"
+UNANSWERABLE_KINDS = (NO_COVERAGE, NO_ANSWER)
+
 
 @dataclass(frozen=True)
 class EvalCase:
     """One question, and either the papers that answer it or nothing at all.
 
-    A case with `expect_none` is a question the corpus genuinely cannot answer.
-    Those matter as much as the rest: retrieval always returns something, and
-    its scores do not separate a real hit from a coincidental one, so the only
-    defence is the answer stage declining. Measuring that is measuring whether
-    the tool can be trusted on the edge of its own coverage.
+    A case with `expect_none` is a question the corpus cannot answer, and it
+    must say which of the two kinds it is. `no_coverage` means no paper is
+    about the subject, which retrieval can in principle see. `no_answer` means
+    the subject is well covered but no paper answers the question - the corpus
+    holds 177 papers whose abstracts mention tensors and defines none of them -
+    which no retrieval signal distinguishes from a question that is answered.
+
+    They were one label until measurement showed that every detector tried
+    against them failed, because half the cases were undetectable by
+    construction.
     """
 
     question: str
     expect_papers: tuple[str, ...] = ()
     expect_none: bool = False
+    unanswerable_kind: str = ""
     note: str = ""
+
+    @property
+    def is_coverage_gap(self) -> bool:
+        """Whether the corpus holds nothing on this subject at all."""
+        return self.expect_none and self.unanswerable_kind == NO_COVERAGE
 
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> EvalCase:
@@ -54,10 +74,21 @@ class EvalCase:
             raise ValueError(
                 f"case {payload.get('question')!r} cannot both expect papers and expect none"
             )
+        kind = str(payload.get("unanswerable_kind", ""))
+        if expect_none and kind not in UNANSWERABLE_KINDS:
+            raise ValueError(
+                f"case {payload.get('question')!r} must say why it is unanswerable: "
+                f"unanswerable_kind is one of {', '.join(UNANSWERABLE_KINDS)}"
+            )
+        if kind and not expect_none:
+            raise ValueError(
+                f"case {payload.get('question')!r} sets unanswerable_kind but expects papers"
+            )
         return cls(
             question=str(payload["question"]),
             expect_papers=tuple(str(p) for p in papers),
             expect_none=expect_none,
+            unanswerable_kind=kind,
             note=str(payload.get("note", "")),
         )
 
@@ -167,6 +198,22 @@ def evaluate(
         "hybrid": hybrid,
     }
     return [score_mode(name, cases, retrieve) for name, retrieve in modes.items()]
+
+
+def describe_case_mix(cases: Sequence[EvalCase]) -> str:
+    """State what the answer key contains, split by what it is measuring.
+
+    The two unanswerable kinds are reported apart because they are different
+    problems: a coverage gap is visible to retrieval, and a covered-but-
+    unanswered question is not. A single count hides which one a change moved.
+    """
+    coverage = sum(1 for case in cases if case.unanswerable_kind == NO_COVERAGE)
+    unanswered = sum(1 for case in cases if case.unanswerable_kind == NO_ANSWER)
+    answerable = sum(1 for case in cases if not case.expect_none)
+    return (
+        f"  {len(cases)} cases: {answerable} answerable, "
+        f"{coverage} with no coverage, {unanswered} covered but unanswered"
+    )
 
 
 def render_report(scores: Sequence[ModeScore]) -> str:
