@@ -77,6 +77,26 @@ arXiv-nonexclusive, 5% no-derivatives and 4% noncommercial.
 the author's TeX rather than from a printed page. A paper with no rendering is
 recorded as such, so it is asked for once and never again.
 
+`references` reads each paper's bibliography out of its HTML rendering, where
+LaTeXML marks every entry as its own element rather than leaving a run of text
+to be guessed apart. An entry is resolved to an arXiv identifier or DOI only
+when it states one; resolving by title similarity would be a guess recorded as
+a fact.
+
+This is deliberately not a citation graph. Measured over 908 renderings, 59,746
+references carry roughly 11,000 resolvable arXiv identifiers and about 70 of
+them point at a paper this corpus holds. That is the corpus describing itself
+accurately: it is a slice of the newest papers in each category, and new papers
+cite old ones. The useful direction is outward, and `grow` follows it - the
+papers most cited by this corpus and absent from it are GPT-4 (52 citing
+papers), Llama 3 (38), DeepSeek-R1 (32), Adam (28), PPO (27), BERT (17). The
+corpus leans on Adam and BERT constantly and holds neither, which is also the
+likeliest reason a definitional question has no answer here: there is no
+foundational literature in it to answer from.
+
+`grow` adds those papers by identifier. It only fetches metadata; their PDFs,
+renderings, chunks and vectors follow from the ordinary stages.
+
 `chunk` re-verifies each file's checksum, then extracts passages for only those
 whose chunker version, chunker parameters, or bytes have changed. **A paper
 with an HTML rendering is read from it in preference to its PDF**, because the

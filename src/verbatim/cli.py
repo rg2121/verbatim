@@ -14,7 +14,13 @@ from verbatim.answers import (
     OllamaToolCaller,
     answer_from_matches,
 )
-from verbatim.arxiv import fetch_license, fetch_metadata, license_class
+from verbatim.arxiv import (
+    MAX_IDS_PER_REQUEST,
+    fetch_license,
+    fetch_metadata,
+    fetch_papers_by_id,
+    license_class,
+)
 from verbatim.sync import format_sync_report, sync_category
 from verbatim.citations import render_bibliography, render_locator
 from verbatim.chunking import (
@@ -47,6 +53,7 @@ from verbatim.evaluation import (
     load_cases,
     render_report,
 )
+from verbatim.references import references_from_file
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.vectors import SqliteVecIndex
@@ -147,6 +154,36 @@ def run() -> None:
     html_parser.add_argument("--output-dir", type=Path, default=config.HTML_DIR)
     html_parser.add_argument("--limit", type=int, default=200, help="Papers to fetch this run")
     html_parser.add_argument("--delay", type=float, default=config.DOWNLOAD_DELAY)
+
+    references_parser = subparsers.add_parser(
+        "references",
+        help="Read bibliographies from HTML renderings and rank what the corpus lacks",
+    )
+    references_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    references_parser.add_argument(
+        "--limit", type=int, default=2000, help="Papers to read this run"
+    )
+    references_parser.add_argument(
+        "--reading-list", type=int, default=25,
+        help="How many uncited-but-absent papers to name at the end",
+    )
+
+    grow_parser = subparsers.add_parser(
+        "grow",
+        help="Add the papers this corpus cites most and does not hold",
+    )
+    grow_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    grow_parser.add_argument(
+        "--limit", type=int, default=100, help="How many papers to add"
+    )
+    grow_parser.add_argument(
+        "--min-citations", type=int, default=2,
+        help="Only add papers cited by at least this many held papers",
+    )
+    grow_parser.add_argument("--delay", type=float, default=config.DOWNLOAD_DELAY)
+    grow_parser.add_argument(
+        "--dry-run", action="store_true", help="List what would be added and stop"
+    )
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
     embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -407,6 +444,76 @@ def run() -> None:
             f"{truncated} were truncated by arXiv's conversion (both use the PDF)."
         )
 
+    if args.command == "references":
+        with CorpusStore(args.state) as corpus:
+            pending = corpus.papers_without_references(args.limit)
+            read = entries = 0
+            for arxiv_id in pending:
+                row = corpus.connection.execute(
+                    "SELECT local_path, sha256 FROM html_sources WHERE arxiv_id = ?",
+                    (arxiv_id,),
+                ).fetchone()
+                if row is None or row["local_path"] is None:
+                    continue
+                try:
+                    found = references_from_file(Path(row["local_path"]), arxiv_id)
+                except OSError as error:
+                    print(f"  ! {arxiv_id}: {error}")
+                    continue
+                corpus.record_references(found, row["sha256"])
+                read += 1
+                entries += len(found)
+                print(f"  read {read}/{len(pending)}", end="\r", flush=True)
+            total = corpus.reference_count()
+            reading_list = corpus.most_cited_absent_papers(limit=args.reading_list)
+        print(
+            f"Read {entries} references from {read} papers; corpus holds {total}."
+        )
+        if reading_list:
+            print(
+                "\nMost cited by this corpus and absent from it. The corpus is a"
+                "\nslice of the newest papers, so the work it rests on is mostly"
+                "\noutside it; these are what it asks for most:"
+            )
+            for cited, citations in reading_list:
+                print(f"  {citations:>4} citing papers   arXiv:{cited}")
+
+    if args.command == "grow":
+        with CorpusStore(args.state) as corpus:
+            wanted = [
+                (cited, citations)
+                for cited, citations in corpus.most_cited_absent_papers(limit=args.limit)
+                if citations >= args.min_citations
+            ]
+            if not wanted:
+                print(
+                    "Nothing to add. Run 'verbatim references' first, or lower "
+                    "--min-citations."
+                )
+                return
+            if args.dry_run:
+                print(f"Would add {len(wanted)} papers:")
+                for cited, citations in wanted:
+                    print(f"  {citations:>4} citing papers   arXiv:{cited}")
+                return
+            added = missing = 0
+            for start in range(0, len(wanted), MAX_IDS_PER_REQUEST):
+                batch = [cited for cited, _ in wanted[start : start + MAX_IDS_PER_REQUEST]]
+                if start:
+                    time.sleep(args.delay)
+                papers = fetch_papers_by_id(batch)
+                # arXiv silently omits identifiers it does not recognise, and a
+                # reference can name a withdrawn or mistyped one.
+                missing += len(batch) - len(papers)
+                summary = corpus.upsert_papers(papers)
+                added += summary.added
+                print(f"  added {added}/{len(wanted)}", end="\r", flush=True)
+        print(
+            f"Added {added} papers the corpus was citing and did not hold"
+            + (f"; {missing} identifiers arXiv did not recognise." if missing else ".")
+        )
+        print("Their PDFs and HTML are not fetched yet: run download, html, chunk, embed.")
+
     if args.command == "embed":
         embedder = FastEmbedEmbedder(model_name=args.model)
         with CorpusStore(args.state) as corpus:
@@ -643,6 +750,8 @@ def format_stats(counts: dict[str, int]) -> str:
          f"{counts['downloads_pending']:,} to fetch", "verbatim download"),
         ("html", f"{counts['html_available']:,} ({counts['html_absent']:,} have none)",
          f"{counts['html_pending']:,} to check", "verbatim html"),
+        ("references", f"{counts['references']:,}",
+         f"{counts['references_pending']:,} papers to read", "verbatim references"),
         ("chunks", f"{counts['chunks']:,} "
                    f"({counts['chunks_body']:,} body / {counts['chunks_references']:,} refs)",
          f"{counts['chunking_pending']:,} papers to chunk", "verbatim chunk"),

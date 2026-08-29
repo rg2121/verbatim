@@ -15,6 +15,7 @@ from verbatim.arxiv import Paper, license_class
 from verbatim.chunking import Chunk
 from verbatim.downloads import DownloadedPaper
 from verbatim.html_source import HtmlSource
+from verbatim.references import Reference
 
 SCHEMA_VERSION = "12"
 # Terms are quoted before reaching FTS5, so a query may still use a trailing
@@ -505,6 +506,12 @@ class CorpusStore:
                 "SELECT COUNT(*) FROM downloads AS d LEFT JOIN html_sources AS h"
                 " ON h.arxiv_id = d.arxiv_id WHERE h.arxiv_id IS NULL"
             ),
+            "references": scalar("SELECT COUNT(*) FROM paper_references"),
+            "references_pending": scalar(
+                "SELECT COUNT(*) FROM html_sources AS h WHERE h.usable = 1"
+                " AND NOT EXISTS (SELECT 1 FROM paper_references AS r"
+                "   WHERE r.citing_arxiv_id = h.arxiv_id AND r.source_sha256 = h.sha256)"
+            ),
             "chunks": scalar("SELECT COUNT(*) FROM chunks"),
             "chunks_html": scalar("SELECT COUNT(*) FROM chunks WHERE source_kind = 'html'"),
             "chunks_body": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'body'"),
@@ -772,6 +779,71 @@ class CorpusStore:
                 [(chunk_id, model_id, pack_vector(vector), now) for chunk_id, vector in vectors],
             )
 
+    def record_references(self, references: list[Reference], source_sha256: str) -> None:
+        """Replace the stored bibliography of every paper represented here."""
+        now = _timestamp()
+        with self.connection:
+            for citing in {reference.citing_arxiv_id for reference in references}:
+                self.connection.execute(
+                    "DELETE FROM paper_references WHERE citing_arxiv_id = ?", (citing,)
+                )
+            self.connection.executemany(
+                """
+                INSERT INTO paper_references (
+                    citing_arxiv_id, ordinal, raw_text, cited_arxiv_id,
+                    cited_doi, source_sha256, extracted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (r.citing_arxiv_id, r.ordinal, r.raw_text, r.cited_arxiv_id,
+                     r.cited_doi, source_sha256, now)
+                    for r in references
+                ],
+            )
+
+    def papers_without_references(self, limit: int) -> list[str]:
+        """Papers with a usable HTML rendering whose bibliography is unread."""
+        rows = self.connection.execute(
+            """
+            SELECT h.arxiv_id FROM html_sources AS h
+            WHERE h.usable = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM paper_references AS r
+                  WHERE r.citing_arxiv_id = h.arxiv_id
+                    AND r.source_sha256 = h.sha256
+              )
+            ORDER BY h.arxiv_id LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [row["arxiv_id"] for row in rows]
+
+    def most_cited_absent_papers(self, *, limit: int = 50) -> list[tuple[str, int]]:
+        """arXiv papers this corpus cites often and does not hold.
+
+        The corpus is a slice of the newest papers in each category, so the work
+        it rests on is mostly outside it. This is the reading list that would
+        fix that, ordered by how many held papers ask for each one.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT r.cited_arxiv_id, COUNT(DISTINCT r.citing_arxiv_id) AS citations
+            FROM paper_references AS r
+            WHERE r.cited_arxiv_id IS NOT NULL
+              AND r.cited_arxiv_id NOT IN (SELECT base_arxiv_id FROM papers)
+            GROUP BY r.cited_arxiv_id
+            ORDER BY citations DESC, r.cited_arxiv_id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [(row["cited_arxiv_id"], int(row["citations"])) for row in rows]
+
+    def reference_count(self) -> int:
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM paper_references").fetchone()[0]
+        )
+
     def pending_paper_embeddings(
         self, model_id: str, *, limit: int | None = None
     ) -> list[Paper]:
@@ -991,6 +1063,21 @@ class CorpusStore:
                 -- a chunk vector says what a passage mentions, a paper vector
                 -- says what the paper is about. A paper can mention anything
                 -- in passing; its abstract states its subject.
+                -- One row per bibliography entry. cited_arxiv_id is set only
+                -- when the entry states an identifier; a reference resolved by
+                -- title similarity would be a guess recorded as a fact.
+                CREATE TABLE IF NOT EXISTS paper_references (
+                    citing_arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
+                    ordinal INTEGER NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    cited_arxiv_id TEXT,
+                    cited_doi TEXT,
+                    source_sha256 TEXT NOT NULL,
+                    extracted_at TEXT NOT NULL,
+                    PRIMARY KEY (citing_arxiv_id, ordinal)
+                );
+                CREATE INDEX IF NOT EXISTS references_by_cited
+                    ON paper_references (cited_arxiv_id);
                 CREATE TABLE IF NOT EXISTS paper_embeddings (
                     arxiv_id TEXT NOT NULL
                         REFERENCES papers(arxiv_id) ON DELETE CASCADE,

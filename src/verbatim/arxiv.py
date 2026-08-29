@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import time
+from collections.abc import Sequence
 from typing import Callable
 from urllib.parse import urlencode, urlparse, urlunparse
 from urllib.error import HTTPError, URLError
@@ -56,6 +57,11 @@ class FeedPage:
     start: int
 
 
+# arXiv rejects an id_list far longer than this, and a rejected batch loses
+# every identifier in it.
+MAX_IDS_PER_REQUEST = 100
+
+
 def fetch_metadata_page(
     category: str,
     *,
@@ -91,6 +97,28 @@ def fetch_metadata_page(
     return FeedPage(
         papers=parse_feed(xml), total_results=parse_total_results(xml), start=start
     )
+
+
+def fetch_papers_by_id(
+    arxiv_ids: Sequence[str],
+    *,
+    http_get: Callable[[str], bytes] | None = None,
+) -> list[Paper]:
+    """Fetch metadata for specific papers, named by identifier.
+
+    Category queries return what is newest; this returns what was asked for,
+    which is what growing a corpus along its own citations needs. arXiv caps a
+    single id_list request, so callers batch.
+    """
+    if not arxiv_ids:
+        return []
+    if len(arxiv_ids) > MAX_IDS_PER_REQUEST:
+        raise ValueError(
+            f"arXiv accepts at most {MAX_IDS_PER_REQUEST} identifiers per request"
+        )
+    query = urlencode({"id_list": ",".join(arxiv_ids), "max_results": len(arxiv_ids)})
+    get = http_get or _get
+    return parse_feed(get(f"{ARXIV_API_URL}?{query}"))
 
 
 def parse_total_results(xml: bytes) -> int:

@@ -154,3 +154,36 @@ def test_restrictive_creative_commons_terms_are_not_called_open(url, expected) -
     from verbatim.arxiv import license_class
 
     assert license_class(url) == expected
+
+
+def test_papers_can_be_fetched_by_identifier() -> None:
+    """Growing a corpus along its citations needs what was asked for, not what is new."""
+    from verbatim.arxiv import fetch_papers_by_id
+
+    captured: list[str] = []
+
+    def fake_get(url: str) -> bytes:
+        captured.append(url)
+        return FIXTURE.read_bytes()
+
+    papers = fetch_papers_by_id(["1412.6980", "1810.04805"], http_get=fake_get)
+
+    assert "id_list=1412.6980%2C1810.04805" in captured[0]
+    assert [paper.arxiv_id for paper in papers] == ["2401.12345v2"]
+
+
+def test_no_identifiers_makes_no_request() -> None:
+    from verbatim.arxiv import fetch_papers_by_id
+
+    def explode(url: str) -> bytes:
+        raise AssertionError("should not have been called")
+
+    assert fetch_papers_by_id([], http_get=explode) == []
+
+
+def test_too_many_identifiers_is_refused_rather_than_truncated() -> None:
+    """A rejected batch loses every identifier in it, so the cap is enforced here."""
+    from verbatim.arxiv import MAX_IDS_PER_REQUEST, fetch_papers_by_id
+
+    with pytest.raises(ValueError, match="at most"):
+        fetch_papers_by_id([f"2401.{n:05d}" for n in range(MAX_IDS_PER_REQUEST + 1)])

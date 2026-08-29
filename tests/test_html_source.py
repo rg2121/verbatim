@@ -246,3 +246,37 @@ def test_an_unusable_rendering_keeps_its_bytes_and_its_reason(tmp_path) -> None:
     assert "8%" in row["note"]
     assert pending_html == []
     assert [d.arxiv_id for d in pending_pdf] == ["2608.11111v1"]
+
+
+def test_a_bibliography_is_read_entry_by_entry() -> None:
+    from verbatim.references import parse_bibliography
+
+    refs = parse_bibliography(
+        '<ul class="ltx_biblist">'
+        '<li id="bib.bib1" class="ltx_bibitem">'
+        '<span class="ltx_tag ltx_tag_bibitem">[1]</span>'
+        '<span class="ltx_bibblock">D. Kingma and J. Ba, "Adam", arXiv:1412.6980.</span></li>'
+        '<li id="bib.bib2" class="ltx_bibitem">'
+        '<span class="ltx_tag ltx_tag_bibitem">[2]</span>'
+        '<span class="ltx_bibblock">A. Einstein, Annalen Phys. 49 (1916).</span></li>'
+        "</ul>",
+        "2608.11111v1",
+    )
+
+    assert [r.ordinal for r in refs] == [1, 2]
+    assert refs[0].cited_arxiv_id == "1412.6980"
+    # The entry's printed marker duplicates the ordinal, so it is not stored.
+    assert refs[0].raw_text.startswith("D. Kingma")
+    assert refs[1].cited_arxiv_id is None
+
+
+def test_an_identifier_is_only_taken_when_the_reference_states_one() -> None:
+    """A reference resolved by title similarity would be a guess stored as fact."""
+    from verbatim.references import extract_arxiv_id, extract_doi
+
+    assert extract_arxiv_id("see arXiv:2401.12345v3 for details") == "2401.12345"
+    assert extract_arxiv_id("https://arxiv.org/abs/hep-th/9711200") == "hep-th/9711200"
+    assert extract_arxiv_id("Attention Is All You Need, NeurIPS 2017") is None
+    assert extract_doi("Phys. Rev. D 12, 345 (1975), doi:10.1103/PhysRevD.12.345.") == (
+        "10.1103/PhysRevD.12.345"
+    )
