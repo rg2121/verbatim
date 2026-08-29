@@ -8,7 +8,6 @@ import time
 
 from verbatim.agent import answer_question
 from verbatim.answers import (
-    HostedCompletion,
     describe_subject,
     subject_similarity,
     OllamaCompletion,
@@ -182,12 +181,6 @@ def run() -> None:
     ask_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES, help="Passages to retrieve")
     ask_parser.add_argument("--arxiv-id", help="Restrict the answer to one paper version")
     ask_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
-    ask_parser.add_argument(
-        "--backend",
-        choices=("ollama", "hosted"),
-        default=config.ANSWER_BACKEND,
-        help="Which model answers: a local Ollama model (default) or a hosted API",
-    )
     ask_parser.add_argument(
         "--llm",
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
@@ -449,11 +442,7 @@ def run() -> None:
         with CorpusStore(args.state) as corpus:
             if args.tools:
                 embedder = FastEmbedEmbedder(model_name=args.model)
-                completion = (
-                    OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-                    if args.backend == "ollama"
-                    else HostedCompletion(args.llm or config.HOSTED_MODEL)
-                )
+                completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
                 answer, trace = answer_question(
                     corpus, embedder, OllamaToolCaller(args.llm or config.OLLAMA_MODEL),
                     completion, args.question,
@@ -476,11 +465,7 @@ def run() -> None:
                 max_per_paper=args.max_per_paper,
                 include_references=args.include_references,
             )
-            completion = (
-                OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-                if args.backend == "ollama"
-                else HostedCompletion(args.llm or config.HOSTED_MODEL)
-            )
+            completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
             answer = answer_from_matches(corpus, completion, args.question, matches)
             subject = None
             if matches and not args.no_subject_check:

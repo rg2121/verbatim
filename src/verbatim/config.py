@@ -17,7 +17,6 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv(usecwd=True), override=False)
 
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
-DEFAULT_HOSTED_MODEL = "hosted-model"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
 
@@ -67,10 +66,9 @@ ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)
 # without suppressing anything, because the ranges genuinely overlap.
 SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))
 
-# Answer generation. HOSTED_API_KEY is read by the hosted SDK itself and
-# is deliberately not mirrored here, so the secret is never held in a module.
-ANSWER_BACKEND = _text("VERBATIM_ANSWER_BACKEND", "ollama")
-HOSTED_MODEL = _text("VERBATIM_HOSTED_MODEL", DEFAULT_HOSTED_MODEL)
+# Answer generation. Every model runs locally through Ollama: the corpus is
+# 26 GB of other people's papers, and sending it to a third party is a decision
+# that should not follow from a default.
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))

@@ -182,10 +182,11 @@ answer. Tools only gather evidence: the answer still goes through the same
 citation verification, so a claim whose quote is not in its passage is still
 rejected.
 
-`ask` uses a local model through **Ollama** by default, so the whole pipeline
-runs offline once the corpus is built. It picks `$OLLAMA_MODEL`, or the first
-pulled model; override with `--llm`. Use `--backend hosted` to answer with the
-hosted API instead, which needs `HOSTED_API_KEY`.
+`ask` answers with a local model through **Ollama**, so the whole pipeline runs
+offline once the corpus is built. It picks `$OLLAMA_MODEL`, or the first pulled
+model; override with `--llm`. There is no hosted backend: the corpus is 26 GB
+of other people's papers, and sending it to a third party should not be
+something a default can decide.
 
 Small local models paraphrase rather than quote, so expect rejected citations —
 that is the check working, not a bug. A claim whose quote could not be verified
@@ -300,8 +301,8 @@ cp .env.example .env
 ```
 
 `.env.example` documents every setting — storage paths, chunk size and overlap,
-embedding model, retrieval limits, and which backend answers questions. `.env`
-itself is gitignored because it may hold `HOSTED_API_KEY`. An exported
+embedding model, retrieval limits, and the Ollama host and model. `.env` itself
+is gitignored so local paths and hosts stay out of the repository. An exported
 environment variable always overrides the file, so a one-off run needs no edit:
 
 ```bash

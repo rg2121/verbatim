@@ -15,7 +15,6 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "hosted-sdk>=0.121.0",
   "fastembed>=0.8.0",
   "pymupdf>=1.26.0",
   "pymupdf4llm>=1.28.2",

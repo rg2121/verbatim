@@ -13,8 +13,6 @@ from verbatim import config
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
 
-MODEL = config.HOSTED_MODEL
-MAX_TOKENS = 16_000
 JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 RELEVANT_LINE_PATTERN = re.compile(r"^RELEVANT:\s*(yes|no)\b", re.M | re.I)
@@ -309,52 +307,6 @@ class OllamaCompletion:
         if "error" in body:
             raise RuntimeError(f"Ollama error: {body['error']}")
         return body
-
-
-class HostedCompletion:
-    """A hosted model via its SDK, constrained to the answer schema."""
-
-    def __init__(self, model: str = MODEL, *, max_tokens: int = MAX_TOKENS) -> None:
-        self.model = model
-        self.max_tokens = max_tokens
-
-    def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
-        try:
-            import hosted_sdk
-        except ImportError as error:  # pragma: no cover - depends on the install
-            raise RuntimeError(
-                "Answering needs the hosted SDK package; install it with 'uv add hosted-sdk'"
-            ) from error
-
-        client = hosted_sdk.Client()
-        try:
-            # Credentials are resolved when the request is built, not at
-            # construction, so this is the call that fails without a key.
-            response = client.beta.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                output_config={"format": {"type": "json_schema", "schema": schema}},
-            )
-        except TypeError as error:
-            if "authentication" not in str(error).lower():
-                raise
-            raise RuntimeError(
-                "No hosted credentials found. Set HOSTED_API_KEY, or run "
-                "the provider's login command if you have its CLI installed."
-            ) from error
-        if response.stop_reason == "refusal":
-            raise RuntimeError(
-                "The model declined to answer this question "
-                f"({getattr(response.stop_details, 'category', 'no category given')})."
-            )
-        text = next((block.text for block in response.content if block.type == "text"), None)
-        if text is None:
-            raise RuntimeError(f"No text in model response (stop_reason={response.stop_reason})")
-        return json.loads(text)
 
 
 def parse_line_protocol(content: str) -> dict[str, Any] | None:

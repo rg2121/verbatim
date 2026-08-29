@@ -7,25 +7,25 @@ def run_config(env: dict[str, str], cwd: Path) -> dict[str, str]:
     """Import config in a fresh interpreter, since it reads the environment once."""
     script = (
         "from verbatim import config; "
-        "print(config.CHUNK_SIZE, config.OLLAMA_MODEL, config.ANSWER_BACKEND, sep='|')"
+        "print(config.CHUNK_SIZE, config.OLLAMA_MODEL, config.OLLAMA_TIMEOUT, sep='|')"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True, text=True, check=True, cwd=cwd,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src"), **env},
     )
-    size, model, backend = result.stdout.strip().split("|")
-    return {"chunk_size": size, "ollama_model": model, "backend": backend}
+    size, model, timeout = result.stdout.strip().split("|")
+    return {"chunk_size": size, "ollama_model": model, "timeout": timeout}
 
 
 def test_env_file_supplies_defaults(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(
-        "VERBATIM_CHUNK_SIZE=777\nOLLAMA_MODEL=from-file\nVERBATIM_ANSWER_BACKEND=hosted\n"
+        "VERBATIM_CHUNK_SIZE=777\nOLLAMA_MODEL=from-file\nOLLAMA_TIMEOUT=45\n"
     )
 
     values = run_config({}, tmp_path)
 
-    assert values == {"chunk_size": "777", "ollama_model": "from-file", "backend": "hosted"}
+    assert values == {"chunk_size": "777", "ollama_model": "from-file", "timeout": "45.0"}
 
 
 def test_an_exported_variable_beats_the_env_file(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ def test_an_exported_variable_beats_the_env_file(tmp_path: Path) -> None:
 def test_defaults_apply_with_no_env_file(tmp_path: Path) -> None:
     values = run_config({}, tmp_path)
 
-    assert values == {"chunk_size": "1200", "ollama_model": "None", "backend": "ollama"}
+    assert values == {"chunk_size": "1200", "ollama_model": "None", "timeout": "600.0"}
 
 
 def test_a_non_numeric_setting_is_rejected_with_its_name(tmp_path: Path) -> None:
