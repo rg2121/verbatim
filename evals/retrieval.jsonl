@@ -85,3 +85,13 @@
 {"question": "how does CRISPR gene editing work?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'crispr' appears in 0 abstracts; the only biology here is neuroscience"}
 {"question": "how is champagne fermented?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'champagne' and 'fermented' appear in 0 abstracts; plainly off-domain"}
 {"question": "who wrote the Canterbury Tales?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=corpus; 'canterbury' appears in 0 abstracts; plainly off-domain"}
+# Definitional questions answerable only because `grow` added the papers
+# this corpus cites most and did not hold. Each was a coverage gap before.
+{"question": "what is the Adam optimizer?", "expect_papers": ["1412.6980v9"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "how does Adam adapt its learning rate per parameter?", "expect_papers": ["1412.6980v9"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "what is BERT and how is it pre-trained?", "expect_papers": ["1810.04805v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "what is masked language modelling?", "expect_papers": ["1810.04805v2", "1907.11692v1"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "what is proximal policy optimization?", "expect_papers": ["1707.06347v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "why does PPO clip its objective?", "expect_papers": ["1707.06347v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "how does a vision transformer treat an image as a sequence?", "expect_papers": ["2010.11929v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
+{"question": "what are the Planck 2018 values for the cosmological parameters?", "expect_papers": ["1807.06209v4"], "note": "source=corpus; added by grow, previously a coverage gap"}
