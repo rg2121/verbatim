@@ -54,6 +54,7 @@ from verbatim.evaluation import (
     load_cases,
     render_report,
 )
+from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
 from verbatim.research import research
 from verbatim.reranking import CrossEncoderReranker, rerank
@@ -207,6 +208,17 @@ def run() -> None:
     serve_parser.add_argument(
         "--host", default="127.0.0.1",
         help="Loopback by default: the corpus is other people's papers under mixed licences",
+    )
+
+    pipeline_parser = subparsers.add_parser(
+        "pipeline",
+        help="Run every ingest stage in rounds until nothing is pending",
+    )
+    pipeline_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    pipeline_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    pipeline_parser.add_argument(
+        "--max-rounds", type=int, default=MAX_ROUNDS,
+        help="Stop after this many rounds even if work remains",
     )
 
     mcp_parser = subparsers.add_parser(
@@ -551,6 +563,26 @@ def run() -> None:
             state=args.state, embedding_model=args.model,
             host=args.host, port=args.port,
         )
+
+    if args.command == "pipeline":
+        fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+
+        def pending() -> dict[str, int]:
+            with CorpusStore(args.state) as corpus:
+                return corpus.pipeline_stats(fingerprint, args.model)
+
+        rounds = run_pipeline(
+            pending,
+            state=str(args.state),
+            max_rounds=args.max_rounds,
+            on_stage=lambda stage: print(
+                f"  {'ok ' if stage.ok else 'FAILED'} {stage.name:<12}"
+                f" {stage.pending_before:>7,} -> {stage.pending_after:>7,}",
+                flush=True,
+            ),
+        )
+        print()
+        print(render_rounds(rounds))
 
     if args.command == "mcp":
         from verbatim.mcp_server import serve

@@ -141,6 +141,20 @@ why it is no longer the default. The index matches whole tokens and does not ste
 match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
 every word of a natural-language question matches nothing at all.
 
+`pipeline` runs every stage in rounds until nothing is pending. Running them
+once in order does not finish the job: each stage creates work for the ones
+after it, so growing the corpus leaves PDFs to download, downloading leaves
+renderings to fetch, and chunking leaves passages to embed. Done by hand here,
+that stranded 81 papers unchecked, 350 unchunked and 69 bibliographies unread.
+
+It stops when a round changes nothing rather than when the counts reach zero,
+because some work never completes — 33 papers in this corpus return a
+truncated PDF every time they are asked for, and waiting for them would loop
+for ever. Stages run as separate processes so that one failing does not end
+the ingest: a DNS failure took out a licence run here and everything after it
+should have carried on. A failed stage is retried while other stages are still
+making progress, and the summary names what failed rather than hiding it.
+
 `stats` shows what each stage has done and what it has left, which is how a
 long ingest stays observable:
 
