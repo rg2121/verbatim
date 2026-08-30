@@ -83,8 +83,13 @@ def run_stage(name: str, arguments: Sequence[str], *, state: str) -> tuple[bool,
     detail = output[-1] if output else ""
     if finished.returncode != 0:
         stderr = (finished.stderr or "").strip().splitlines()
-        detail = stderr[-1] if stderr else detail
-    return finished.returncode == 0, detail
+        return False, stderr[-1] if stderr else detail
+    if not output:
+        # Every stage prints what it did. Silence means it did not run at all,
+        # which is how a missing __main__ guard turned each stage into a no-op
+        # that reported success.
+        return False, "stage produced no output; it may not have run"
+    return True, detail
 
 
 def run_pipeline(

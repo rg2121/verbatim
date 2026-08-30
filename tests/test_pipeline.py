@@ -113,3 +113,39 @@ def test_max_rounds_is_honoured() -> None:
 def test_max_rounds_must_be_at_least_one() -> None:
     with pytest.raises(ValueError, match="at least 1"):
         run_pipeline(lambda: {}, state="x", max_rounds=0)
+
+
+def test_a_stage_that_prints_nothing_is_treated_as_not_having_run() -> None:
+    """Silence is how a no-op stage passed for a successful one.
+
+    `python -m verbatim.cli <stage>` had no __main__ guard, so it imported
+    the module, ran nothing and exited 0. Every stage reported success while
+    the pending counts never moved.
+    """
+    import subprocess
+    from unittest.mock import patch
+
+    from verbatim.pipeline import run_stage
+
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    with patch("subprocess.run", return_value=completed):
+        ok, detail = run_stage("chunk", (), state="corpus.db")
+
+    assert not ok
+    assert "may not have run" in detail
+
+
+def test_a_stage_that_reports_what_it_did_is_a_success() -> None:
+    import subprocess
+    from unittest.mock import patch
+
+    from verbatim.pipeline import run_stage
+
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="Chunked 12 papers into 900 passages.\n", stderr=""
+    )
+    with patch("subprocess.run", return_value=completed):
+        ok, detail = run_stage("chunk", (), state="corpus.db")
+
+    assert ok
+    assert detail == "Chunked 12 papers into 900 passages."

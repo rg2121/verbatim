@@ -60,7 +60,7 @@ from verbatim.sampling import export_sample
 from verbatim.research import research
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
-from verbatim.vectors import SqliteVecIndex
+from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
 from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
 from verbatim.storage import (
     load_download_manifest,
@@ -941,3 +941,10 @@ def format_stats(counts: dict[str, int]) -> str:
     for stage, done, remaining, command in rows:
         lines.append(f"  {stage:<10} {done:<{width}}  {remaining:<22} {command}")
     return "\n".join(lines)
+
+
+if __name__ == "__main__":  # pragma: no cover - module entry point
+    # Without this, `python -m verbatim.cli <stage>` imports the module,
+    # runs nothing and exits 0. The pipeline driver invokes stages that way,
+    # so every stage silently succeeded at doing nothing.
+    main()
