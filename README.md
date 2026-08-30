@@ -312,6 +312,24 @@ The bigger model was worse, so this is not a matter of model size. What does
 work is not asking the question: ask only what the passages discuss, and compare
 that to the question arithmetically.
 
+**Splitting the label showed the subject check was being scored against a
+question it cannot answer.** Once `expect_none` was separated into "no paper
+is about this" and "the subject is covered and the question still has no
+answer", the same subject check that had scored 3/6 against the mixed label
+turned out to work on one kind and be blind to the other:
+
+| kind | cases | caught | similarity range |
+|---|---|---|---|
+| `no_coverage` | 9 | **7** | 0.431 - 0.782 |
+| `no_answer` | 4 | **0** | 0.769 - 0.853 |
+
+The distributions barely overlap. For six attempts the detector had been asked
+to find something no retrieval signal can see, half the time, and the mixed
+label made a partial success look like a flat failure. The two misses are the
+deliberately hard cases - "surface temperature of Venus" and
+"superconductivity in cuprates", off-domain subjects that sound in-domain -
+while the plainly off-domain gaps warn at 0.43 to 0.48.
+
 **Neither abstract-level nor lexical matching detects an unanswerable
 question.** The reasoning was that a passage says what it mentions while an
 abstract says what a paper is *about*, so a paper that quotes sample text about
@@ -410,14 +428,18 @@ stored passage, so nothing is fabricated — but a verified quote proves the
 words exist, not that they answer the question. The subject check catches
 roughly half of these.
 
-Six approaches have now failed on the same cases, and measurement says why:
-"unanswerable" was one label over two different problems. A question with no
-paper on its subject is visible to retrieval; a question whose subject the
-corpus covers heavily and answers nowhere is not. "What is a tensor" matches
-177 abstracts here and sits indistinguishably beside "what is entropy", which
-matches 235 and is answerable. The answer key now separates the two, which is
-the prerequisite for scoring any detector honestly. See *What was tried and
-rejected*.
+"Unanswerable" was one label over two different problems, and separating them
+changed the picture. A question with no paper on its subject is visible to
+retrieval; a question whose subject the corpus covers heavily and answers
+nowhere is not - "what is a tensor" matches 177 abstracts here and sits
+indistinguishably beside "what is entropy", which matches 235 and is
+answerable.
+
+Measured against the split label, the subject check catches **7 of 9** coverage
+gaps and **0 of 4** covered-but-unanswered questions. So the defect is now two
+defects with different prospects: the first is largely handled and its
+remaining misses are subjects that sound in-domain, and the second is not a
+retrieval problem at all. See *What was tried and rejected*.
 
 **Scanned PDFs yield nothing.** Text extraction assumes a text layer; OCR is
 not implemented. Affected papers chunk to little or nothing rather than
