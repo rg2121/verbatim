@@ -39,6 +39,9 @@ class FailedDownload:
     arxiv_id: str
     pdf_url: str
     reason: str
+    # True when arXiv says the file does not exist, rather than failing to
+    # serve it. Retrying a 404 tomorrow gets the same 404.
+    permanent: bool = False
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,18 @@ class DownloadReport:
 
     downloaded: list[DownloadedPaper]
     failed: list[FailedDownload]
+
+
+def _is_permanently_absent(error: Exception) -> bool:
+    """Whether arXiv is saying this file does not exist, rather than failing.
+
+    A 404 or 410 for a versioned PDF is settled: that version has no PDF and
+    asking again tomorrow will not change it. A timeout or a 503 is arXiv
+    being busy and is worth retrying. Only the first is worth writing down as
+    an answer.
+    """
+    status = getattr(error, "code", None)
+    return status in (404, 410)
 
 
 def download_papers(
@@ -114,7 +129,12 @@ def download_papers(
             # OSError covers HTTPError and URLError; ValueError covers a
             # rejected URL or a truncated response.  Neither says anything
             # about the other papers in this batch.
-            failed.append(FailedDownload(paper.arxiv_id, paper.pdf_url, str(error)))
+            failed.append(
+                FailedDownload(
+                    paper.arxiv_id, paper.pdf_url, str(error),
+                    permanent=_is_permanently_absent(error),
+                )
+            )
     return DownloadReport(downloaded=downloaded, failed=failed)
 
 

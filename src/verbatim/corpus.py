@@ -187,7 +187,13 @@ class CorpusStore:
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
-        clauses = ["p.is_latest = 1", "p.pdf_url IS NOT NULL", "d.arxiv_id IS NULL"]
+        clauses = [
+            "p.is_latest = 1",
+            "p.pdf_url IS NOT NULL",
+            "d.arxiv_id IS NULL",
+            # arXiv has already said it has no PDF for these.
+            "p.arxiv_id NOT IN (SELECT arxiv_id FROM download_failures)",
+        ]
         parameters: list[object] = []
         if require_license:
             clauses.append("p.license_url IS NOT NULL")
@@ -514,7 +520,9 @@ class CorpusStore:
                 "SELECT COUNT(*) FROM papers AS p LEFT JOIN downloads AS d"
                 " ON d.arxiv_id = p.arxiv_id"
                 " WHERE p.is_latest = 1 AND p.pdf_url IS NOT NULL AND d.arxiv_id IS NULL"
+                " AND p.arxiv_id NOT IN (SELECT arxiv_id FROM download_failures)"
             ),
+            "downloads_unavailable": scalar("SELECT COUNT(*) FROM download_failures"),
             "html_available": scalar("SELECT COUNT(*) FROM html_sources WHERE usable = 1"),
             "html_absent": scalar("SELECT COUNT(*) FROM html_sources WHERE usable = 0"),
             "html_pending": scalar(
@@ -813,6 +821,28 @@ class CorpusStore:
                 [(chunk_id, model_id, pack_vector(vector), now) for chunk_id, vector in vectors],
             )
 
+    def record_permanent_download_failures(
+        self, failures: list[tuple[str, str, str]]
+    ) -> None:
+        """Record papers arXiv has no PDF for, so they stop being retried."""
+        now = _timestamp()
+        with self.connection:
+            self.connection.executemany(
+                """
+                INSERT INTO download_failures (arxiv_id, pdf_url, reason, failed_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(arxiv_id) DO UPDATE SET
+                    pdf_url = excluded.pdf_url, reason = excluded.reason,
+                    failed_at = excluded.failed_at
+                """,
+                [(arxiv_id, url, reason, now) for arxiv_id, url, reason in failures],
+            )
+
+    def unavailable_downloads(self) -> int:
+        return int(
+            self.connection.execute("SELECT COUNT(*) FROM download_failures").fetchone()[0]
+        )
+
     def record_references(self, references: list[Reference], source_sha256: str) -> None:
         """Replace the stored bibliography of every paper represented here."""
         now = _timestamp()
@@ -1100,6 +1130,15 @@ class CorpusStore:
                 -- One row per bibliography entry. cited_arxiv_id is set only
                 -- when the entry states an identifier; a reference resolved by
                 -- title similarity would be a guess recorded as a fact.
+                -- Papers arXiv has no PDF for at the version we hold. Kept
+                -- so they are not asked for again on every run and not
+                -- reported as outstanding work for ever.
+                CREATE TABLE IF NOT EXISTS download_failures (
+                    arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
+                    pdf_url TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    failed_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS paper_references (
                     citing_arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
                     ordinal INTEGER NOT NULL,

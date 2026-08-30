@@ -425,6 +425,13 @@ measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at
 this scale. A corpus several times larger wants a real index behind the
 `VectorIndex` protocol rather than a faster machine.
 
+**Some papers have no PDF at arXiv.** 32 of the papers here return 404 for
+their versioned PDF, most of them also unversioned. They are recorded as
+settled rather than retried, and `stats` reports them apart from real
+outstanding work. No unversioned fallback is attempted: fetching whatever the
+current version happens to be, while the citation claims v2, would break the
+version pinning the rest of the project depends on.
+
 **Licence classification is only as good as arXiv's metadata**, and the
 `unknown` class is large. `unknown` means unknown, not permissive.
 

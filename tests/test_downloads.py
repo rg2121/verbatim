@@ -193,3 +193,32 @@ def test_each_download_is_reported_as_it_lands(tmp_path: Path) -> None:
     assert recorded == ["2401.00021v1", "2401.00022v1"]
     assert [d.arxiv_id for d in report.downloaded] == recorded
     assert len(report.failed) == 1
+
+
+def test_a_missing_pdf_is_recorded_as_settled_not_as_a_failure(tmp_path: Path) -> None:
+    """A 404 for a versioned PDF is an answer: that version has no PDF.
+
+    Retrying it tomorrow gets the same 404, and reporting it as outstanding
+    work misstates what is left to do for ever.
+    """
+    def missing(url: str) -> bytes:
+        raise HTTPError(url, 404, "Not Found", {}, None)
+
+    report = download_papers(
+        [make_paper(arxiv_id="2608.11111v2")], tmp_path, 1, fetch_pdf=missing, delay=0
+    )
+
+    assert [f.arxiv_id for f in report.failed] == ["2608.11111v2"]
+    assert report.failed[0].permanent
+
+
+def test_a_busy_server_is_not_recorded_as_settled(tmp_path: Path) -> None:
+    """503 and timeouts are arXiv being busy, and are worth retrying."""
+    def busy(url: str) -> bytes:
+        raise HTTPError(url, 503, "Service Unavailable", {}, None)
+
+    report = download_papers(
+        [make_paper(arxiv_id="2608.22222v1")], tmp_path, 1, fetch_pdf=busy, delay=0
+    )
+
+    assert not report.failed[0].permanent

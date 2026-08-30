@@ -390,6 +390,15 @@ def run() -> None:
                 # Recorded before reporting failures, so a partial run still
                 # leaves every fetched PDF accounted for.
                 corpus.record_downloads(report.downloaded)
+                # A 404 for a versioned PDF is an answer, not a failure to
+                # get one; recording it stops the paper being asked for on
+                # every future run and reported as outstanding work for ever.
+                settled = [
+                    (f.arxiv_id, f.pdf_url, f.reason)
+                    for f in report.failed if f.permanent
+                ]
+                if settled:
+                    corpus.record_permanent_download_failures(settled)
                 downloads = corpus.all_downloads()
         save_download_manifest(downloads, manifest_path)
         print(
@@ -893,7 +902,10 @@ def format_stats(counts: dict[str, int]) -> str:
         ("papers", f"{counts['papers']:,}", f"{counts['papers_current']:,} current", ""),
         ("licences", f"{counts['licences_known']:,} known",
          f"{counts['licences_pending']:,} to look up", "verbatim licenses"),
-        ("pdfs", f"{counts['downloaded']:,} ({gigabytes:.1f} GB)",
+        ("pdfs",
+         f"{counts['downloaded']:,} ({gigabytes:.1f} GB)"
+         + (f", {counts['downloads_unavailable']:,} arXiv has none for"
+            if counts["downloads_unavailable"] else ""),
          f"{counts['downloads_pending']:,} to fetch", "verbatim download"),
         ("html", f"{counts['html_available']:,} ({counts['html_absent']:,} have none)",
          f"{counts['html_pending']:,} to check", "verbatim html"),
