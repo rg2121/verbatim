@@ -56,6 +56,7 @@ from verbatim.evaluation import (
 )
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
+from verbatim.sampling import export_sample
 from verbatim.research import research
 from verbatim.reranking import CrossEncoderReranker, rerank
 from verbatim.retrieval import hybrid_search, vector_search
@@ -220,6 +221,15 @@ def run() -> None:
         "--max-rounds", type=int, default=MAX_ROUNDS,
         help="Stop after this many rounds even if work remains",
     )
+
+    sample_parser = subparsers.add_parser(
+        "sample",
+        help="Export a small self-contained corpus that works without an ingest",
+    )
+    sample_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    sample_parser.add_argument("--out", type=Path, default=Path("data/sample.db"))
+    sample_parser.add_argument("--papers", type=int, default=40)
+    sample_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
 
     mcp_parser = subparsers.add_parser(
         "mcp", help="Serve the corpus over the Model Context Protocol, on stdio"
@@ -572,6 +582,15 @@ def run() -> None:
             state=args.state, embedding_model=args.model,
             host=args.host, port=args.port,
         )
+
+    if args.command == "sample":
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        model_id = FastEmbedEmbedder(model_name=args.model).model.model_id
+        report = export_sample(
+            args.state, args.out, papers=args.papers, model_id=model_id
+        )
+        print(f"Wrote {args.out}: {report.render()}")
+        print(f"Try it with:  verbatim search 'your question' --state {args.out}")
 
     if args.command == "pipeline":
         fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
