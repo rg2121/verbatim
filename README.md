@@ -106,6 +106,13 @@ are laid out as tables too and are deliberately not read as such: their LaTeX
 already comes from each `<math>` element. Measured over 1,547 renderings: 9,343
 tables, 84,829 data rows.
 
+Layout extraction runs in a child process with a timeout. It is C code with no
+internal limit, and one 7.7 MB paper in this corpus held a core for 46 minutes
+without returning, which blocked its batch and through that the whole ingest -
+twice, before it was diagnosed. A paper that exceeds the limit is skipped and
+marked chunked so it is not retried for ever; it contributes nothing rather
+than stopping everything.
+
 `references` reads each paper's bibliography out of its HTML rendering, where
 LaTeXML marks every entry as its own element rather than leaving a run of text
 to be guessed apart. An entry is resolved to an arXiv identifier or DOI only

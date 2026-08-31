@@ -9,6 +9,7 @@ import re
 from typing import Callable, Iterable
 import unicodedata
 
+import multiprocessing
 import pymupdf
 import pymupdf4llm
 
@@ -33,6 +34,10 @@ MARKDOWN_MARKUP = re.compile(r"\*{1,3}|_+|`+|<[^>]{1,40}>|^\s*[-*+]\s+", re.M)
 # Font-size heading detection sometimes swallows an author block into the
 # title; a real section heading is short.
 MAX_HEADING_LENGTH = 80
+# Layout extraction is C code with no progress reporting and no internal
+# limit. One 7.7MB paper in this corpus pinned a core for 46 minutes without
+# returning, which blocked its whole batch and, through that, the ingest.
+EXTRACTION_TIMEOUT_SECONDS = 180
 # PDF text extraction can emit lone surrogates, which are valid Python str but
 # cannot be encoded as UTF-8. They reach neither SQLite nor the JSONL export.
 SURROGATES = re.compile(r"[\ud800-\udfff]")
@@ -118,9 +123,17 @@ def extract_pdf_chunks(
             raise ValueError(
                 f"Checksum mismatch for {download.arxiv_id}: manifest={download.sha256}, file={actual_checksum}"
             )
+        try:
+            pages = list(page_extractor(pdf_path))
+        except ExtractionTimeout as error:
+            # One unextractable paper must not cost the batch it is in. The
+            # caller still marks it chunked, so it is not retried for ever;
+            # it simply contributes nothing.
+            print(f"  ! {download.arxiv_id}: {error}", flush=True)
+            continue
         paper_chunks: list[Chunk] = []
         heading_stack: list[tuple[int, str]] = []
-        for page_number, page_text in enumerate(page_extractor(pdf_path), start=1):
+        for page_number, page_text in enumerate(pages, start=1):
             sections, heading_stack = parse_markdown_sections(page_text, heading_stack)
             chunk_index = 0
             for section in sections:
@@ -174,17 +187,49 @@ def is_bibliography(section_path: str) -> bool:
     return any(REFERENCES_TITLE.match(part.strip()) for part in section_path.split(" > "))
 
 
-def extract_pages_from_pdf(pdf_path: Path) -> list[str]:
+class ExtractionTimeout(RuntimeError):
+    """Layout extraction did not finish within the time allowed."""
+
+
+def _extract_into(queue: "multiprocessing.Queue[list[str]]", path: str) -> None:
+    """Run layout extraction in a child process, so it can be abandoned."""
+    pages = pymupdf4llm.to_markdown(path, page_chunks=True, show_progress=False)
+    queue.put([page.get("text") or "" for page in pages])
+
+
+def extract_pages_from_pdf(
+    pdf_path: Path, *, timeout: float = EXTRACTION_TIMEOUT_SECONDS
+) -> list[str]:
     """Return Markdown for every page of a text-based PDF.
 
     pymupdf4llm reconstructs reading order and marks headings by font size,
     which plain text extraction cannot express.  It costs roughly 50x the time
     of raw extraction, which is affordable because chunking is incremental.
 
+    It runs in a child process because it is C code that occasionally does not
+    return: one paper here held a core for 46 minutes and was still going. A
+    thread could not be abandoned and a signal would not interrupt the C call,
+    so the only way to bound it is a process that can be killed.
+
     Scanned PDFs need OCR, which will be a separate later stage.
     """
-    pages = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True, show_progress=False)
-    return [page.get("text") or "" for page in pages]
+    context = multiprocessing.get_context("spawn")
+    queue: multiprocessing.Queue = context.Queue()
+    worker = context.Process(target=_extract_into, args=(queue, str(pdf_path)), daemon=True)
+    worker.start()
+    try:
+        pages = queue.get(timeout=timeout)
+    except Exception as error:  # queue.Empty, and anything the child died of
+        worker.terminate()
+        worker.join(5)
+        raise ExtractionTimeout(
+            f"Layout extraction of {pdf_path.name} exceeded {timeout:.0f}s"
+        ) from error
+    finally:
+        if worker.is_alive():
+            worker.terminate()
+        worker.join(5)
+    return pages
 
 
 def extract_plain_pages_from_pdf(pdf_path: Path) -> list[str]:

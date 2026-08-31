@@ -225,3 +225,39 @@ def test_one_unencodable_paper_does_not_discard_a_whole_chunking_batch(tmp_path:
 
     rows = [json.loads(line) for line in destination.read_text(encoding="utf-8").splitlines()]
     assert rows and "value here" in rows[0]["text"]
+
+
+def test_layout_extraction_is_abandoned_when_it_will_not_finish(tmp_path: Path) -> None:
+    """One paper here pinned a core for 46 minutes without returning.
+
+    It is C code with no internal limit, so a thread could not be abandoned
+    and a signal would not interrupt the call. Only a killable process bounds
+    it, and without that bound one file blocks the whole ingest.
+    """
+    from verbatim.chunking import ExtractionTimeout, extract_pages_from_pdf
+
+    pdf = tmp_path / "slow.pdf"
+    pdf.write_bytes(b"%PDF-1.7 not really a pdf\n%%EOF\n")
+
+    # A timeout small enough that even a valid parse would not beat it.
+    with pytest.raises(ExtractionTimeout, match="exceeded"):
+        extract_pages_from_pdf(pdf, timeout=0.001)
+
+
+def test_a_paper_that_cannot_be_extracted_does_not_lose_its_batch(tmp_path: Path) -> None:
+    """The batch is the unit of work; one bad file must not discard the rest."""
+    from verbatim.chunking import ExtractionTimeout
+
+    first = download(tmp_path / "a.pdf")
+    second = download(tmp_path / "b.pdf")
+    object.__setattr__(second, "arxiv_id", "2401.99999v1")
+
+    def extract(path: Path) -> list[str]:
+        if path.name == "a.pdf":
+            raise ExtractionTimeout("Layout extraction of a.pdf exceeded 180s")
+        return ["## S\n\nThe second paper still chunks."]
+
+    chunks = extract_pdf_chunks([first, second], extract_pages=extract)
+
+    assert [chunk.arxiv_id for chunk in chunks] == ["2401.99999v1"]
+    assert "second paper" in chunks[0].text

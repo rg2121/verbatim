@@ -55,6 +55,9 @@ CHUNK_OVERLAP = _integer("VERBATIM_CHUNK_OVERLAP", 200)
 # PDFs held in memory at once. Extraction costs ~11MB per PDF and does not
 # plateau, so the whole corpus in one pass would need tens of gigabytes.
 CHUNK_BATCH_SIZE = _integer("VERBATIM_CHUNK_BATCH_SIZE", 100)
+# Layout extraction is C code with no internal limit; one paper here held a
+# core for 46 minutes. A paper that exceeds this is skipped, not waited for.
+EXTRACTION_TIMEOUT = float(_text("VERBATIM_EXTRACTION_TIMEOUT", "180"))
 
 # Retrieval.
 EMBEDDING_MODEL = _text("VERBATIM_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
