@@ -142,6 +142,10 @@ def run() -> None:
         help="Also score retrieval over this many model-written rephrasings",
     )
     eval_parser.add_argument(
+        "--decompose", action="store_true",
+        help="Also score retrieval after splitting each question into parts",
+    )
+    eval_parser.add_argument(
         "--hyde", action="store_true",
         help="Also score retrieval with a hypothetical answer added to the query",
     )
@@ -448,13 +452,14 @@ def run() -> None:
         cases = load_cases(args.cases)
         embedder = FastEmbedEmbedder(model_name=args.model)
         with CorpusStore(args.state) as corpus:
-            expanding = args.rewrites or args.hyde
+            expanding = args.rewrites or args.hyde or args.decompose
             scores = evaluate(
                 corpus, embedder, cases,
                 limit=args.limit, max_per_paper=args.max_per_paper,
                 reranker=CrossEncoderReranker() if args.rerank else None,
                 complete=_line_completion(args.llm) if expanding else None,
                 rewrites=args.rewrites, hyde=args.hyde,
+                decompose=args.decompose,
             )
         print(f"{args.cases}")
         print(describe_case_mix(cases))

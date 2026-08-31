@@ -180,6 +180,7 @@ def evaluate(
     complete: Callable[[str, str], str] | None = None,
     rewrites: int = 0,
     hyde: bool = False,
+    decompose: bool = False,
 ) -> list[ModeScore]:
     """Score every retrieval mode on the same cases, so they are comparable.
 
@@ -216,6 +217,18 @@ def evaluate(
     # comparison is against the same corpus rather than a silently skipped leg.
     if complete is not None and (rewrites or hyde):
         modes["hybrid+expansion"] = expanded
+    if complete is not None and decompose:
+        from verbatim.research import gather_for_parts, plan_subquestions
+
+        def decomposed(query: str) -> Sequence[ChunkMatch]:
+            parts = plan_subquestions(complete, query)
+            return gather_for_parts(
+                corpus, embedder, parts,
+                per_part=max(limit // max(len(parts), 1), 2),
+                max_per_paper=max_per_paper,
+            )[:limit]
+
+        modes["hybrid+plan"] = decomposed
     return [score_mode(name, cases, retrieve) for name, retrieve in modes.items()]
 
 

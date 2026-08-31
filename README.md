@@ -447,13 +447,24 @@ recall.** Four techniques, measured across the same 63 answerable cases:
 | hybrid + titles | 0.75 | 0.94 | 0.97 | 0.822 |
 | hybrid + 3 rewrites | 0.75 | 0.90 | **0.98** | 0.826 |
 | hybrid + HyDE | 0.70 | 0.92 | 0.97 | 0.799 |
+| hybrid + decomposition | 0.76 | 0.87 | 0.92 | 0.816 |
 
-Every one raises recall@10 and lowers recall@1. That is not four coincidences,
+The first three raise recall@10 and lower recall@1. That is not four coincidences,
 it is what widening does to a ranking that is already right most of the time:
 at r@1 0.81 the passage that answers the question is usually first already, and
 new candidates can only displace it. The gain is confined to the 5% of
 questions where hybrid finds nothing in ten, and it is paid for out of the 81%
 where it was already first.
+
+Decomposition is the exception, and it is worse on every measure including
+recall@10. It does not widen the pool, it divides it: each sub-question gets a
+fraction of the result slots, and a fragment of a question retrieves less
+precisely than the whole one. The caveat is that this measures decomposition on
+questions that never needed it - the answer key lists alternative papers for a
+question, not questions requiring two papers at once, so nothing here is the
+compound question `ask --plan` was built for. Measuring that needs cases whose
+answer genuinely spans two papers, and a metric that asks whether both were
+found rather than whether the first hit was right.
 
 Which matters depends on what reads the results. An answer is written from the
 first few passages, so `ask` wants r@1 and keeps plain hybrid. A person
