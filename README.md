@@ -161,7 +161,7 @@ source URL needed to cite it. Use `--arxiv-id` to search within one paper and
 | `vector` | meaning, without shared words | rare exact tokens |
 
 Keyword mode ranks by how many terms matched; `--match all` requires every one.
-Requiring every term scored mrr 0.214 against 0.845 on the eval set, which is
+Requiring every term scores mrr 0.389 against 0.866 on the eval set, which is
 why it is no longer the default. The index matches whole tokens and does not stem, so `field` does not
 match `fields` — use `field*`. Hybrid uses `any` internally, because requiring
 every word of a natural-language question matches nothing at all.
@@ -275,7 +275,7 @@ question and fuses a ranking from each, so a passage found by several
 phrasings rises; HyDE adds the sentence a paper answering the question would
 contain, which puts the query in the register of the passages rather than of
 the question. Both are off by default and unmeasured on this corpus, for the
-same reason the reranker is: hybrid retrieval scores mrr 0.940 here, and an
+same reason the reranker is: hybrid retrieval scores mrr 0.866 here, and an
 unmeasured change is as likely to cost as to gain. The user's own words are
 always retrieved for and are never displaced by a rewrite, and if the model is
 unreachable both fall back to the original question rather than failing.
@@ -308,6 +308,26 @@ against paper *titles* does find it at rank 1, and fails on "why does PPO clip
 its objective?", where `clip` matches CLIP the model. So title matching is a
 real signal and a partial one, worth measuring as a third retrieval leg rather
 than assuming.
+
+## What retrieval measures
+
+Over 76 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered -
+across 7,921 papers and 835,743 vectors:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| keyword-all | 0.38 | 0.40 | 0.40 | 0.389 |
+| keyword-any | 0.62 | 0.81 | 0.86 | 0.705 |
+| vector | 0.76 | 0.89 | 0.92 | 0.818 |
+| **hybrid** | **0.81** | **0.94** | **0.95** | **0.866** |
+
+An earlier version of this file reported mrr 0.940. That was a 42-case set,
+mostly paper titles, over a corpus chunked from PDFs. Scoring those same 42
+cases on today's corpus gives **mrr 0.917, r@5 0.98** - so reading papers from
+HTML, carrying tables as their own passages and growing the corpus by 370
+papers left retrieval where it was. The headline number is lower because the
+answer key is harder: the 21 cases added since score mrr 0.764, and eight of
+them are definitional questions of the kind this corpus is worst at.
 
 ## What was tried and rejected
 
@@ -402,8 +422,9 @@ is recorded here as a failed experiment rather than a negative result, and
 distractor set large enough that r@5 sits well below 1.0.
 
 **Cross-encoder reranking makes retrieval worse here**, on all three local
-models tried (mrr 0.940 → 0.752 / 0.701 / 0.741). Reranking pays when the right
-passage sits at rank 8; at r@1 0.90 there is nothing to promote and much to
+models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
+set of the time). Reranking pays when the right passage sits at rank 8; at
+r@1 0.86 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
 
 ## Serving it over HTTP
