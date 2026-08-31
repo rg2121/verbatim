@@ -8,18 +8,26 @@ A local-first, citation-focused literature-review assistant for scientific paper
 snapshot, the PDFs, the chunk export — is derived and can be rebuilt from it.
 
 ```
-arXiv API ──sync──▶ corpus.db  papers           every version seen, newest current
-                              downloads        local PDFs, checksummed
-                              html_sources     local HTML renderings, checksummed
-                              chunks           passages + char offsets, from either
-                              chunks_fts       BM25 keyword index
-                              embeddings       one vector per chunk per model
-                              vec_chunks       nearest-neighbour index
+arXiv API ──sync──▶ corpus.db  papers            every version seen, newest current
+                              downloads         local PDFs, checksummed
+                              download_failures the ones arXiv has no PDF for
+                              html_sources      local HTML renderings, checksummed
+                              paper_references  bibliographies, read from the HTML
+                              chunks            passages + char offsets, from either
+                              chunks_fts        BM25 index over passages
+                              papers_fts        BM25 index over titles
+                              embeddings        one vector per chunk per model
+                              paper_embeddings  one vector per paper's abstract
+                              vec_chunks        nearest-neighbour index, passages
+                              vec_papers        nearest-neighbour index, papers
                     │
            download ──▶ data/pdfs/*.pdf
                html ──▶ data/html/*.html
+         references ──▶ what the corpus cites and does not hold
+               grow ──▶ adds those papers by identifier
               chunk ──▶ data/chunks.jsonl   (export, not the store)
               embed ──▶ vectors in corpus.db
+           pipeline ──▶ every stage above, in rounds, until nothing is pending
              search ──▶ ranked passages with citations
                 ask ──▶ an answer, every claim cited and verified
 ```
