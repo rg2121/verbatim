@@ -20,6 +20,10 @@ def seeded(tmp_path: Path, papers: int = 3) -> Path:
         corpus.record_embeddings(
             "stub", [(c.chunk_id, [1.0, 0.0, 0.0, 0.0]) for c in corpus.all_chunks()]
         )
+        # Only an open licence may be redistributed, and a sample redistributes
+        # the text, so a sample can hold nothing else.
+        corpus.connection.execute("UPDATE papers SET license_class = 'open'")
+        corpus.connection.commit()
     return tmp_path / "corpus.db"
 
 
@@ -90,3 +94,46 @@ def test_sampling_an_unembedded_corpus_says_so(tmp_path: Path) -> None:
 def test_papers_must_be_at_least_one(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at least 1"):
         export_sample(tmp_path / "corpus.db", tmp_path / "s.db", papers=0, model_id="stub")
+
+
+def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
+    """A sample ships the papers' own words, which is redistribution.
+
+    arXiv's default licence grants that right to arXiv, not to us, so a sample
+    holding an arxiv-nonexclusive paper publishes text this project has no
+    right to publish. The first sample built here held 20 of them.
+    """
+    import sqlite3
+
+    from verbatim.sampling import choose_papers
+
+    source = sqlite3.connect(":memory:")
+    source.row_factory = sqlite3.Row
+    source.executescript(
+        """
+        CREATE TABLE papers (arxiv_id TEXT, is_latest INT, categories_json TEXT,
+                             license_class TEXT);
+        CREATE TABLE chunks (chunk_id TEXT, arxiv_id TEXT, kind TEXT);
+        CREATE TABLE embeddings (chunk_id TEXT, model_id TEXT);
+        """
+    )
+    for arxiv_id, licence in [
+        ("2608.11111v1", "open"),
+        ("2608.22222v1", "arxiv-nonexclusive"),
+        ("2608.33333v1", "no-derivatives"),
+        ("2608.44444v1", "unknown"),
+    ]:
+        source.execute(
+            "INSERT INTO papers VALUES (?, 1, '[\"cs.CL\"]', ?)", (arxiv_id, licence)
+        )
+        for n in range(60):
+            source.execute(
+                "INSERT INTO chunks VALUES (?, ?, 'body')", (f"{arxiv_id}-{n}", arxiv_id)
+            )
+            source.execute(
+                "INSERT INTO embeddings VALUES (?, 'stub')", (f"{arxiv_id}-{n}",)
+            )
+
+    chosen = choose_papers(source, papers=10, model_id="stub")
+
+    assert chosen == ["2608.11111v1"]

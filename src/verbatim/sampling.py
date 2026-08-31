@@ -66,6 +66,12 @@ def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> 
     Ordinary-sized papers, not the biggest: ranking by passage count selects
     the longest surveys in the corpus and triples the size of the sample for
     no extra demonstration.
+
+    Only papers under a licence that permits redistribution. A sample ships
+    the papers' own words inside this repository, which is redistribution, and
+    arXiv's default licence grants that right to arXiv rather than to us. The
+    other classes are excluded for the same reason: `no-derivatives` forbids
+    the chunking, and `unknown` means unknown rather than permitted.
     """
     rows = source.execute(
         """
@@ -74,6 +80,7 @@ def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> 
         JOIN chunks AS c ON c.arxiv_id = p.arxiv_id
         JOIN embeddings AS e ON e.chunk_id = c.chunk_id AND e.model_id = ?
         WHERE p.is_latest = 1 AND c.kind = 'body'
+          AND p.license_class = 'open'
         GROUP BY p.arxiv_id
         HAVING vectors BETWEEN ? AND ?
         ORDER BY p.arxiv_id
