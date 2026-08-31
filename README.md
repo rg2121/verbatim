@@ -429,6 +429,28 @@ is recorded here as a failed experiment rather than a negative result, and
 `with_context` stays off because it is unmeasured. Redoing it needs a
 distractor set large enough that r@5 sits well below 1.0.
 
+**Everything that widens the candidate pool trades top precision for deep
+recall.** Four techniques, measured across the same 63 answerable cases:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| **hybrid** | **0.81** | **0.94** | 0.95 | **0.866** |
+| hybrid + titles | 0.75 | 0.94 | 0.97 | 0.822 |
+| hybrid + 3 rewrites | 0.75 | 0.90 | **0.98** | 0.826 |
+| hybrid + HyDE | 0.70 | 0.92 | 0.97 | 0.799 |
+
+Every one raises recall@10 and lowers recall@1. That is not four coincidences,
+it is what widening does to a ranking that is already right most of the time:
+at r@1 0.81 the passage that answers the question is usually first already, and
+new candidates can only displace it. The gain is confined to the 5% of
+questions where hybrid finds nothing in ten, and it is paid for out of the 81%
+where it was already first.
+
+Which matters depends on what reads the results. An answer is written from the
+first few passages, so `ask` wants r@1 and keeps plain hybrid. A person
+scanning ten results might prefer the wider net, which is why each remains
+available behind a flag rather than being deleted.
+
 **Adding a title-matching leg makes retrieval worse, for the same reason
 reranking does.** It was built to answer the definitional questions passage
 search cannot: "what is the Adam optimizer" finds nothing from the Adam paper
