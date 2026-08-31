@@ -287,6 +287,21 @@ splitting a question that never needed splitting buys three mediocre
 retrievals in place of one good one. Whether it helps is a measurement waiting
 on the eval set, not a claim.
 
+**A definitional question loses to the papers that merely use the thing.**
+`grow` added the Adam paper, and "what is the Adam optimizer?" still returns
+nothing from it in the top ten: 3,152 papers here mention Adam, the paper that
+defines it holds 53 passages, and every result is somebody's "we trained with
+Adam" hyperparameter section. Adding the foundational paper was necessary and
+not sufficient.
+
+The paper-abstract index does not fix it either - the Adam paper is not in its
+top four for that question, because an abstract about stochastic optimization
+sits near every other paper about optimization. Matching the question's terms
+against paper *titles* does find it at rank 1, and fails on "why does PPO clip
+its objective?", where `clip` matches CLIP the model. So title matching is a
+real signal and a partial one, worth measuring as a third retrieval leg rather
+than assuming.
+
 ## What was tried and rejected
 
 Kept here because the negative results are the useful part.
