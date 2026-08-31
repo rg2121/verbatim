@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable
 
 from verbatim.chunking import BODY
-from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
 from verbatim.expansion import (
     dedupe_queries,
@@ -19,6 +19,8 @@ from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
 # Standard RRF constant: large enough that the top few ranks are not dominated
 # by a single leg, small enough that deep results still fade out.
 RRF_SMOOTHING = 60
+# How much wider to search when a paper filter will discard results afterwards.
+FILTER_OVERFETCH = 8
 
 
 def vector_search(
@@ -30,10 +32,18 @@ def vector_search(
     arxiv_id: str | None = None,
     include_references: bool = False,
     index: VectorIndex | None = None,
+    papers: PaperFilter | None = None,
 ) -> list[ChunkMatch]:
     """Rank passages by embedding similarity rather than shared words.
 
     Scores are similarity, so higher is better, matching the keyword path.
+
+    A paper filter is applied after the index returns, because the vector
+    index carries only chunk_id, arxiv_id and kind as metadata: filtering on
+    publication date or subject would mean rebuilding it with those columns.
+    The search over-fetches instead, so a narrow filter can still come back
+    with fewer than `limit` results rather than silently ranking the wrong
+    papers.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -42,6 +52,8 @@ def vector_search(
     if stored == 0:
         return []
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
+    # Over-fetch when filtering, since matches are discarded after ranking.
+    fetch = limit * FILTER_OVERFETCH if papers else limit
     ensure_current(index, stored, model.model_id)
 
     # Filters are pushed into the index rather than applied to a list of chunk
@@ -49,7 +61,7 @@ def vector_search(
     # chunk id would fail at roughly 500 papers.
     hits = index.search(
         embedder.embed_query(query),
-        limit=limit,
+        limit=fetch,
         arxiv_id=arxiv_id,
         kind=None if include_references else BODY,
     )
@@ -57,14 +69,19 @@ def vector_search(
         return []
 
     by_id = {chunk.chunk_id: chunk for chunk in corpus.chunks_by_id([cid for cid, _ in hits])}
+    allowed = corpus.papers_matching(papers, [chunk.arxiv_id for chunk in by_id.values()]) if papers else None
     matches: list[ChunkMatch] = []
     for chunk_id, distance in hits:
         chunk = by_id.get(chunk_id)
         if chunk is None:  # index drifted mid-query; skip rather than fabricate
             continue
+        if allowed is not None and chunk.arxiv_id not in allowed:
+            continue
         matches.append(
             ChunkMatch(chunk=chunk, score=_similarity(distance), snippet=_preview(chunk.text))
         )
+        if len(matches) == limit:
+            break
     return matches
 
 
@@ -81,6 +98,7 @@ def hybrid_search(
     include_references: bool = False,
     index: VectorIndex | None = None,
     use_titles: bool = False,
+    papers: PaperFilter | None = None,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
 
@@ -99,6 +117,7 @@ def hybrid_search(
         arxiv_id=arxiv_id,
         match="any",
         include_references=include_references,
+        papers=papers,
     )
     vector = vector_search(
         corpus,
@@ -108,6 +127,7 @@ def hybrid_search(
         arxiv_id=arxiv_id,
         include_references=include_references,
         index=index,
+        papers=papers,
     )
 
     titles = (

@@ -54,6 +54,52 @@ BUSY_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
+class PaperFilter:
+    """Restrict retrieval to papers by date or subject.
+
+    Similarity search has no notion of recency and a keyword index has no
+    notion of subject, so "what came out in cs.CL this month" is a question
+    neither can answer on its own. This narrows the corpus first, and both
+    legs then rank within it.
+    """
+
+    since: str | None = None
+    category: str | None = None
+
+    def __bool__(self) -> bool:
+        return bool(self.since or self.category)
+
+    def clause(self, alias: str = "c") -> tuple[str, list[object]]:
+        """A SQL fragment restricting `alias` to matching papers.
+
+        Written as EXISTS rather than an id list because SQLite caps a
+        statement at 32,766 variables, which any useful filter would exceed.
+        """
+        if not self:
+            return "", []
+        conditions = [f"p.arxiv_id = {alias}.arxiv_id"]
+        parameters: list[object] = []
+        if self.since:
+            conditions.append("p.published >= ?")
+            parameters.append(self.since)
+        if self.category:
+            # categories_json is a JSON array; match the quoted element so
+            # "cs.CL" does not also match "cs.CLX".
+            conditions.append("p.categories_json LIKE ?")
+            parameters.append(f'%"{self.category}"%')
+        return (
+            f"EXISTS (SELECT 1 FROM papers AS p WHERE {' AND '.join(conditions)})",
+            parameters,
+        )
+
+    def matches(self, published: str, categories: Sequence[str]) -> bool:
+        """Whether one paper passes, for filtering results the index returned."""
+        if self.since and published < self.since:
+            return False
+        return not self.category or self.category in categories
+
+
+@dataclass(frozen=True)
 class SyncSummary:
     inserted: int
     updated: int
@@ -969,11 +1015,12 @@ class CorpusStore:
         arxiv_id: str | None = None,
         match: str = "all",
         include_references: bool = False,
+        papers: PaperFilter | None = None,
     ) -> list[ChunkMatch]:
         """Rank chunks by BM25 relevance to a keyword query.
 
-        `arxiv_id` filters before ranking, so scores are not diluted by matches
-        in papers the caller already excluded.
+        `arxiv_id` and `papers` filter before ranking, so scores are not
+        diluted by matches in papers the caller already excluded.
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -987,6 +1034,10 @@ class CorpusStore:
             parameters.append(arxiv_id)
         if not include_references:
             clauses.append("c.kind = 'body'")
+        if papers:
+            clause, filter_parameters = papers.clause("c")
+            clauses.append(clause)
+            parameters.extend(filter_parameters)
         parameters.append(limit)
         rows = self.connection.execute(
             f"""
@@ -1257,6 +1308,31 @@ class CorpusStore:
             (name,),
         ).fetchone()
         return row is not None
+
+    def papers_matching(
+        self, papers: "PaperFilter", arxiv_ids: Sequence[str]
+    ) -> set[str]:
+        """Which of these papers pass the filter.
+
+        Asked in one query over a bounded list - the ids the vector index just
+        returned - rather than over the corpus, so it stays well inside
+        SQLite's limit on statement variables.
+        """
+        if not papers or not arxiv_ids:
+            return set(arxiv_ids)
+        unique = list(dict.fromkeys(arxiv_ids))
+        conditions = ["arxiv_id IN (" + ",".join("?" * len(unique)) + ")"]
+        parameters: list[object] = list(unique)
+        if papers.since:
+            conditions.append("published >= ?")
+            parameters.append(papers.since)
+        if papers.category:
+            conditions.append("categories_json LIKE ?")
+            parameters.append(f'%"{papers.category}"%')
+        rows = self.connection.execute(
+            f"SELECT arxiv_id FROM papers WHERE {' AND '.join(conditions)}", parameters
+        ).fetchall()
+        return {row["arxiv_id"] for row in rows}
 
     def search_titles(self, query: str, *, limit: int = 10) -> list[tuple[str, float]]:
         """Papers whose title matches the query, best first.

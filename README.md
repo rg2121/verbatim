@@ -188,6 +188,15 @@ the ingest: a DNS failure took out a licence run here and everything after it
 should have carried on. A failed stage is retried while other stages are still
 making progress, and the summary names what failed rather than hiding it.
 
+`search --since` and `search --category` narrow retrieval to papers by date or
+subject, which neither leg can do alone: similarity has no notion of recency
+and a keyword index has no notion of subject. The keyword leg filters before
+ranking; the vector leg over-fetches and filters afterwards, because the
+vector index carries only chunk id, paper id and kind as metadata and
+filtering on publication date would mean rebuilding it. A very narrow filter
+can therefore return fewer results than asked for, rather than quietly ranking
+papers it was told to exclude.
+
 `stats` shows what each stage has done and what it has left, which is how a
 long ingest stays observable:
 

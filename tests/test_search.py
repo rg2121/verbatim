@@ -193,3 +193,66 @@ def test_a_result_from_html_is_not_given_a_page_number() -> None:
     assert "section II Formalism" in rendered
     # The header already says where it is, so it is not repeated below.
     assert rendered.count("II Formalism") == 1
+
+
+def filtered_corpus(tmp_path: Path) -> CorpusStore:
+    """Two papers, different dates and categories, each with one passage."""
+    from verbatim.arxiv import Paper
+
+    corpus = CorpusStore(tmp_path / "corpus.db")
+    for arxiv_id, published, category in [
+        ("2601.11111v1", "2026-01-15T00:00:00Z", "cs.CL"),
+        ("2608.22222v1", "2026-08-15T00:00:00Z", "gr-qc"),
+    ]:
+        pdf = tmp_path / f"{arxiv_id}.pdf"
+        pdf.write_bytes(f"%PDF-1.7 {arxiv_id}\n%%EOF\n".encode())
+        record = DownloadedPaper(
+            arxiv_id=arxiv_id, source_url="u", pdf_url="p", license_url=None,
+            local_path=str(pdf), sha256=file_sha256(pdf), byte_count=pdf.stat().st_size,
+        )
+        corpus.upsert_papers([Paper(
+            arxiv_id=arxiv_id, title=f"Paper {arxiv_id}", summary="Abstract.",
+            authors=["Ada Lovelace"], categories=[category], published=published,
+            updated=published, source_url="u", pdf_url="p", license_url=None,
+        )])
+        corpus.record_downloads([record])
+        corpus.record_chunks(
+            extract_pdf_chunks([record], extract_pages=lambda _: ["Lattice models of flux."])
+        )
+    return corpus
+
+
+def test_search_can_be_restricted_to_papers_published_since_a_date(tmp_path: Path) -> None:
+    """Similarity has no notion of recency, so the filter has to supply one."""
+    from verbatim.corpus import PaperFilter
+
+    with filtered_corpus(tmp_path) as corpus:
+        everything = corpus.search_chunks("lattice")
+        recent = corpus.search_chunks("lattice", papers=PaperFilter(since="2026-06-01"))
+
+    assert len(everything) == 2
+    assert [m.chunk.arxiv_id for m in recent] == ["2608.22222v1"]
+
+
+def test_search_can_be_restricted_to_one_category(tmp_path: Path) -> None:
+    from verbatim.corpus import PaperFilter
+
+    with filtered_corpus(tmp_path) as corpus:
+        in_cl = corpus.search_chunks("lattice", papers=PaperFilter(category="cs.CL"))
+
+    assert [m.chunk.arxiv_id for m in in_cl] == ["2601.11111v1"]
+
+
+def test_a_category_filter_does_not_match_a_longer_name(tmp_path: Path) -> None:
+    """cs.CL must not also select cs.CLX, which a bare substring would."""
+    from verbatim.corpus import PaperFilter
+
+    with filtered_corpus(tmp_path) as corpus:
+        assert corpus.search_chunks("lattice", papers=PaperFilter(category="cs.C")) == []
+
+
+def test_an_empty_filter_changes_nothing(tmp_path: Path) -> None:
+    from verbatim.corpus import PaperFilter
+
+    with filtered_corpus(tmp_path) as corpus:
+        assert len(corpus.search_chunks("lattice", papers=PaperFilter())) == 2

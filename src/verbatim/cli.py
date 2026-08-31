@@ -30,7 +30,7 @@ from verbatim.chunking import (
     extract_plain_pages_from_pdf,
     normalize_page_text,
 )
-from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim import config
 import hashlib
 
@@ -267,6 +267,12 @@ def run() -> None:
         "--use-titles", action="store_true",
         help="Also retrieve from papers whose title matches. Measured worse "
              "overall (mrr 0.866 -> 0.822) but finds definitional papers",
+    )
+    search_parser.add_argument(
+        "--since", help="Only papers published on or after this date (YYYY-MM-DD)"
+    )
+    search_parser.add_argument(
+        "--category", help="Only papers in this arXiv category, e.g. cs.CL"
     )
     search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
@@ -698,6 +704,7 @@ def run() -> None:
         )
 
     if args.command == "search":
+        papers = PaperFilter(since=args.since, category=args.category)
         with CorpusStore(args.state) as corpus:
             if args.mode == "keyword":
                 matches = corpus.search_chunks(
@@ -706,9 +713,11 @@ def run() -> None:
                     arxiv_id=args.arxiv_id,
                     match=args.match,
                     include_references=args.include_references,
+                    papers=papers,
                 )
             else:
                 search = vector_search if args.mode == "vector" else hybrid_search
+                extra = {"use_titles": args.use_titles} if args.mode == "hybrid" else {}
                 matches = search(
                     corpus,
                     FastEmbedEmbedder(model_name=args.model),
@@ -716,6 +725,8 @@ def run() -> None:
                     limit=args.limit,
                     arxiv_id=args.arxiv_id,
                     include_references=args.include_references,
+                    papers=papers,
+                    **extra,
                 )
         if args.rerank and matches:
             matches = rerank(
