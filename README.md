@@ -323,6 +323,22 @@ turned out to work on one kind and be blind to the other:
 | `no_coverage` | 9 | **7** | 0.431 - 0.782 |
 | `no_answer` | 4 | **0** | 0.769 - 0.853 |
 
+Raising the threshold to close the gap is not worth it, and that is measured
+rather than assumed. Against the 63 answerable cases:
+
+| threshold | gaps caught | false warnings |
+|---|---|---|
+| **0.65** (current) | **7/9** | **1/63 (2%)** |
+| 0.70 | 7/9 | 5/63 (8%) |
+| 0.75 | 8/9 | 16/63 (25%) |
+| 0.79 | 9/9 | 27/63 (43%) |
+
+Catching the last two costs a warning on 43% of correct answers, and a warning
+that fires that often is one people learn to ignore - which would cost the
+seven it already catches. 0.70 buys nothing at four times the false-warning
+rate. The default stays at 0.65 because it was measured, not because it was
+chosen first.
+
 The distributions barely overlap. For six attempts the detector had been asked
 to find something no retrieval signal can see, half the time, and the mixed
 label made a partial success look like a flat failure. The two misses are the
