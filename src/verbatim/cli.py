@@ -263,6 +263,11 @@ def run() -> None:
         help="Re-score with a cross-encoder. Measured worse: mrr 0.940 -> 0.752",
     )
     search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
+    search_parser.add_argument(
+        "--use-titles", action="store_true",
+        help="Also retrieve from papers whose title matches. Measured worse "
+             "overall (mrr 0.866 -> 0.822) but finds definitional papers",
+    )
     search_parser.add_argument("--arxiv-id", help="Restrict the search to one paper version")
     search_parser.add_argument("--full", action="store_true", help="Print whole passages, not snippets")
     search_parser.add_argument(

@@ -80,6 +80,7 @@ def hybrid_search(
     max_per_paper: int | None = None,
     include_references: bool = False,
     index: VectorIndex | None = None,
+    use_titles: bool = False,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
 
@@ -109,13 +110,20 @@ def hybrid_search(
         index=index,
     )
 
+    titles = (
+        title_search(corpus, query, include_references=include_references)
+        if use_titles
+        else []
+    )
+
     fused: dict[str, float] = defaultdict(float)
-    for ranking in (keyword, vector):
+    for ranking in (keyword, vector, titles) if use_titles else (keyword, vector):
         for rank, match in enumerate(ranking, start=1):
             fused[match.chunk.chunk_id] += 1.0 / (smoothing + rank)
 
     # Prefer the keyword leg's snippet: it highlights the matched terms.
     best: dict[str, ChunkMatch] = {match.chunk.chunk_id: match for match in vector}
+    best.update({match.chunk.chunk_id: match for match in titles})
     best.update({match.chunk.chunk_id: match for match in keyword})
 
     ordered = [
@@ -127,6 +135,37 @@ def hybrid_search(
     if max_per_paper is not None:
         ordered = cap_per_paper(ordered, max_per_paper)
     return ordered[:limit]
+
+
+def title_search(
+    corpus: CorpusStore,
+    query: str,
+    *,
+    papers: int = 5,
+    per_paper: int = 3,
+    include_references: bool = False,
+) -> list[ChunkMatch]:
+    """Passages from the papers whose *titles* match the question.
+
+    A third kind of evidence, and the only one that can answer a definitional
+    question. "What is the Adam optimizer" is drowned in passage space - 3,152
+    papers here mention Adam and the one that defines it holds 53 passages -
+    but the paper called "Adam: A Method for Stochastic Optimization" is the
+    first title match. Within each paper the query still chooses the passages,
+    so a title match contributes evidence rather than an arbitrary excerpt.
+    """
+    matches: list[ChunkMatch] = []
+    for arxiv_id, _ in corpus.search_titles(query, limit=papers):
+        matches.extend(
+            corpus.search_chunks(
+                query,
+                limit=per_paper,
+                arxiv_id=arxiv_id,
+                match="any",
+                include_references=include_references,
+            )
+        )
+    return matches
 
 
 def expanded_search(

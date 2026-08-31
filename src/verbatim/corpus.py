@@ -1018,6 +1018,7 @@ class CorpusStore:
         # external-content FTS5 table reads the content table rather than the
         # index, so neither can tell us the index needs a backfill.
         search_index_existed = self._table_exists("chunks_fts")
+        title_index_existed = self._table_exists("papers_fts")
         with self.connection:
             self.connection.executescript(
                 """
@@ -1170,6 +1171,36 @@ class CorpusStore:
 
                 CREATE INDEX IF NOT EXISTS embeddings_by_model ON embeddings (model_id);
 
+                -- Titles, searched separately from passages. A definitional
+                -- question loses to the papers that merely use the thing:
+                -- 3,152 papers here mention Adam and the one that defines it
+                -- holds 53 passages. A title says what a paper is called,
+                -- which is the signal a passage cannot carry.
+                CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+                    title,
+                    content='papers',
+                    content_rowid='rowid',
+                    tokenize="unicode61 remove_diacritics 2"
+                );
+
+                CREATE TRIGGER IF NOT EXISTS papers_fts_after_insert
+                AFTER INSERT ON papers BEGIN
+                    INSERT INTO papers_fts (rowid, title) VALUES (new.rowid, new.title);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS papers_fts_after_delete
+                AFTER DELETE ON papers BEGIN
+                    INSERT INTO papers_fts (papers_fts, rowid, title)
+                    VALUES ('delete', old.rowid, old.title);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS papers_fts_after_update
+                AFTER UPDATE ON papers BEGIN
+                    INSERT INTO papers_fts (papers_fts, rowid, title)
+                    VALUES ('delete', old.rowid, old.title);
+                    INSERT INTO papers_fts (rowid, title) VALUES (new.rowid, new.title);
+                END;
+
                 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
                     text,
                     content='chunks',
@@ -1198,6 +1229,10 @@ class CorpusStore:
             )
             if not search_index_existed:
                 self._backfill_search_index()
+            if not title_index_existed:
+                self.connection.execute(
+                    "INSERT INTO papers_fts (papers_fts) VALUES ('rebuild')"
+                )
             self._add_missing_columns()
             self._retire_renamed_columns()
             self._relax_html_source_nullability()
@@ -1222,6 +1257,36 @@ class CorpusStore:
             (name,),
         ).fetchone()
         return row is not None
+
+    def search_titles(self, query: str, *, limit: int = 10) -> list[tuple[str, float]]:
+        """Papers whose title matches the query, best first.
+
+        Separate from passage search because it answers a different question.
+        A passage says what a paper mentions; a title says what it is called,
+        and for "what is the Adam optimizer" the paper called "Adam: A Method
+        for Stochastic Optimization" is the answer while three thousand papers
+        that merely used Adam are not.
+        """
+        expression = build_title_query(query)
+        if not expression:
+            return []
+        try:
+            rows = self.connection.execute(
+                """
+                SELECT p.arxiv_id, bm25(papers_fts) AS relevance
+                FROM papers_fts
+                JOIN papers AS p ON p.rowid = papers_fts.rowid
+                WHERE papers_fts MATCH ? AND p.is_latest = 1
+                ORDER BY relevance
+                LIMIT ?
+                """,
+                (expression, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Same guard as passage search: a query that FTS5 cannot parse is
+            # a miss, not a crash.
+            return []
+        return [(row["arxiv_id"], float(row["relevance"])) for row in rows]
 
     def _backfill_search_index(self) -> None:
         """Index chunks stored before the search index existed.
@@ -1396,6 +1461,31 @@ def pack_vector(vector: Sequence[float]) -> bytes:
 
 def unpack_vector(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(blob) // 4}f", blob))
+
+
+# A title is a handful of words, so a match on "what" or "is" carries almost
+# no information and yet dominates BM25 over so short a field. Passage search
+# does not need this: a match on a stopword inside 1,200 characters is diluted
+# by everything around it.
+TITLE_STOPWORDS = frozenset(
+    """a an and are as at be by can do does for from how in into is it its of on
+    or that the their there this to was were what when where which who why with
+    you your""".split()
+)
+
+
+def build_title_query(query: str) -> str:
+    """An FTS5 expression over titles, with the question words removed.
+
+    Returns an empty string when nothing but stopwords is left, which is a
+    question with no subject to match a title against.
+    """
+    content = [
+        word
+        for word in re.findall(r"[\w'-]+", query.lower())
+        if word not in TITLE_STOPWORDS and len(word) > 1
+    ]
+    return build_fts_query(" ".join(content), match="any")
 
 
 def build_fts_query(query: str, *, match: str = "all") -> str:

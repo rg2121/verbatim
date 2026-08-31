@@ -421,6 +421,23 @@ is recorded here as a failed experiment rather than a negative result, and
 `with_context` stays off because it is unmeasured. Redoing it needs a
 distractor set large enough that r@5 sits well below 1.0.
 
+**Adding a title-matching leg makes retrieval worse, for the same reason
+reranking does.** It was built to answer the definitional questions passage
+search cannot: "what is the Adam optimizer" finds nothing from the Adam paper
+in ten results, and a title leg puts it at rank 4. Measured across all 63
+answerable cases it costs more than it earns:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| hybrid | **0.81** | 0.94 | 0.95 | **0.866** |
+| hybrid+titles | 0.75 | 0.94 | **0.97** | 0.822 |
+
+It rescues a few deep misses and displaces better passage matches at the top,
+which is a bad trade when the answer is written from the first few passages.
+Available behind `--use-titles` for the definitional case, off by default. A
+version that applies titles only to questions that look definitional might get
+both, but that is a guess until it is measured.
+
 **Cross-encoder reranking makes retrieval worse here**, on all three local
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
 set of the time). Reranking pays when the right passage sits at rank 8; at

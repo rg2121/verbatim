@@ -207,6 +207,10 @@ def evaluate(
         "keyword-any": lambda q: corpus.search_chunks(q, limit=limit, match="any"),
         "vector": lambda q: vector_search(corpus, embedder, q, limit=limit),
         "hybrid": hybrid,
+        "hybrid+titles": lambda q: hybrid_search(
+            corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
+            use_titles=True,
+        ),
     }
     # Only offered when a model is available to do the rewriting, so the
     # comparison is against the same corpus rather than a silently skipped leg.
