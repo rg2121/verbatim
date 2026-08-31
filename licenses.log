@@ -1,8 +1,0 @@
-16:40:51   Only 'open' permits redistribution or training; 'arxiv-nonexclusive' grants arXiv distribution rights, not you.
-16:44:08 sqlite3.OperationalError: database is locked
-16:44:13 sqlite3.OperationalError: database is locked
-16:44:19 sqlite3.OperationalError: database is locked
-16:44:24 sqlite3.OperationalError: database is locked
-16:44:30 sqlite3.OperationalError: database is locked
-16:44:53 sqlite3.OperationalError: error in table chunks after drop column: no such column: pdf_sha256
-16:45:12 sqlite3.OperationalError: error in table chunks after drop column: no such column: pdf_sha256
