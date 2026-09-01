@@ -42,13 +42,17 @@ nothing to fetch and nothing to embed:
 ```bash
 uv run verbatim search "how do transformers handle long context" --state sample/corpus.db
 uv run verbatim ask "what is a neural turing machine?" --state sample/corpus.db
+uv run verbatim graph --state sample/corpus.db
 ```
 
-Forty papers, 2,931 passages and their vectors, about 20 MB. It carries no PDFs
-or renderings, only the database, so `stats` correctly reports zero PDFs rather
-than claiming files it does not have. Every passage still carries its own arXiv
-id, section, offsets, checksum and licence, so citations are complete. `ask`
-needs a local model through Ollama; `search` needs nothing.
+Forty papers, 3,139 passages and their vectors, 2,230 bibliography entries,
+about 23 MB. A share of the papers is picked as a citation neighborhood - a
+hub and the papers that cite it - so the `graph` command demonstrates edges
+on a clone rather than printing zeros. It carries no PDFs or renderings, only
+the database, so `stats` correctly reports zero PDFs rather than claiming
+files it does not have. Every passage still carries its own arXiv id,
+section, offsets, checksum and licence, so citations are complete. `ask`
+needs a local model through Ollama; `search` and `graph` need nothing.
 
 Regenerate it from a full corpus with `verbatim sample --papers 40`.
 
