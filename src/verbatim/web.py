@@ -382,6 +382,31 @@ PAGE = """<!doctype html>
   mark { background: transparent; color: inherit; font-weight: 700; }
   footer { color: var(--muted); font-size: .8rem; margin-top: 2rem;
            border-top: 1px solid var(--line); padding-top: 1rem; }
+
+  /* The conversation. Questions and answers stack, so a reader can see what
+     was asked three turns ago and what it was answered with. */
+  #thread { display: flex; flex-direction: column; gap: .9rem; margin: 1rem 0; }
+  .turn { display: flex; }
+  .turn.you { justify-content: flex-end; }
+  .bubble {
+    max-width: 46rem; border-radius: 10px; padding: .75rem .95rem;
+    border: 1px solid var(--line); background: var(--card);
+  }
+  .turn.you .bubble {
+    background: var(--accent); color: #fff; border-color: transparent;
+    max-width: 34rem;
+  }
+  .who { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+         color: var(--muted); margin-bottom: .3rem; }
+  .turn.you .who { color: rgba(255,255,255,.75); }
+  .thinking { color: var(--muted); font-size: .85rem; }
+  .resolved { color: var(--muted); font-size: .8rem; font-style: italic;
+              margin: 0 0 .45rem; }
+  .askbar { position: sticky; bottom: 0; background: var(--bg);
+            padding: .75rem 0 .25rem; border-top: 1px solid var(--line); }
+  .askbar form { margin: 0; }
+  .cursor::after { content: "\u258c"; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -402,19 +427,18 @@ PAGE = """<!doctype html>
   <p class="note" id="status"></p>
   <div id="results"></div>
 
-  <form id="askform">
-    <input type="search" id="aq" placeholder="Or ask a question, answered with verified citations"
-           aria-label="Ask a question">
-    <button type="submit" id="askgo">Ask</button>
-    <button type="button" id="askreset" hidden>New topic</button>
-  </form>
-  <p class="note" id="askresolved" hidden></p>
-  <p class="note" id="askstatus"></p>
-  <article id="askcard" hidden>
-    <p class="text" id="asktext"></p>
-    <p class="warn" id="asksubject" hidden></p>
-    <div class="refs" id="askrefs" hidden></div>
-  </article>
+  <div id="thread"></div>
+
+  <div class="askbar">
+    <form id="askform">
+      <input type="search" id="aq" autocomplete="off"
+             placeholder="Ask a question, answered with verified citations"
+             aria-label="Ask a question">
+      <button type="submit" id="askgo">Ask</button>
+      <button type="button" id="askreset" hidden>New topic</button>
+    </form>
+    <p class="note" id="askstatus"></p>
+  </div>
 
   <footer id="stats"></footer>
 </main>
@@ -514,9 +538,25 @@ let thread = [];
 
 function resetThread() {
   thread = [];
+  $("thread").innerHTML = "";
   $("askreset").hidden = true;
-  $("askresolved").hidden = true;
-  $("askstatus").textContent = "New topic: the next question starts fresh.";
+  $("askstatus").textContent = "";
+  $("aq").focus();
+}
+
+function bubble(who, label) {
+  const turn = document.createElement("div");
+  turn.className = "turn " + who;
+  const box = document.createElement("div");
+  box.className = "bubble";
+  const tag = document.createElement("div");
+  tag.className = "who";
+  tag.textContent = label;
+  box.appendChild(tag);
+  turn.appendChild(box);
+  $("thread").appendChild(turn);
+  turn.scrollIntoView({ block: "end", behavior: "smooth" });
+  return box;
 }
 
 function runAsk(event) {
@@ -525,87 +565,103 @@ function runAsk(event) {
   if (!question) return;
   if (asking) asking.close();
   $("askgo").disabled = true;
-  $("askcard").hidden = false;
-  $("asktext").textContent = "";
-  $("askrefs").hidden = true;
-  $("askrefs").innerHTML = "";
-  $("asksubject").hidden = true;
-  $("askresolved").hidden = true;
-  $("askstatus").textContent = "Retrieving passages…";
-  let draft = "";
+  $("aq").value = "";
 
+  // Your question stays on screen, above the answer to it.
+  const yours = bubble("you", "You");
+  const text = document.createElement("p");
+  text.className = "text";
+  text.textContent = question;
+  yours.appendChild(text);
+
+  const reply = bubble("agent", "verbatim");
+  const resolved = document.createElement("p");
+  resolved.className = "resolved";
+  resolved.hidden = true;
+  const body = document.createElement("p");
+  body.className = "text thinking";
+  body.textContent = "Retrieving passages\u2026";
+  const subject = document.createElement("p");
+  subject.className = "warn";
+  subject.hidden = true;
+  const refs = document.createElement("div");
+  refs.className = "refs";
+  refs.hidden = true;
+  reply.append(resolved, body, subject, refs);
+
+  let draft = "";
   const history = thread.length
     ? "&history=" + encodeURIComponent(JSON.stringify(thread))
     : "";
   asking = new EventSource(
     "/api/ask?q=" + encodeURIComponent(question) + history
   );
+
   asking.addEventListener("resolved", (e) => {
-    $("askresolved").hidden = false;
-    $("askresolved").textContent =
-      "Read as: " + JSON.parse(e.data).question;
+    resolved.hidden = false;
+    resolved.textContent = "Read as: " + JSON.parse(e.data).question;
   });
   asking.addEventListener("passages", (e) => {
     const got = JSON.parse(e.data).passages;
     const papers = new Set(got.map((p) => p.arxiv_id)).size;
     if (got.length) {
-      $("askstatus").textContent =
-        "Reading " + got.length + " passages from " + papers + " papers. Drafting…";
+      body.textContent =
+        "Reading " + got.length + " passages from " + papers + " papers\u2026";
     }
   });
   asking.addEventListener("delta", (e) => {
     draft += JSON.parse(e.data).text;
-    // Show the ANSWER prose as it arrives; the CITE lines that follow are
-    // input to the verifier, not part of the answer.
-    $("asktext").textContent =
-      draft.split(/\\n\\s*CITE\\s*\\[/)[0].replace(/^[\\s\\S]*?ANSWER:\\s*/, "");
+    body.className = "text cursor";
+    body.textContent =
+      draft.split(/\n\s*CITE\s*\[/)[0].replace(/^[\s\S]*?ANSWER:\s*/, "");
+    reply.scrollIntoView({ block: "end" });
   });
   asking.addEventListener("answer", (e) => {
     const answer = JSON.parse(e.data);
-    $("asktext").textContent = answer.text;
+    body.className = "text";
+    body.textContent = answer.text;
     thread.push({ question: question, answer: answer.text });
     if (thread.length > 6) thread.shift();
     $("askreset").hidden = false;
-    if (answer.declined) { $("askstatus").textContent = ""; return; }
-    $("askstatus").textContent =
-      answer.citations.length + " citation(s) verified against their passages. "
-      + "Checking what the passages are about…";
-    let refs = answer.citations.map(renderReference).join("");
+    if (answer.declined) return;
+    let markup = answer.citations.map(renderReference).join("");
     if (answer.rejected.length) {
-      refs += '<p class="rejected">' + answer.rejected.length
+      markup += '<p class="rejected">' + answer.rejected.length
         + " citation(s) failed verification and are marked [unverified].</p>";
     }
-    if (refs) { $("askrefs").innerHTML = refs; $("askrefs").hidden = false; }
+    if (markup) { refs.innerHTML = markup; refs.hidden = false; }
   });
   asking.addEventListener("subject", (e) => {
     const check = JSON.parse(e.data);
-    $("askstatus").textContent = $("askstatus").textContent
-      .replace(" Checking what the passages are about…", "");
     if (check.warn) {
-      $("asksubject").hidden = false;
-      $("asksubject").textContent = "These passages are about: " + check.subject
-        + " — which may not be what you asked ("
+      subject.hidden = false;
+      subject.textContent = "These passages are about: " + check.subject
+        + " \u2014 which may not be what you asked ("
         + check.closeness.toFixed(2) + " similarity).";
     }
   });
   asking.addEventListener("failed", (e) => {
-    $("askstatus").textContent = "Answering failed: " + JSON.parse(e.data).message;
+    body.className = "text warn";
+    body.textContent = "Answering failed: " + JSON.parse(e.data).message;
   });
   asking.addEventListener("done", () => {
     asking.close();
     asking = null;
     $("askgo").disabled = false;
+    $("aq").focus();
   });
   asking.onerror = () => {
     if (!asking) return;
     asking.close();
     asking = null;
-    $("askstatus").textContent = "Connection lost while answering.";
     $("askgo").disabled = false;
+    if (!draft) {
+      body.className = "text warn";
+      body.textContent = "Connection lost while answering.";
+    }
   };
 }
 
-$("search").addEventListener("submit", runSearch);
 $("askform").addEventListener("submit", runAsk);
 $("askreset").addEventListener("click", resetThread);
 loadStats();

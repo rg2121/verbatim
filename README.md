@@ -361,9 +361,10 @@ answers from the Adam paper.
 
 ## Asking a follow-up
 
-The ask box keeps a conversation, so "what is PPO?" can be followed by "why
-does it clip?" without restating the subject. The page holds the thread and
-sends it with the next question; "New topic" clears it.
+The page is a conversation. Questions and answers stack in a transcript, so
+what was asked three turns ago is still on screen with the answer it got, and
+a follow-up like "why does it clip?" resolves against what came before without
+restating the subject. "New topic" clears the thread and starts fresh.
 
 The history is used for exactly one thing: turning a follow-up into a question
 that stands on its own, before retrieval sees it. It is never given to the
