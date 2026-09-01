@@ -363,6 +363,26 @@ rank 3, BERT's definitional question from rank 2 to 1, and "what is artificial
 intelligence" from rank 1 to 3. Every other case is untouched, which is what
 separates it from the always-on title leg below.
 
+Eleven further cases are **compound**: "compare the post-training pipelines of
+Qwen3 and Llama 3" is not answered by ten excellent passages about Qwen3.
+These are scored by coverage - the fraction of a question's required papers
+found - and completion, never by first hit, and they are kept out of the table
+above so its numbers stay comparable across measurements.
+
+| mode | cov@5 | all@5 | cov@10 | all@10 |
+|---|---|---|---|---|
+| hybrid | 0.41 | 0.09 | 0.59 | 0.36 |
+| hybrid+graph | 0.41 | 0.09 | 0.59 | 0.36 |
+| hybrid+plan | 0.36 | 0.09 | 0.59 | 0.36 |
+| **hybrid+titles** | **0.64** | **0.45** | **0.68** | **0.45** |
+
+Two findings, both at the defaults' expense. The default mode fully covers a
+multi-paper question 36% of the time - a failure first-hit metrics cannot see,
+since ten perfect passages about PPO score 1.0 on "how does GRPO differ from
+PPO". And the mode that wins here is the title leg that single-subject
+questions measured off. Details, and decomposition's loss on its home turf,
+under *What was tried and rejected*.
+
 An earlier version of this file reported mrr 0.940. That was a 42-case set,
 mostly paper titles, over a corpus chunked from PDFs. Scoring those same 42
 cases on today's corpus gives **mrr 0.917, r@5 0.98** - so reading papers from
@@ -484,12 +504,33 @@ where it was already first.
 Decomposition is the exception, and it is worse on every measure including
 recall@10. It does not widen the pool, it divides it: each sub-question gets a
 fraction of the result slots, and a fragment of a question retrieves less
-precisely than the whole one. The caveat is that this measures decomposition on
-questions that never needed it - the answer key lists alternative papers for a
-question, not questions requiring two papers at once, so nothing here is the
-compound question `ask --plan` was built for. Measuring that needs cases whose
-answer genuinely spans two papers, and a metric that asks whether both were
-found rather than whether the first hit was right.
+precisely than the whole one. An earlier version of this paragraph noted the
+caveat that nothing in the key was the compound question `ask --plan` was
+built for, and that measuring that needed cases whose answer genuinely spans
+two papers plus a coverage metric. Both now exist - eleven compound cases,
+scored by coverage and completion - and **decomposition lost on its home
+turf**: cov@5 0.36 against plain hybrid's 0.41, identical at depth (all@10
+0.36 both). Splitting still divides the slots, and the sub-questions a model
+writes do not name the papers the way the question's own words already do.
+
+What wins the compound cases instead is the title leg (cov@5 0.64, all@5 and
+all@10 0.45, against hybrid's 0.09 and 0.36): "compare the GPT-4 and Llama 3
+technical reports" names its papers almost by title, and passage search finds
+neither while the title index finds both at ranks 1-2. So the same technique
+has now been measured three ways - harmful always-on, decisive behind the
+definitional gate, and best-in-class on compound questions - and the pattern
+is that question shape decides the tool. A titles leg gated to
+comparison-shaped questions, the way the graph leg is gated to definitional
+ones, is the obvious next experiment; after the graph gate it is a familiar
+move, and it is a guess until it is measured.
+
+Two of the eleven cases also turned out not to be compound on this corpus at
+all: DeepSeek-R1's appendix compares GRPO and PPO in one place, and RoBERTa
+restates BERT's recipe as its very subject. A corpus that holds surveys and
+technical reports has already done the decomposition for many comparison
+questions, which is both a caveat on these numbers and a finding in its own
+right. The labels were left as the original papers rather than retrofitted to
+what retrieval happened to find.
 
 Which matters depends on what reads the results. An answer is written from the
 first few passages, so `ask` wants r@1 and keeps plain hybrid. A person
@@ -620,12 +661,13 @@ corpus itself cites. That handles subjects a held paper is named after;
 "what is a tensor" still has no defining paper to anchor to, and remains
 unanswerable for reasons no ranking can fix.
 
-**Retrieval quality is measured on one 68-case set** written alongside the
-system, over a corpus in physics and machine learning. The numbers here do not
-transfer to another corpus without re-measuring. Thirteen of the answerable
-cases are natural questions with a verified answering paper; the older ones
-are paper titles, and a title retrieves its own paper for reasons a real
-question does not.
+**Retrieval quality is measured on one 87-case set** written alongside the
+system, over a corpus in physics and machine learning - 63 answerable by one
+paper, 11 compound, 13 unanswerable. The numbers here do not transfer to
+another corpus without re-measuring. Twenty of the answerable cases are an
+auto-seeded floor of paper titles, and a title retrieves its own paper for
+reasons a real question does not; the rest are natural questions with a
+verified answering paper.
 
 **Vector search is brute force.** sqlite-vec scans every vector, which is
 measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at
