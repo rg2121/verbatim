@@ -611,8 +611,20 @@ verbatim serve --port 8000
 | route | returns |
 |---|---|
 | `GET /api/search?q=&mode=&limit=&arxiv_id=` | passages, each with its locator, licence and source URL |
+| `GET /api/ask?q=&arxiv_id=` | an answer as server-sent events, drafted live and then verified |
 | `GET /api/papers/{arxiv_id}` | one paper's metadata, or 404 |
 | `GET /api/stats` | the same pipeline counts `stats` prints |
+
+The ask route streams because a local model takes twenty seconds to write and
+a silent page for twenty seconds reads as broken. The event order is the
+honesty order: `passages` first (what was retrieved, before a word is
+generated), `delta` fragments as the model drafts, then an `answer` event
+whose text has been through the same citation verification as everywhere
+else - the draft is what the model said, the answer is what survived checking
+- and finally a `subject` event carrying the abstention warning when it
+fires. Streaming changes when text is shown, and nothing about what is
+accepted. The page's ask box renders all of this: live draft, then verified
+text, references, rejected-citation count, and the subject warning.
 
 It binds to loopback unless `--host` says otherwise: the corpus is 26 GB of
 other people's papers under mixed licences, and putting that on a network is a
