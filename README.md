@@ -574,9 +574,9 @@ not implemented. Affected papers chunk to little or nothing rather than
 failing loudly.
 
 **The corpus is a slice of recent work.** It was built from the newest papers
-in each category, so it holds very little of the literature those papers rest
-on: of roughly 11,000 resolvable references, about 70 point at a paper in the
-corpus. `grow` closes this along the citation edges — GPT-4, Adam, BERT, PPO,
+in each category, so it began holding very little of the literature those
+papers rest on. After `grow`, 12,882 of 80,469 resolvable references now point
+at a paper the corpus holds and 43% of papers have at least one such link. `grow` closes this along the citation edges — GPT-4, Adam, BERT, PPO,
 ViT and Planck 2018 were all cited dozens of times and absent until it ran —
 but a corpus assembled this way starts without foundations, and definitional
 questions are the first thing to suffer.
