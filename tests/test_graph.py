@@ -2,46 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from verbatim.arxiv import Paper
-from verbatim.chunking import extract_pdf_chunks
 from verbatim.corpus import CorpusStore, EmbeddingModel
 from verbatim.embedding import embed_pending
 from verbatim.graph import anchor_papers, anchored_matches, definitional_subject
 from verbatim.references import Reference
 from verbatim.retrieval import hybrid_search
 
-from helpers import downloaded
-
-
-def titled_paper(arxiv_id: str, title: str) -> Paper:
-    return Paper(
-        arxiv_id=arxiv_id,
-        title=title,
-        summary="A test abstract.",
-        authors=["Ada Lovelace"],
-        categories=["cs.LG"],
-        published="2026-08-01T10:00:00Z",
-        updated="2026-08-08T10:00:00Z",
-        source_url=f"https://arxiv.org/abs/{arxiv_id}",
-        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
-        license_url=None,
-    )
-
-
-def corpus_with(
-    tmp_path: Path, papers: dict[str, tuple[str, list[str]]]
-) -> CorpusStore:
-    """A corpus of titled papers with chunked pages, ready for graph tests."""
-    corpus = CorpusStore(tmp_path / "corpus.db")
-    for arxiv_id, (title, pages) in papers.items():
-        corpus.upsert_papers([titled_paper(arxiv_id, title)])
-        if pages:
-            record = downloaded(tmp_path, arxiv_id)
-            corpus.record_downloads([record])
-            corpus.record_chunks(
-                extract_pdf_chunks([record], extract_pages=lambda _, captured=pages: captured)
-            )
-    return corpus
+from helpers import corpus_with
 
 
 def cite(corpus: CorpusStore, citing_arxiv_id: str, cited_base_ids: list[str]) -> None:

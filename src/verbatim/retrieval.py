@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+import re
 
 from verbatim.chunking import BODY
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
@@ -20,6 +21,29 @@ from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
 # Standard RRF constant: large enough that the top few ranks are not dominated
 # by a single leg, small enough that deep results still fade out.
 RRF_SMOOTHING = 60
+
+# Questions that set two named things against each other. Deliberately about
+# vocabulary, not structure: "compare A and B" and "how does A differ from B"
+# announce themselves, and a parse of which words are A and which are B is not
+# needed because the title leg searches the whole question anyway. "different"
+# is only comparative with "from" - "the different approaches to X" is a
+# single-subject phrasing.
+COMPARISON_SHAPE = re.compile(
+    r"\b(?:compare|comparison|contrast|versus|vs\.?|differs?|difference)\b"
+    r"|\bdifferent\s+from\b",
+    re.IGNORECASE,
+)
+
+
+def comparison_shaped(question: str) -> bool:
+    """Whether a question names things to set against each other.
+
+    The gate for the compound title leg, in the mould of the definitional
+    gate: the always-on title leg was measured worse on single-subject
+    questions and best-in-class on compound ones, so the shape of the question
+    decides whether it runs.
+    """
+    return COMPARISON_SHAPE.search(question) is not None
 # How much wider to search when a paper filter will discard results afterwards.
 FILTER_OVERFETCH = 8
 
@@ -100,6 +124,7 @@ def hybrid_search(
     index: VectorIndex | None = None,
     use_titles: bool = False,
     use_graph: bool = False,
+    use_compare: bool = False,
     papers: PaperFilter | None = None,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
@@ -115,6 +140,13 @@ def hybrid_search(
     after, chosen by title match backed by in-corpus citations. It contributes
     nothing to any other kind of question - that gate is what separates it
     from `use_titles`, which runs everywhere and was measured worse overall.
+
+    `use_compare` runs the same title leg as `use_titles`, but only on
+    comparison-shaped questions ("compare A and B", "how does A differ from
+    B") - the shape that names its papers almost by title, where the leg was
+    measured best-in-class. Like the graph leg, the title leg stands down
+    whenever the caller scoped the search to one paper or filtered the
+    papers, because it names papers of its own.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -137,26 +169,27 @@ def hybrid_search(
         papers=papers,
     )
 
+    # The title and anchor legs name papers of their own, so they stand down
+    # whenever the caller has already said which papers are allowed: a search
+    # scoped to one paper or filtered by date or category must not be handed
+    # passages from outside that scope, however well-shaped the question.
+    unscoped = arxiv_id is None and not papers
+    titled = use_titles or (use_compare and comparison_shaped(query))
     titles = (
         title_search(corpus, query, include_references=include_references)
-        if use_titles
+        if titled and unscoped
         else []
     )
-    # The anchor leg names its own papers, so it stands down whenever the
-    # caller has already said which papers are allowed: a search scoped to one
-    # paper or filtered by date or category must not be handed passages from
-    # outside that scope, however definitional the question.
     anchors = (
         anchored_matches(corpus, query, include_references=include_references)
-        if use_graph and arxiv_id is None and not papers
+        if use_graph and unscoped
         else []
     )
 
     legs = [keyword, vector]
-    if use_titles:
-        legs.append(titles)
-    if use_graph:
-        legs.append(anchors)
+    for extra in (titles, anchors):
+        if extra:
+            legs.append(extra)
 
     fused: dict[str, float] = defaultdict(float)
     for ranking in legs:

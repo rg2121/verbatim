@@ -298,6 +298,12 @@ def run() -> None:
              "touches no other kind of question",
     )
     search_parser.add_argument(
+        "--use-compare", action="store_true",
+        help="On comparison-shaped questions only, also retrieve from papers "
+             "whose titles match; off by default because the answer key has "
+             "no comparison-shaped single-paper questions to measure its cost on",
+    )
+    search_parser.add_argument(
         "--since", help="Only papers published on or after this date (YYYY-MM-DD)"
     )
     search_parser.add_argument(
@@ -341,6 +347,12 @@ def run() -> None:
         help="Skip the citation-graph leg on definitional questions. On by "
              "default: it holds recall@1 and lifts mrr 0.866 -> 0.869, and "
              "touches no other kind of question",
+    )
+    ask_parser.add_argument(
+        "--use-compare", action="store_true",
+        help="On comparison-shaped questions only, also retrieve from papers "
+             "whose titles match; off by default because the answer key has "
+             "no comparison-shaped single-paper questions to measure its cost on",
     )
     ask_parser.add_argument(
         "--llm",
@@ -804,7 +816,11 @@ def run() -> None:
             else:
                 search = vector_search if args.mode == "vector" else hybrid_search
                 extra = (
-                    {"use_titles": args.use_titles, "use_graph": args.use_graph}
+                    {
+                        "use_titles": args.use_titles,
+                        "use_graph": args.use_graph,
+                        "use_compare": args.use_compare,
+                    }
                     if args.mode == "hybrid"
                     else {}
                 )
@@ -863,6 +879,7 @@ def run() -> None:
                     max_per_paper=args.max_per_paper,
                     include_references=args.include_references,
                     use_graph=args.use_graph,
+                    use_compare=args.use_compare,
                 )
                 answer = answer_from_matches(corpus, completion, args.question, matches)
             if len(plan) > 1:

@@ -58,3 +58,35 @@ def store_paper(corpus: CorpusStore, tmp_path: Path, arxiv_id: str) -> Downloade
     corpus.upsert_papers([paper(arxiv_id)])
     corpus.record_downloads([record])
     return record
+
+
+def titled_paper(arxiv_id: str, title: str) -> Paper:
+    """A paper whose title matters to the test, unlike paper()'s placeholder."""
+    return Paper(
+        arxiv_id=arxiv_id,
+        title=title,
+        summary="A test abstract.",
+        authors=["Ada Lovelace"],
+        categories=["cs.LG"],
+        published="2026-08-01T10:00:00Z",
+        updated="2026-08-08T10:00:00Z",
+        source_url=f"https://arxiv.org/abs/{arxiv_id}",
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+        license_url=None,
+    )
+
+
+def corpus_with(
+    tmp_path: Path, papers: dict[str, tuple[str, list[str]]]
+) -> CorpusStore:
+    """A corpus of titled papers with chunked pages, for title and graph tests."""
+    corpus = CorpusStore(tmp_path / "corpus.db")
+    for arxiv_id, (title, pages) in papers.items():
+        corpus.upsert_papers([titled_paper(arxiv_id, title)])
+        if pages:
+            record = downloaded(tmp_path, arxiv_id)
+            corpus.record_downloads([record])
+            corpus.record_chunks(
+                extract_pdf_chunks([record], extract_pages=lambda _, captured=pages: captured)
+            )
+    return corpus
