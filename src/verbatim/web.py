@@ -613,7 +613,7 @@ function runAsk(event) {
     draft += JSON.parse(e.data).text;
     body.className = "text cursor";
     body.textContent =
-      draft.split(/\n\s*CITE\s*\[/)[0].replace(/^[\s\S]*?ANSWER:\s*/, "");
+      draft.split(/\\n\\s*CITE\\s*\\[/)[0].replace(/^[\\s\\S]*?ANSWER:\\s*/, "");
     reply.scrollIntoView({ block: "end" });
   });
   asking.addEventListener("answer", (e) => {

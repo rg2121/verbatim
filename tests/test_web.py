@@ -293,3 +293,45 @@ def test_requests_served_from_different_threads_each_work(tmp_path: Path) -> Non
         codes = list(pool.map(call, range(12)))
 
     assert codes == [200] * 12
+
+
+def test_the_page_javascript_parses() -> None:
+    """A broken escape once turned a regex literal into a syntax error, which
+    killed the whole script block and left the page inert - every button dead,
+    with nothing in the server log because the failure was in the browser.
+
+    Checked with node when it is available, and by direct assertion when it is
+    not, so CI catches it either way.
+    """
+    import re
+    import shutil
+    import subprocess
+
+    from verbatim.web import PAGE
+
+    script = "\n".join(re.findall(r"<script>(.*?)</script>", PAGE, re.S))
+    assert script.strip()
+
+    # The escape that broke: `\n` inside the CITE regex must reach the browser
+    # as two characters, not as an actual newline splitting the literal.
+    assert "/\\n\\s*CITE" in script
+    assert not re.search(r"split\(/\s*$", script, re.M)
+
+    node = shutil.which("node")
+    if node:
+        checked = subprocess.run(
+            [node, "--check", "-"], input=script, capture_output=True, text=True
+        )
+        assert checked.returncode == 0, checked.stderr
+
+
+def test_every_element_the_script_addresses_exists_in_the_markup() -> None:
+    """A rename that misses one leaves a dead control and no error anywhere."""
+    import re
+
+    from verbatim.web import PAGE
+
+    script = "\n".join(re.findall(r"<script>(.*?)</script>", PAGE, re.S))
+    markup = re.sub(r"<script>.*?</script>", "", PAGE, flags=re.S)
+    for element in sorted(set(re.findall(r'\$\("([a-zA-Z0-9_-]+)"\)', script))):
+        assert f'id="{element}"' in markup, f"script uses #{element}, markup has no such id"
