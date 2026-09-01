@@ -381,6 +381,37 @@ def run() -> None:
         help="Cap passages taken from any one paper, so one source cannot dominate",
     )
 
+    report_parser = subparsers.add_parser(
+        "report", help="Write a sectioned literature review with verified citations"
+    )
+    report_parser.add_argument("topic", help="What the review is about; a phrase, not a question")
+    report_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    report_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    report_parser.add_argument(
+        "--llm", help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model"
+    )
+    report_parser.add_argument(
+        "--sections", type=int, default=4, help="Maximum sections to plan"
+    )
+    report_parser.add_argument(
+        "--passages", type=int, default=6, help="Passages retrieved per section"
+    )
+    report_parser.add_argument(
+        "--max-per-paper", type=int, default=2,
+        help="Cap passages taken from any one paper within a section",
+    )
+    report_parser.add_argument(
+        "--use-compare", action="store_true",
+        help="Enable the comparison-gated title leg for comparison-shaped sections",
+    )
+    report_parser.add_argument(
+        "--no-subject-check", action="store_true",
+        help="Skip naming what each section's passages are about (saves one model call per section)",
+    )
+    report_parser.add_argument(
+        "--out", type=Path, help="Write the review to this markdown file instead of printing it"
+    )
+
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
     chunk_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -908,6 +939,36 @@ def run() -> None:
             # Loud on purpose: an unverifiable citation is the failure this
             # tool exists to catch.
             print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+
+    if args.command == "report":
+        from verbatim.report import build_report, render_markdown
+
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        with CorpusStore(args.state) as corpus:
+            built = build_report(
+                corpus,
+                embedder,
+                completion,
+                lambda system, user: completion.complete_text(system, user),
+                args.topic,
+                max_sections=args.sections,
+                per_section=args.passages,
+                max_per_paper=args.max_per_paper,
+                use_compare=args.use_compare,
+                check_subject=not args.no_subject_check,
+                on_section=lambda heading, done, total: print(
+                    f"  [{done}/{total}] {heading}", flush=True
+                ),
+            )
+        markdown = render_markdown(built)
+        if args.out is not None:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(markdown + "\n", encoding="utf-8")
+            print(f"Wrote {args.out}")
+        else:
+            print()
+            print(markdown)
 
     if args.command == "chunk":
         if args.manifest is not None:

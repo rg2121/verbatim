@@ -366,8 +366,7 @@ def renumber_markers(
     positions = marker_positions or {}
     chunk_positions = {citation.chunk_id: n for n, citation in enumerate(citations, start=1)}
 
-    def rewrite(match: re.Match[str]) -> str:
-        token = match.group(1).strip()
+    def rewrite_one(token: str) -> str | None:
         if token in chunk_positions:
             return f"[{chunk_positions[token]}]"
         if token.isdigit() and int(token) in positions:
@@ -376,7 +375,19 @@ def renumber_markers(
             # Points at a citation that did not survive verification. Say so
             # rather than leaving a dangling number or an opaque hash.
             return "[unverified]"
-        return match.group(0)  # not a citation marker; leave it alone
+        return None  # not a citation marker
+
+    def rewrite(match: re.Match[str]) -> str:
+        token = match.group(1).strip()
+        rewritten = rewrite_one(token)
+        if rewritten is not None:
+            return rewritten
+        # Models also group markers, "[5, 3]", which must not survive as a
+        # stale pair of numbers when each member was renumbered.
+        grouped = [part.strip() for part in token.split(",")]
+        if len(grouped) > 1 and all(part.isdigit() for part in grouped):
+            return "".join(rewrite_one(part) or "[unverified]" for part in grouped)
+        return match.group(0)  # leave anything else alone
 
     text = MARKER_PATTERN.sub(rewrite, text)
     # Collapse the runs this can produce, e.g. "[1] [1]" or "[1][1]".

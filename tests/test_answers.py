@@ -207,6 +207,29 @@ def test_renumbering_leaves_non_citation_brackets_alone() -> None:
     assert renumber_markers("The set [a, b] is closed.", []) == "The set [a, b] is closed."
 
 
+def test_a_grouped_marker_is_renumbered_member_by_member() -> None:
+    """Models also write "[5, 3]", which must not survive as stale numbers.
+
+    Found in the first real report: a grouped marker slipped past the
+    per-number rewrite and pointed at the model's own numbering, which the
+    rejected-citation renumbering had already invalidated.
+    """
+    from verbatim.answers import renumber_markers
+
+    class FakeCitation:
+        chunk_id = "aaa"
+
+    assert (
+        renumber_markers("Both show it [5, 3].", [FakeCitation()], {5: 1})
+        == "Both show it [1][unverified]."
+    )
+    # Group members resolving to the same citation collapse to one marker.
+    assert (
+        renumber_markers("Same source [5, 3].", [FakeCitation()], {5: 1, 3: 1})
+        == "Same source [1]."
+    )
+
+
 def test_renumbering_collapses_duplicate_markers() -> None:
     from verbatim.answers import renumber_markers
 

@@ -48,15 +48,26 @@ def plan_subquestions(
         reply = complete(PLAN_SYSTEM, question)
     except (RuntimeError, OSError):
         return [question]
-    parts = []
+    return parse_plan_lines(reply, min(max_parts, MAX_PARTS)) or [question]
+
+
+def parse_plan_lines(reply: str, limit: int) -> list[str]:
+    """Read a plan the model wrote one line at a time, tolerating decoration.
+
+    Models prepend bullets and numbers however often the prompt says not to,
+    so the markers are stripped rather than fought. Shared with the report
+    planner, which asks a different question but reads the same shape of
+    reply.
+    """
+    lines: list[str] = []
     seen: set[str] = set()
     for line in reply.splitlines():
         cleaned = line.strip().lstrip("-*0123456789.) ").strip()
         key = " ".join(cleaned.lower().split())
         if cleaned and key not in seen:
             seen.add(key)
-            parts.append(cleaned)
-    return parts[: min(max_parts, MAX_PARTS)] or [question]
+            lines.append(cleaned)
+    return lines[:limit]
 
 
 def gather_for_parts(
