@@ -95,3 +95,18 @@
 {"question": "why does PPO clip its objective?", "expect_papers": ["1707.06347v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
 {"question": "how does a vision transformer treat an image as a sequence?", "expect_papers": ["2010.11929v2"], "note": "source=corpus; added by grow, previously a coverage gap"}
 {"question": "what are the Planck 2018 values for the cosmological parameters?", "expect_papers": ["1807.06209v4"], "note": "source=corpus; added by grow, previously a coverage gap"}
+# Compound cases: require_papers means every listed paper, not any of them.
+# An entry "a|b" is one required part that either paper can supply. Scored by
+# coverage/completion in their own table, never by first hit - ten excellent
+# passages about PPO answer half of "how does GRPO differ from PPO".
+{"question": "how does GRPO differ from the PPO algorithm it modifies?", "require_papers": ["2402.03300v3", "1707.06347v2"], "note": "source=user-compound; GRPO is introduced by DeepSeekMath, PPO by Schulman et al."}
+{"question": "how does RoBERTa change BERT's pretraining recipe?", "require_papers": ["1907.11692v1", "1810.04805v2"], "note": "source=user-compound; the comparison needs the original recipe and the changes"}
+{"question": "how does DeepSeek-R1's reinforcement learning build on GRPO?", "require_papers": ["2501.12948v2", "2402.03300v3"], "note": "source=user-compound; R1 applies the algorithm DeepSeekMath introduced"}
+{"question": "compare the post-training pipelines of Qwen3 and Llama 3", "require_papers": ["2505.09388v1", "2407.21783v3"], "note": "source=user-compound; both technical reports describe their own pipeline"}
+{"question": "how does BERT's masked-language-model objective differ from the next-token pretraining used for Llama 3?", "require_papers": ["1810.04805v2", "2407.21783v3"], "note": "source=user-compound"}
+{"question": "define Shannon entropy and explain how it quantifies the information content of the cosmic web", "require_papers": ["2407.12288v5", "2605.21554v3"], "note": "source=user-compound; definition in one paper, application in the other"}
+{"question": "what did Planck 2018 measure for the cosmological constant, and why is its value considered fine-tuned?", "require_papers": ["1807.06209v4", "2607.23374v1"], "note": "source=user-compound; the measurement and the fine-tuning argument are different papers"}
+{"question": "how is the GSM8K benchmark of grade-school math problems used to evaluate DeepSeekMath?", "require_papers": ["2110.14168v2", "2402.03300v3"], "note": "source=user-compound; GSM8K is introduced by the verifiers paper"}
+{"question": "compare recent approaches to nuclear fusion confinement and the prediction of fission product yields", "require_papers": ["2607.27024v1", "2607.04148v1|2504.17275v3"], "note": "source=user-compound; either fission-yield paper covers that half"}
+{"question": "how do the GPT-4 and Llama 3 technical reports differ in what they disclose about pretraining?", "require_papers": ["2303.08774v6", "2407.21783v3"], "note": "source=user-compound; GPT-4 famously discloses little, Llama 3 much"}
+{"question": "what optimizer does BERT use for pretraining, and what does that optimizer's update rule look like?", "require_papers": ["1810.04805v2", "1412.6980v9"], "note": "source=user-compound; BERT names Adam, the Adam paper states the rule"}

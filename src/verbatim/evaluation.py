@@ -53,19 +53,49 @@ class EvalCase:
     expect_none: bool = False
     unanswerable_kind: str = ""
     note: str = ""
+    require_papers: tuple[str, ...] = ()
 
     @property
     def is_coverage_gap(self) -> bool:
         """Whether the corpus holds nothing on this subject at all."""
         return self.expect_none and self.unanswerable_kind == NO_COVERAGE
 
+    @property
+    def is_compound(self) -> bool:
+        """Whether this question needs every listed paper, not any one of them.
+
+        `expect_papers` lists alternatives and is scored by first hit;
+        `require_papers` lists parts of one answer - "compare A and B" is not
+        answered by ten excellent passages about A - and is scored by
+        coverage. Each entry may be an any-of group, written "idA|idB", for a
+        part that more than one held paper can supply.
+        """
+        return bool(self.require_papers)
+
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> EvalCase:
         expect_none = bool(payload.get("expect_none", False))
         papers = payload.get("expect_papers") or []
+        required = payload.get("require_papers") or []
         if not isinstance(papers, list):
             raise ValueError(f"case {payload.get('question')!r} has a malformed expect_papers")
-        if not papers and not expect_none:
+        if not isinstance(required, list):
+            raise ValueError(f"case {payload.get('question')!r} has a malformed require_papers")
+        if required and papers:
+            raise ValueError(
+                f"case {payload.get('question')!r} cannot both require papers and "
+                "list alternatives; require_papers means all, expect_papers means any"
+            )
+        if required and expect_none:
+            raise ValueError(
+                f"case {payload.get('question')!r} cannot both require papers and expect none"
+            )
+        if required and len(required) < 2:
+            raise ValueError(
+                f"case {payload.get('question')!r} requires a single paper, "
+                "which is what expect_papers already measures"
+            )
+        if not papers and not required and not expect_none:
             raise ValueError(
                 f"case {payload.get('question')!r} lists no expected papers; "
                 "set expect_none if the corpus cannot answer it"
@@ -90,6 +120,7 @@ class EvalCase:
             expect_none=expect_none,
             unanswerable_kind=kind,
             note=str(payload.get("note", "")),
+            require_papers=tuple(str(p) for p in required),
         )
 
 
@@ -133,6 +164,73 @@ def rank_of_first_hit(matches: Sequence[ChunkMatch], expected: Iterable[str]) ->
     return None
 
 
+def group_rank(matches: Sequence[ChunkMatch], group: str) -> int | None:
+    """1-based rank at which one required part is first covered, or None.
+
+    A group is a single paper id, or several joined by '|' when more than one
+    held paper can supply that part of the answer.
+    """
+    return rank_of_first_hit(matches, group.split("|"))
+
+
+@dataclass(frozen=True)
+class CompoundScore:
+    """How one retrieval mode covered the questions that need several papers.
+
+    First-hit metrics cannot see the failure that matters here: ten excellent
+    passages about PPO score perfectly on "how does GRPO differ from PPO" while
+    answering half of it. Coverage@k is the mean fraction of a question's
+    required parts found in the top k; complete@k is the fraction of questions
+    with every part found.
+    """
+
+    mode: str
+    cases: int
+    coverage_at: dict[int, float]
+    complete_at: dict[int, float]
+    incomplete: tuple[str, ...]
+
+    def render(self) -> str:
+        columns = "  ".join(
+            f"cov@{k} {self.coverage_at[k]:.2f}  all@{k} {self.complete_at[k]:.2f}"
+            for k in sorted(self.coverage_at)
+        )
+        return f"  {self.mode:<16} {columns}"
+
+
+def score_compound_mode(
+    mode: str,
+    cases: Sequence[EvalCase],
+    retrieve: Callable[[str], Sequence[ChunkMatch]],
+    *,
+    cutoffs: Sequence[int] = (5, 10),
+) -> CompoundScore:
+    """Run every compound case through one retrieval mode and summarise it."""
+    compound = [case for case in cases if case.is_compound]
+    coverage = {k: 0.0 for k in cutoffs}
+    complete = {k: 0 for k in cutoffs}
+    incomplete: list[str] = []
+    deepest = max(cutoffs, default=0)
+    for case in compound:
+        matches = retrieve(case.question)
+        ranks = [group_rank(matches, group) for group in case.require_papers]
+        for k in cutoffs:
+            found = sum(1 for rank in ranks if rank is not None and rank <= k)
+            coverage[k] += found / len(case.require_papers)
+            if found == len(case.require_papers):
+                complete[k] += 1
+        if any(rank is None or rank > deepest for rank in ranks):
+            incomplete.append(case.question)
+    total = len(compound) or 1
+    return CompoundScore(
+        mode=mode,
+        cases=len(compound),
+        coverage_at={k: coverage[k] / total for k in cutoffs},
+        complete_at={k: complete[k] / total for k in cutoffs},
+        incomplete=tuple(incomplete),
+    )
+
+
 def score_mode(
     mode: str,
     cases: Sequence[EvalCase],
@@ -145,8 +243,13 @@ def score_mode(
     Recall@k here means "at least one result in the top k came from a paper
     that answers the question", which is what matters when the answer is then
     written from those passages.
+
+    Compound cases are excluded: any-of scoring would credit half an answer as
+    a hit, and including them would also quietly move the numbers this table
+    has carried across every measurement so far. They get their own scoring in
+    score_compound_mode.
     """
-    answerable = [case for case in cases if not case.expect_none]
+    answerable = [case for case in cases if not case.expect_none and not case.is_compound]
     hits = {k: 0 for k in cutoffs}
     reciprocal = 0.0
     misses: list[str] = []
@@ -169,10 +272,9 @@ def score_mode(
     )
 
 
-def evaluate(
+def retrieval_modes(
     corpus: CorpusStore,
     embedder: Embedder,
-    cases: Sequence[EvalCase],
     *,
     limit: int = 10,
     max_per_paper: int | None = None,
@@ -181,8 +283,11 @@ def evaluate(
     rewrites: int = 0,
     hyde: bool = False,
     decompose: bool = False,
-) -> list[ModeScore]:
-    """Score every retrieval mode on the same cases, so they are comparable.
+) -> dict[str, Callable[[str], Sequence[ChunkMatch]]]:
+    """Every retrieval mode under its reporting name, built once.
+
+    Shared by first-hit and compound scoring, so both tables measure exactly
+    the same retrieval rather than two drifting copies of it.
 
     With a reranker, hybrid retrieves a wider shortlist and the reranker trims
     it, which is the only arrangement in which reranking could help.
@@ -233,7 +338,29 @@ def evaluate(
             )[:limit]
 
         modes["hybrid+plan"] = decomposed
+    return modes
+
+
+def evaluate(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    cases: Sequence[EvalCase],
+    **options: object,
+) -> list[ModeScore]:
+    """Score every retrieval mode on the same cases, so they are comparable."""
+    modes = retrieval_modes(corpus, embedder, **options)  # type: ignore[arg-type]
     return [score_mode(name, cases, retrieve) for name, retrieve in modes.items()]
+
+
+def evaluate_compound(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    cases: Sequence[EvalCase],
+    **options: object,
+) -> list[CompoundScore]:
+    """Score every retrieval mode on the cases that need several papers."""
+    modes = retrieval_modes(corpus, embedder, **options)  # type: ignore[arg-type]
+    return [score_compound_mode(name, cases, retrieve) for name, retrieve in modes.items()]
 
 
 def describe_case_mix(cases: Sequence[EvalCase]) -> str:
@@ -245,11 +372,30 @@ def describe_case_mix(cases: Sequence[EvalCase]) -> str:
     """
     coverage = sum(1 for case in cases if case.unanswerable_kind == NO_COVERAGE)
     unanswered = sum(1 for case in cases if case.unanswerable_kind == NO_ANSWER)
-    answerable = sum(1 for case in cases if not case.expect_none)
-    return (
+    compound = sum(1 for case in cases if case.is_compound)
+    answerable = sum(1 for case in cases if not case.expect_none and not case.is_compound)
+    described = (
         f"  {len(cases)} cases: {answerable} answerable, "
         f"{coverage} with no coverage, {unanswered} covered but unanswered"
     )
+    if compound:
+        described += f", {compound} compound (every listed paper required)"
+    return described
+
+
+def render_compound_report(scores: Sequence[CompoundScore]) -> str:
+    """Lay out coverage of the compound cases, best complete@10 last."""
+    deepest = max(scores[0].coverage_at) if scores else 10
+    lines = [f"  {'mode':<16} coverage and completion of multi-paper questions"]
+    ordered = sorted(scores, key=lambda s: (s.complete_at[deepest], s.coverage_at[deepest]))
+    for score in ordered:
+        lines.append(score.render())
+    best = ordered[-1]
+    lines.append(f"\n  best by all@{deepest}: {best.mode}  ({best.cases} cases)")
+    if best.incomplete:
+        lines.append(f"  {len(best.incomplete)} question(s) it did not fully cover:")
+        lines.extend(f"    - {question}" for question in best.incomplete[:5])
+    return "\n".join(lines)
 
 
 def render_report(scores: Sequence[ModeScore]) -> str:

@@ -6,9 +6,12 @@ from verbatim.corpus import ChunkMatch
 from verbatim.chunking import Chunk
 from verbatim.evaluation import (
     EvalCase,
+    group_rank,
     load_cases,
     rank_of_first_hit,
+    render_compound_report,
     render_report,
+    score_compound_mode,
     score_mode,
 )
 
@@ -83,6 +86,70 @@ def test_an_empty_answer_key_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no eval cases"):
         load_cases(path)
+
+
+def test_a_compound_case_loads_and_a_half_specified_one_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        '{"question": "compare A and B", "require_papers": ["A", "B1|B2"]}\n'
+    )
+    case = load_cases(path)[0]
+    assert case.is_compound and case.require_papers == ("A", "B1|B2")
+
+    for bad in (
+        '{"question": "q", "require_papers": ["A"]}',
+        '{"question": "q", "require_papers": ["A", "B"], "expect_papers": ["C"]}',
+        '{"question": "q", "require_papers": ["A", "B"], "expect_none": true}',
+    ):
+        path.write_text(bad + "\n")
+        with pytest.raises(ValueError):
+            load_cases(path)
+
+
+def test_group_rank_accepts_any_member_of_an_alternative_group() -> None:
+    results = [match("X"), match("B2"), match("A")]
+
+    assert group_rank(results, "A") == 3
+    assert group_rank(results, "B1|B2") == 2
+    assert group_rank(results, "Z1|Z2") is None
+
+
+def test_compound_scoring_counts_parts_covered_not_first_hits() -> None:
+    cases = [EvalCase("compare A and B", require_papers=("A", "B"))]
+    # A at rank 1, B at rank 7: perfect by first-hit, half an answer at k=5.
+    deep = score_compound_mode(
+        "deep", cases, lambda q: [match("A")] + [match("X")] * 5 + [match("B")]
+    )
+    blind = score_compound_mode("blind", cases, lambda q: [match("A")] * 10)
+
+    assert deep.coverage_at[5] == 0.5 and deep.complete_at[5] == 0.0
+    assert deep.coverage_at[10] == 1.0 and deep.complete_at[10] == 1.0
+    assert deep.incomplete == ()
+    assert blind.coverage_at[10] == 0.5 and blind.complete_at[10] == 0.0
+    assert blind.incomplete == ("compare A and B",)
+
+
+def test_compound_cases_stay_out_of_first_hit_scoring() -> None:
+    cases = [
+        EvalCase("q1", ("A",)),
+        EvalCase("compare A and B", require_papers=("A", "B")),
+    ]
+    score = score_mode("top", cases, lambda q: [match("A")])
+
+    # Were the compound case counted, ten passages about A alone would score
+    # a perfect hit on a question they answer half of.
+    assert score.cases == 1 and score.mrr == 1.0
+
+
+def test_compound_report_names_the_best_mode_by_completion() -> None:
+    cases = [EvalCase("compare A and B", require_papers=("A", "B"))]
+    both = score_compound_mode("both", cases, lambda q: [match("A"), match("B")])
+    half = score_compound_mode("half", cases, lambda q: [match("A")] * 10)
+
+    report = render_compound_report([half, both])
+
+    assert "best by all@10: both" in report
+    assert "did not fully cover" not in report.split("best")[0]
 
 
 def test_report_names_the_best_mode() -> None:

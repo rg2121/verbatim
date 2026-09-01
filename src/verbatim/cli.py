@@ -51,7 +51,9 @@ from verbatim.html_source import (
 from verbatim.evaluation import (
     describe_case_mix,
     evaluate,
+    evaluate_compound,
     load_cases,
+    render_compound_report,
     render_report,
 )
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
@@ -482,18 +484,26 @@ def run() -> None:
         embedder = FastEmbedEmbedder(model_name=args.model)
         with CorpusStore(args.state) as corpus:
             expanding = args.rewrites or args.hyde or args.decompose
-            scores = evaluate(
-                corpus, embedder, cases,
+            options = dict(
                 limit=args.limit, max_per_paper=args.max_per_paper,
                 reranker=CrossEncoderReranker() if args.rerank else None,
                 complete=_line_completion(args.llm) if expanding else None,
                 rewrites=args.rewrites, hyde=args.hyde,
                 decompose=args.decompose,
             )
+            scores = evaluate(corpus, embedder, cases, **options)
+            compound_scores = (
+                evaluate_compound(corpus, embedder, cases, **options)
+                if any(case.is_compound for case in cases)
+                else []
+            )
         print(f"{args.cases}")
         print(describe_case_mix(cases))
         print()
         print(render_report(scores))
+        if compound_scores:
+            print()
+            print(render_compound_report(compound_scores))
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)
