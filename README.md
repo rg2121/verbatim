@@ -359,6 +359,28 @@ actually cite, so the corpus itself distinguishes the paper a subject is named
 after from one that shares a word with it. "What is the Adam optimizer?" now
 answers from the Adam paper.
 
+## Asking a follow-up
+
+The ask box keeps a conversation, so "what is PPO?" can be followed by "why
+does it clip?" without restating the subject. The page holds the thread and
+sends it with the next question; "New topic" clears it.
+
+The history is used for exactly one thing: turning a follow-up into a question
+that stands on its own, before retrieval sees it. It is never given to the
+model that writes the answer. That model may state only what a retrieved
+passage supports, because every claim it makes is checked against the passage
+it cites - and prose from an earlier turn cannot be checked against any paper,
+so letting it back in would let a claim enter an answer without ever having
+come from one. History decides what is looked up; it never decides what may be
+said.
+
+The resolved question is shown above the answer, because a reader who
+disagrees with how their follow-up was interpreted needs to see the
+interpretation. If the model is unreachable or replies with nothing usable,
+the original question is used unchanged: resolving a follow-up is an
+improvement to retrieval, and an improvement must not be able to stop a
+question being asked.
+
 ## What retrieval measures
 
 Over 76 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered -

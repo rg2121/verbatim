@@ -189,3 +189,77 @@ def test_the_page_is_served_and_reaches_no_external_host(tmp_path: Path) -> None
         assert scheme not in PAGE.split("<script>")[0].replace(
             'xmlns="http://www.w3.org/1999/xhtml"', ""
         )
+
+
+def test_a_follow_up_is_resolved_before_retrieval_and_never_sent_to_the_answer(
+    tmp_path,
+) -> None:
+    """History may decide what is looked up. It may not decide what is claimed.
+
+    Prose from an earlier turn cannot be verified against any paper, so letting
+    it reach the answering model would let a claim enter without ever having
+    come from one.
+    """
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from helpers import chunked_corpus
+    from verbatim.web import create_app
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["PPO clips its objective ratio."]}):
+        pass  # written and closed; the app opens its own connection
+
+    seen: list[str] = []
+
+    class Recording(StreamingScript):
+        """Records every prompt, so the test can assert what the model saw."""
+
+        def complete_text(self, system: str, user: str) -> str:
+            seen.append(user)
+            return "Why does PPO clip its objective?"
+
+        def stream(self, system, user):
+            seen.append(user)
+            yield "ANSWER: It clips to bound the update.\n"
+
+    app = create_app(
+        tmp_path / "corpus.db", completion=Recording([]), encoder=StubEncoder()
+    )
+    history = json.dumps([{"question": "what is PPO?", "answer": "A policy method."}])
+    body = TestClient(app).get(
+        "/api/ask", params={"q": "why does it clip?", "history": history}
+    ).text
+
+    assert "event: resolved" in body
+    assert "Why does PPO clip its objective?" in body
+    # The rewrite call saw the history; the answering call never did.
+    assert any("what is PPO?" in prompt for prompt in seen[:1])
+    assert not any("A policy method." in prompt for prompt in seen[1:])
+
+
+def test_malformed_history_gives_a_single_turn_answer_rather_than_an_error(
+    tmp_path,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from helpers import chunked_corpus
+    from verbatim.web import create_app
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["PPO clips its objective."]}):
+        pass  # written and closed; the app opens its own connection
+
+    class Stub(StreamingScript):
+        def complete_text(self, system: str, user: str) -> str:
+            raise AssertionError("malformed history must not trigger a rewrite")
+
+    app = create_app(
+        tmp_path / "corpus.db",
+        completion=Stub(["ANSWER: An answer.\n"]),
+        encoder=StubEncoder(),
+    )
+    body = TestClient(app).get(
+        "/api/ask", params={"q": "what is PPO?", "history": "{not json"}
+    ).text
+
+    assert "event: resolved" not in body

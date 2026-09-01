@@ -28,6 +28,7 @@ from verbatim.answers import (
     subject_similarity,
 )
 from verbatim.citations import render_locator
+from verbatim.conversation import Turn, standalone_question
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.retrieval import hybrid_search
@@ -38,6 +39,29 @@ MAX_LIMIT = 50
 def _event(name: str, payload: dict[str, Any]) -> str:
     """One server-sent event. The name routes it to the page's handler."""
     return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _turns(history: str | None) -> list[Turn]:
+    """Read the client's conversation, ignoring anything malformed.
+
+    The history is a convenience for retrieval, so a client that sends
+    nonsense gets a single-turn answer rather than an error.
+    """
+    if not history:
+        return []
+    try:
+        payload = json.loads(history)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    turns = []
+    for item in payload:
+        if isinstance(item, dict) and str(item.get("question", "")).strip():
+            turns.append(
+                Turn(str(item["question"]), str(item.get("answer", "")))
+            )
+    return turns
 
 
 def match_to_dict(match: ChunkMatch) -> dict[str, Any]:
@@ -155,6 +179,13 @@ def create_app(
     def ask(
         q: str = Query(min_length=1, description="The question to answer"),
         arxiv_id: str | None = Query(None, description="Restrict to one paper version"),
+        history: str | None = Query(
+            None,
+            description=(
+                "Earlier turns as JSON [{question, answer}], oldest first. Used "
+                "only to resolve what a follow-up refers to, before retrieval."
+            ),
+        ),
     ) -> Any:
         """Answer a question as a stream of server-sent events.
 
@@ -168,9 +199,19 @@ def create_app(
         Retrieval happens here, before the stream begins, because SQLite
         connections belong to the thread that made them and the streaming
         generator may run on another.
+
+        A follow-up is resolved against `history` into a question that stands
+        alone, and only that resolved question reaches retrieval. The history
+        never reaches the model that writes the answer: that model may state
+        only what a retrieved passage supports, and prose from an earlier turn
+        cannot be checked against any paper.
         """
+        turns = _turns(history)
+        asked = standalone_question(
+            lambda system, user: answering().complete_text(system, user), turns, q
+        ) if turns else q
         matches = hybrid_search(
-            corpus(), embedder(), q,
+            corpus(), embedder(), asked,
             limit=config.ASK_PASSAGES,
             arxiv_id=arxiv_id,
             max_per_paper=config.ASK_MAX_PER_PAPER if arxiv_id is None else None,
@@ -179,6 +220,10 @@ def create_app(
         papers = corpus().papers_by_id(sorted({m.chunk.arxiv_id for m in matches}))
 
         def events() -> Any:
+            if asked != q:
+                # Shown because the reader should be able to see, and dispute,
+                # the question that was actually looked up.
+                yield _event("resolved", {"question": asked})
             yield _event(
                 "passages",
                 {
@@ -346,7 +391,9 @@ PAGE = """<!doctype html>
     <input type="search" id="aq" placeholder="Or ask a question, answered with verified citations"
            aria-label="Ask a question">
     <button type="submit" id="askgo">Ask</button>
+    <button type="button" id="askreset" hidden>New topic</button>
   </form>
+  <p class="note" id="askresolved" hidden></p>
   <p class="note" id="askstatus"></p>
   <article id="askcard" hidden>
     <p class="text" id="asktext"></p>
@@ -446,6 +493,16 @@ function renderReference(citation, index) {
 }
 
 let asking = null;
+// The conversation lives in the page, not on the server: it exists so a
+// follow-up can be resolved before retrieval, and it is never evidence.
+let thread = [];
+
+function resetThread() {
+  thread = [];
+  $("askreset").hidden = true;
+  $("askresolved").hidden = true;
+  $("askstatus").textContent = "New topic: the next question starts fresh.";
+}
 
 function runAsk(event) {
   event.preventDefault();
@@ -458,10 +515,21 @@ function runAsk(event) {
   $("askrefs").hidden = true;
   $("askrefs").innerHTML = "";
   $("asksubject").hidden = true;
+  $("askresolved").hidden = true;
   $("askstatus").textContent = "Retrieving passages…";
   let draft = "";
 
-  asking = new EventSource("/api/ask?q=" + encodeURIComponent(question));
+  const history = thread.length
+    ? "&history=" + encodeURIComponent(JSON.stringify(thread))
+    : "";
+  asking = new EventSource(
+    "/api/ask?q=" + encodeURIComponent(question) + history
+  );
+  asking.addEventListener("resolved", (e) => {
+    $("askresolved").hidden = false;
+    $("askresolved").textContent =
+      "Read as: " + JSON.parse(e.data).question;
+  });
   asking.addEventListener("passages", (e) => {
     const got = JSON.parse(e.data).passages;
     const papers = new Set(got.map((p) => p.arxiv_id)).size;
@@ -480,6 +548,9 @@ function runAsk(event) {
   asking.addEventListener("answer", (e) => {
     const answer = JSON.parse(e.data);
     $("asktext").textContent = answer.text;
+    thread.push({ question: question, answer: answer.text });
+    if (thread.length > 6) thread.shift();
+    $("askreset").hidden = false;
     if (answer.declined) { $("askstatus").textContent = ""; return; }
     $("askstatus").textContent =
       answer.citations.length + " citation(s) verified against their passages. "
@@ -521,6 +592,7 @@ function runAsk(event) {
 
 $("search").addEventListener("submit", runSearch);
 $("askform").addEventListener("submit", runAsk);
+$("askreset").addEventListener("click", resetThread);
 loadStats();
 </script>
 </body>
