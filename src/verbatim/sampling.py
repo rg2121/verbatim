@@ -30,13 +30,20 @@ from verbatim.corpus import CorpusStore
 # and checksum, so citations remain complete.
 PAPER_SCOPED_TABLES = (
     ("papers", "arxiv_id"),
+    # The bibliography *records* ride along - they are what the graph command
+    # walks - even though bibliography *chunks* are left out below: retrieval
+    # excludes those, so they would be weight the sample carries and never
+    # uses. The records are a few kilobytes and make `graph` work on a clone.
+    ("paper_references", "citing_arxiv_id"),
     ("chunks", "arxiv_id"),
 )
 # A paper long enough to demonstrate retrieval, short enough that forty of
-# them stay small. Bibliographies are left out: retrieval excludes them, so
-# they would be weight the sample carries and never uses.
+# them stay small.
 MIN_PASSAGES = 40
 MAX_PASSAGES = 120
+# Slots reserved for a hub paper and the papers that cite it, so the sample's
+# citation graph has edges to show rather than forty mutual strangers.
+NEIGHBORHOOD_SHARE = 4
 
 
 @dataclass(frozen=True)
@@ -47,21 +54,87 @@ class SampleReport:
     chunks: int
     vectors: int
     bytes_written: int
+    references: int = 0
 
     def render(self) -> str:
         megabytes = self.bytes_written / 1_000_000
         return (
             f"{self.papers} papers, {self.chunks:,} passages, "
-            f"{self.vectors:,} vectors, {megabytes:.1f} MB"
+            f"{self.vectors:,} vectors, {self.references:,} bibliography "
+            f"entries, {megabytes:.1f} MB"
         )
+
+
+# Papers a sample may hold: current, redistributable, embedded, and of
+# ordinary length. Shared by the round-robin pick and the neighborhood pick,
+# so no path into a sample can bypass the licence gate.
+ELIGIBLE_SQL = """
+    SELECT p.arxiv_id, p.base_arxiv_id, p.categories_json
+    FROM papers AS p
+    JOIN chunks AS c ON c.arxiv_id = p.arxiv_id AND c.kind = 'body'
+    JOIN embeddings AS e ON e.chunk_id = c.chunk_id AND e.model_id = :model_id
+    WHERE p.is_latest = 1 AND p.license_class = 'open'
+    GROUP BY p.arxiv_id
+    HAVING COUNT(e.chunk_id) BETWEEN :min_passages AND :max_passages
+"""
+
+
+def connected_neighborhood(
+    source: sqlite3.Connection, *, model_id: str, limit: int
+) -> list[str]:
+    """An eligible paper and the eligible papers that cite it.
+
+    Chosen so the sample's citation graph demonstrates something: forty papers
+    picked independently are strangers, and a `graph` command over strangers
+    prints zeros. The hub is the eligible paper most cited by other eligible
+    papers, and its citers fill the remaining slots.
+    """
+    if limit < 2:
+        return []
+    parameters = {
+        "model_id": model_id,
+        "min_passages": MIN_PASSAGES,
+        "max_passages": MAX_PASSAGES,
+    }
+    hub = source.execute(
+        f"""
+        WITH eligible AS ({ELIGIBLE_SQL})
+        SELECT held.arxiv_id AS arxiv_id, held.base_arxiv_id AS base_arxiv_id
+        FROM paper_references AS r
+        JOIN eligible AS held ON held.base_arxiv_id = r.cited_arxiv_id
+        JOIN eligible AS citer ON citer.arxiv_id = r.citing_arxiv_id
+        WHERE r.cited_arxiv_id != citer.base_arxiv_id
+        GROUP BY held.arxiv_id
+        ORDER BY COUNT(DISTINCT citer.base_arxiv_id) DESC, held.arxiv_id
+        LIMIT 1
+        """,
+        parameters,
+    ).fetchone()
+    if hub is None:
+        return []
+    citers = source.execute(
+        f"""
+        WITH eligible AS ({ELIGIBLE_SQL})
+        SELECT DISTINCT citer.arxiv_id
+        FROM paper_references AS r
+        JOIN eligible AS citer ON citer.arxiv_id = r.citing_arxiv_id
+        WHERE r.cited_arxiv_id = :base_arxiv_id
+        ORDER BY citer.arxiv_id
+        LIMIT :citers
+        """,
+        {**parameters, "base_arxiv_id": hub["base_arxiv_id"], "citers": limit - 1},
+    ).fetchall()
+    return [hub["arxiv_id"], *(row["arxiv_id"] for row in citers)]
 
 
 def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> list[str]:
     """Pick papers that actually demonstrate the system.
 
     Only papers whose passages are embedded, since a sample where search
-    returns nothing is worse than no sample. Spread across categories by
-    taking them in turn, so the sample is not fifty papers about one subject.
+    returns nothing is worse than no sample. A share of the slots goes to a
+    cited paper and its citers, so the citation graph has edges; the rest are
+    spread across categories by taking them in turn, so the sample is not
+    fifty papers about one subject.
 
     Ordinary-sized papers, not the biggest: ranking by passage count selects
     the longest surveys in the corpus and triples the size of the sample for
@@ -73,30 +146,25 @@ def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> 
     other classes are excluded for the same reason: `no-derivatives` forbids
     the chunking, and `unknown` means unknown rather than permitted.
     """
+    chosen = connected_neighborhood(
+        source, model_id=model_id, limit=min(papers // NEIGHBORHOOD_SHARE, papers)
+    )
     rows = source.execute(
-        """
-        SELECT p.arxiv_id, p.categories_json, COUNT(e.chunk_id) AS vectors
-        FROM papers AS p
-        JOIN chunks AS c ON c.arxiv_id = p.arxiv_id
-        JOIN embeddings AS e ON e.chunk_id = c.chunk_id AND e.model_id = ?
-        WHERE p.is_latest = 1 AND c.kind = 'body'
-          AND p.license_class = 'open'
-        GROUP BY p.arxiv_id
-        HAVING vectors BETWEEN ? AND ?
-        ORDER BY p.arxiv_id
-        """,
-        (model_id, MIN_PASSAGES, MAX_PASSAGES),
+        ELIGIBLE_SQL + " ORDER BY p.arxiv_id",
+        {"model_id": model_id, "min_passages": MIN_PASSAGES, "max_passages": MAX_PASSAGES},
     ).fetchall()
 
+    taken = set(chosen)
     by_category: dict[str, list[str]] = {}
     for row in rows:
+        if row["arxiv_id"] in taken:
+            continue
         try:
             primary = (json.loads(row["categories_json"]) or ["unknown"])[0]
         except (TypeError, ValueError):
             primary = "unknown"
         by_category.setdefault(primary, []).append(row["arxiv_id"])
 
-    chosen: list[str] = []
     while len(chosen) < papers and any(by_category.values()):
         for category in sorted(by_category):
             if not by_category[category]:
@@ -193,10 +261,12 @@ def export_sample(
             sample.connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0],
             sample.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
             sample.connection.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0],
+            sample.connection.execute("SELECT COUNT(*) FROM paper_references").fetchone()[0],
         )
         sample.connection.execute("VACUUM")
 
     return SampleReport(
         papers=counts[0], chunks=counts[1], vectors=counts[2],
+        references=counts[3],
         bytes_written=destination.stat().st_size,
     )

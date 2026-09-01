@@ -6,6 +6,7 @@ import pytest
 
 from helpers import chunked_corpus
 from verbatim.corpus import CorpusStore, EmbeddingModel
+from verbatim.references import Reference
 from verbatim.sampling import export_sample
 
 
@@ -50,6 +51,54 @@ def test_a_sample_claims_no_files_it_does_not_ship(tmp_path: Path) -> None:
     assert downloads == 0
     # The passages still carry everything a citation needs.
     assert all(chunk.source_url for chunk in chunks)
+
+
+def test_a_sample_carries_its_papers_bibliographies(tmp_path: Path) -> None:
+    """The graph command on a fresh clone should have records to walk."""
+    source = seeded(tmp_path, papers=3)
+    with CorpusStore(source) as corpus:
+        corpus.record_references(
+            [
+                Reference(
+                    citing_arxiv_id="2608.11111v1", ordinal=1,
+                    raw_text="[1] arXiv:2608.11110", cited_arxiv_id="2608.11110",
+                )
+            ],
+            source_sha256="abc123",
+        )
+
+    report = export_sample(source, tmp_path / "sample.db", papers=3, model_id="stub")
+
+    assert report.references == 1
+    with CorpusStore(tmp_path / "sample.db") as sample:
+        citers = sample.papers_citing("2608.11110")
+    assert [p.arxiv_id for p in citers] == ["2608.11111v1"]
+
+
+def test_the_sample_prefers_a_cited_neighborhood_over_strangers(tmp_path: Path) -> None:
+    """Enough papers cite one hub that the sample's graph shows edges."""
+    source = seeded(tmp_path, papers=9)
+    with CorpusStore(source) as corpus:
+        # Papers 1-4 all cite paper 0; papers 5-8 cite nothing.
+        for n in range(1, 5):
+            corpus.record_references(
+                [
+                    Reference(
+                        citing_arxiv_id=f"2608.1111{n}v1", ordinal=1,
+                        raw_text="[1] arXiv:2608.11110", cited_arxiv_id="2608.11110",
+                    )
+                ],
+                source_sha256="abc123",
+            )
+
+    # Eight slots leave two (8 // 4) for the neighborhood: the hub and one
+    # citer must both be present even though the round-robin alone might
+    # have taken neither.
+    export_sample(source, tmp_path / "sample.db", papers=8, model_id="stub")
+
+    with CorpusStore(tmp_path / "sample.db") as sample:
+        stats = sample.citation_graph_stats()
+    assert stats["edges"] >= 1
 
 
 def test_a_sampled_passage_is_searchable(tmp_path: Path) -> None:
@@ -111,10 +160,11 @@ def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
     source.row_factory = sqlite3.Row
     source.executescript(
         """
-        CREATE TABLE papers (arxiv_id TEXT, is_latest INT, categories_json TEXT,
-                             license_class TEXT);
+        CREATE TABLE papers (arxiv_id TEXT, base_arxiv_id TEXT, is_latest INT,
+                             categories_json TEXT, license_class TEXT);
         CREATE TABLE chunks (chunk_id TEXT, arxiv_id TEXT, kind TEXT);
         CREATE TABLE embeddings (chunk_id TEXT, model_id TEXT);
+        CREATE TABLE paper_references (citing_arxiv_id TEXT, cited_arxiv_id TEXT);
         """
     )
     for arxiv_id, licence in [
@@ -124,7 +174,14 @@ def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
         ("2608.44444v1", "unknown"),
     ]:
         source.execute(
-            "INSERT INTO papers VALUES (?, 1, '[\"cs.CL\"]', ?)", (arxiv_id, licence)
+            "INSERT INTO papers VALUES (?, ?, 1, '[\"cs.CL\"]', ?)",
+            (arxiv_id, arxiv_id.split("v")[0], licence),
+        )
+        # Everyone cites the non-open papers, which must still keep them out:
+        # the neighborhood picker shares the same licence gate as the
+        # round-robin, and this is the test that proves it.
+        source.execute(
+            "INSERT INTO paper_references VALUES (?, '2608.22222')", (arxiv_id,)
         )
         for n in range(60):
             source.execute(
