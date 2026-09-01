@@ -25,6 +25,7 @@ arXiv API ──sync──▶ corpus.db  papers            every version seen, n
                html ──▶ data/html/*.html
          references ──▶ what the corpus cites and does not hold
                grow ──▶ adds those papers by identifier
+              graph ──▶ what cites a paper, what it builds on, who is cited most
               chunk ──▶ data/chunks.jsonl   (export, not the store)
               embed ──▶ vectors in corpus.db
            pipeline ──▶ every stage above, in rounds, until nothing is pending
@@ -142,6 +143,14 @@ foundational literature in it to answer from.
 
 `grow` adds those papers by identifier. It only fetches metadata; their PDFs,
 renderings, chunks and vectors follow from the ordinary stages.
+
+`graph` is the inward use of the same bibliographies: what a held paper builds
+on, what cites it, and - with no identifier - the papers this corpus itself
+cites most, which is an authority ranking no similarity score can produce.
+Authority here means in-corpus citers, counted; at an average degree this low
+a PageRank over the same edges is in-degree with extra steps. The current
+top of that list is Qwen3 (371 citing papers), Llama 3 (306), DeepSeekMath
+(290), GPT-4 (221), DeepSeek-R1 (217), PPO (188) and Adam (129).
 
 `chunk` re-verifies each file's checksum, then extracts passages for only those
 whose chunker version, chunker parameters, or bytes have changed. **A paper
@@ -325,8 +334,12 @@ top four for that question, because an abstract about stochastic optimization
 sits near every other paper about optimization. Matching the question's terms
 against paper *titles* does find it at rank 1, and fails on "why does PPO clip
 its objective?", where `clip` matches CLIP the model. So title matching is a
-real signal and a partial one, worth measuring as a third retrieval leg rather
-than assuming.
+real signal and a partial one - measured always-on it cost more than it earned
+(see below), and gated by the citation graph it is the fix: the leg fires only
+on definition-shaped questions, and only for a title match that held papers
+actually cite, so the corpus itself distinguishes the paper a subject is named
+after from one that shares a word with it. "What is the Adam optimizer?" now
+answers from the Adam paper.
 
 ## What retrieval measures
 
@@ -338,7 +351,17 @@ across 7,921 papers and 835,743 vectors:
 | keyword-all | 0.38 | 0.40 | 0.40 | 0.389 |
 | keyword-any | 0.62 | 0.81 | 0.86 | 0.705 |
 | vector | 0.76 | 0.89 | 0.92 | 0.818 |
-| **hybrid** | **0.81** | **0.94** | **0.95** | **0.866** |
+| hybrid | **0.81** | 0.94 | 0.95 | 0.866 |
+| **hybrid+graph** (default) | **0.81** | **0.95** | **0.97** | **0.869** |
+
+`hybrid+graph` adds a citation-graph leg that fires only on definition-shaped
+questions ("what is X", "define X"), and only when a title-matched paper is
+cited by at least two held papers - the corpus itself testifying that this is
+the paper the subject is named after. Across the 63 answerable cases it
+changes exactly three: "what is the Adam optimizer" goes from found-nothing to
+rank 3, BERT's definitional question from rank 2 to 1, and "what is artificial
+intelligence" from rank 1 to 3. Every other case is untouched, which is what
+separates it from the always-on title leg below.
 
 An earlier version of this file reported mrr 0.940. That was a 42-case set,
 mostly paper titles, over a corpus chunked from PDFs. Scoring those same 42
@@ -486,9 +509,18 @@ answerable cases it costs more than it earns:
 
 It rescues a few deep misses and displaces better passage matches at the top,
 which is a bad trade when the answer is written from the first few passages.
-Available behind `--use-titles` for the definitional case, off by default. A
-version that applies titles only to questions that look definitional might get
-both, but that is a guess until it is measured.
+Available behind `--use-titles`, off by default. An earlier version of this
+paragraph guessed that "a version that applies titles only to questions that
+look definitional might get both" - that version is now measured, and it does.
+`hybrid+graph` gates the title leg twice: the question must be shaped like a
+definition, and the matched paper must be cited by held papers, so "why does
+PPO clip its objective" never sees the leg that would hand it CLIP. It is the
+only widening technique measured here that pays no recall@1 for its deep
+recall (0.81 / 0.95 / 0.97 / mrr 0.869), because it widens only the questions
+the baseline was already losing - and it is on by default for exactly that
+reason. The exception proves the widening rule rather than breaking it: the
+cost of widening is paid where the ranking was already right, so a widener
+that can tell those questions apart keeps the gain without the bill.
 
 **Cross-encoder reranking makes retrieval worse here**, on all three local
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
@@ -521,9 +553,10 @@ a page that reached a CDN would quietly undo that.
 
 `verbatim mcp` serves the corpus over the Model Context Protocol on stdio,
 so a desktop assistant, a coding agent or an editor can search it directly. It offers
-the same four tools the built-in agent uses - `search_chunks`, `get_paper`,
-`list_papers`, `read_pages` - because both are front ends onto one set of
-operations rather than two implementations of it. All four are marked read-only.
+the same five tools the built-in agent uses - `search_chunks`, `get_paper`,
+`list_papers`, `get_citations`, `read_pages` - because both are front ends onto
+one set of operations rather than two implementations of it. All five are
+marked read-only.
 
 Results come back as JSON rather than prose, so the arXiv id, page or section
 and chunk id survive intact and the client can cite what it read.
@@ -579,7 +612,13 @@ papers rest on. After `grow`, 12,882 of 80,469 resolvable references now point
 at a paper the corpus holds and 43% of papers have at least one such link. `grow` closes this along the citation edges — GPT-4, Adam, BERT, PPO,
 ViT and Planck 2018 were all cited dozens of times and absent until it ran —
 but a corpus assembled this way starts without foundations, and definitional
-questions are the first thing to suffer.
+questions are the first thing to suffer. Adding the defining paper turned out
+to be necessary and not sufficient: 3,152 papers here mention Adam, so the
+paper that defines it was drowned roughly 60:1 by hyperparameter sections
+until the citation-graph leg learned to ask which title-matched paper the
+corpus itself cites. That handles subjects a held paper is named after;
+"what is a tensor" still has no defining paper to anchor to, and remains
+unanswerable for reasons no ranking can fix.
 
 **Retrieval quality is measured on one 68-case set** written alongside the
 system, over a corpus in physics and machine learning. The numbers here do not
