@@ -374,14 +374,18 @@ above so its numbers stay comparable across measurements.
 | hybrid | 0.41 | 0.09 | 0.59 | 0.36 |
 | hybrid+graph | 0.41 | 0.09 | 0.59 | 0.36 |
 | hybrid+plan | 0.36 | 0.09 | 0.59 | 0.36 |
-| **hybrid+titles** | **0.64** | **0.45** | **0.68** | **0.45** |
+| hybrid+titles | **0.64** | **0.45** | 0.68 | 0.45 |
+| **hybrid+compare** | 0.59 | 0.36 | **0.73** | **0.55** |
 
-Two findings, both at the defaults' expense. The default mode fully covers a
-multi-paper question 36% of the time - a failure first-hit metrics cannot see,
-since ten perfect passages about PPO score 1.0 on "how does GRPO differ from
-PPO". And the mode that wins here is the title leg that single-subject
-questions measured off. Details, and decomposition's loss on its home turf,
-under *What was tried and rejected*.
+Three findings. The default mode fully covers a multi-paper question 36% of
+the time - a failure first-hit metrics cannot see, since ten perfect passages
+about PPO score 1.0 on "how does GRPO differ from PPO". The mode that rescues
+most of it is the title leg that single-subject questions measured off. And
+gating that leg to comparison-shaped questions (`--use-compare`) beats both
+parents at depth while provably not touching the single-subject table -
+though it stays off by default, because the key holds no comparison-shaped
+single-paper questions to measure its cost on. Details, and decomposition's
+loss on its home turf, under *What was tried and rejected*.
 
 An earlier version of this file reported mrr 0.940. That was a 42-case set,
 mostly paper titles, over a corpus chunked from PDFs. Scoring those same 42
@@ -519,10 +523,22 @@ technical reports" names its papers almost by title, and passage search finds
 neither while the title index finds both at ranks 1-2. So the same technique
 has now been measured three ways - harmful always-on, decisive behind the
 definitional gate, and best-in-class on compound questions - and the pattern
-is that question shape decides the tool. A titles leg gated to
-comparison-shaped questions, the way the graph leg is gated to definitional
-ones, is the obvious next experiment; after the graph gate it is a familiar
-move, and it is a guess until it is measured.
+is that question shape decides the tool.
+
+That pattern made a prediction, and the prediction was measured true. A titles
+leg gated to comparison-shaped questions ("compare", "differ from", "versus")
+should keep the title leg's compound wins, skip its one compound loss - the
+DeepSeek-R1 case, where "build on" is not comparison vocabulary and the title
+leg had displaced a right answer - and be provably unable to touch the
+single-subject table, which contains no comparison-shaped question. Measured
+as `hybrid+compare`: cov@10 0.73 and all@10 0.55, better than either parent,
+with the single-subject table byte-identical to hybrid. It ships behind
+`--use-compare`, off by default, for one honest reason: the eval key holds no
+comparison-shaped questions with a *single*-paper answer, so the gate's cost
+on that shape - a "how does X differ from vanilla Y" whose title match is
+wrong - has no number yet. Authoring those cases is the recorded next step;
+until then the leg's benefit is measured and its risk is not, and unmeasured
+risk ships off.
 
 Two of the eleven cases also turned out not to be compound on this corpus at
 all: DeepSeek-R1's appendix compares GRPO and PPO in one place, and RoBERTa
