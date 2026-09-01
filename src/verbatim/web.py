@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -104,12 +105,24 @@ def create_app(
     database = state or config.STATE_PATH
     model_name = embedding_model or config.EMBEDDING_MODEL
     resources: dict[str, Any] = {}
+    # A SQLite connection may only be used by the thread that opened it, and
+    # FastAPI serves synchronous endpoints from a pool, so consecutive requests
+    # arrive on different threads. One shared connection therefore fails as
+    # soon as a second thread is used - which is intermittent, and looked like
+    # a dropped connection in the browser. Each thread gets its own instead;
+    # the pool is small and long-lived, so this is a handful of readers.
+    stores = threading.local()
 
     @asynccontextmanager
     async def lifespan(_: Any) -> Any:
         yield
-        if "corpus" in resources:
-            resources.pop("corpus").close()
+        # Only this thread's connection can be closed from here, and the rest
+        # are released when the process exits. Closing another thread's is the
+        # same error this arrangement exists to avoid.
+        store = getattr(stores, "corpus", None)
+        if store is not None:
+            store.close()
+            stores.corpus = None
 
     app = FastAPI(
         title="verbatim",
@@ -119,9 +132,11 @@ def create_app(
     )
 
     def corpus() -> CorpusStore:
-        if "corpus" not in resources:
-            resources["corpus"] = CorpusStore(database)
-        return resources["corpus"]
+        store = getattr(stores, "corpus", None)
+        if store is None:
+            store = CorpusStore(database)
+            stores.corpus = store
+        return store
 
     def embedder() -> Any:
         if "embedder" not in resources:

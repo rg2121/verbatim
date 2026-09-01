@@ -263,3 +263,33 @@ def test_malformed_history_gives_a_single_turn_answer_rather_than_an_error(
     ).text
 
     assert "event: resolved" not in body
+
+
+def test_requests_served_from_different_threads_each_work(tmp_path: Path) -> None:
+    """FastAPI serves sync endpoints from a pool, so a shared SQLite
+    connection fails as soon as a second thread is used. It presented as
+    "Connection lost while answering" in the browser, intermittently.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from helpers import chunked_corpus
+    from verbatim.web import create_app
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Dark matter haloes dominate."]}):
+        pass
+
+    app = create_app(
+        tmp_path / "corpus.db",
+        completion=StreamingScript(["ANSWER: Something.\n"]),
+        encoder=StubEncoder(),
+    )
+    client = TestClient(app)
+
+    def call(_: int) -> int:
+        return client.get("/api/search", params={"q": "dark matter"}).status_code
+
+    # Enough calls to be served from more than one pool thread.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        codes = list(pool.map(call, range(12)))
+
+    assert codes == [200] * 12
