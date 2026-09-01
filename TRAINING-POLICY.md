@@ -1,14 +1,18 @@
 # Training data policy
 
-**Status: DRAFT — not in force until Rishab signs off on the two open
-decisions below. No training work happens under a draft.**
+**Status: IN FORCE — signed off by Rishab on 2026-09-01.**
+**Decisions taken: weights and dataset stay private (not distributed);
+CC-BY-SA text is eligible while they stay private and drops out of the
+training set if that ever changes. Changing either decision requires a
+revision to this document before any further training.**
 
 This project's standing rule is that no model is trained on the corpus until
 a written licence and provenance policy exists. This is that document. It
 exists because arXiv's default submission licence grants *arXiv* distribution
 rights and grants this project nothing, so "the papers are on arXiv" licenses
 nothing at all; only an explicitly permissive subset is usable, and even that
-subset carries conditions.
+subset carries conditions. The open decisions below are recorded as they were
+drafted; the status line above records how each was decided.
 
 ## What may be trained on
 
