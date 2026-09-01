@@ -127,11 +127,13 @@ to be guessed apart. An entry is resolved to an arXiv identifier or DOI only
 when it states one; resolving by title similarity would be a guess recorded as
 a fact.
 
-This is deliberately not a citation graph. Measured over 908 renderings, 59,746
-references carry roughly 11,000 resolvable arXiv identifiers and about 70 of
-them point at a paper this corpus holds. That is the corpus describing itself
-accurately: it is a slice of the newest papers in each category, and new papers
-cite old ones. The useful direction is outward, and `grow` follows it - the
+Measured over all 398,802 entries, 80,469 carry a resolvable arXiv identifier
+and 12,882 point at a paper this corpus holds - 12,781 distinct edges, 43% of
+papers connected. An earlier version of this file said there was no graph here
+at all; that was measured over 908 papers which happened to be the oldest in
+the corpus, and it was wrong.
+
+Its first use is outward, and `grow` follows it - the
 papers most cited by this corpus and absent from it are GPT-4 (52 citing
 papers), Llama 3 (38), DeepSeek-R1 (32), Adam (28), PPO (27), BERT (17). The
 corpus leans on Adam and BERT constantly and holds neither, which is also the
