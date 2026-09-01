@@ -954,6 +954,145 @@ class CorpusStore:
             self.connection.execute("SELECT COUNT(*) FROM paper_references").fetchone()[0]
         )
 
+    def papers_citing(self, base_arxiv_id: str, *, limit: int = 25) -> list[Paper]:
+        """Held papers whose bibliography cites this paper, newest first.
+
+        Keyed on the base identifier because that is what a bibliography names:
+        a reference to "arXiv:1412.6980" is a claim about the paper, not about
+        any one version of it. Self-citations are excluded - a preprint listing
+        its own identifier is provenance, not influence.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT p.* FROM papers AS p
+            WHERE p.arxiv_id IN (
+                SELECT r.citing_arxiv_id FROM paper_references AS r
+                WHERE r.cited_arxiv_id = ?
+            )
+              AND p.base_arxiv_id != ?
+            ORDER BY p.updated DESC, p.version DESC, p.arxiv_id
+            """,
+            (base_arxiv_id, base_arxiv_id),
+        ).fetchall()
+        # The corpus can hold several versions of a citing paper, each with its
+        # own stored bibliography; one paper still cites, however many times it
+        # was read. Newest-first order makes this keep the current version.
+        citers: dict[str, Paper] = {}
+        for row in rows:
+            citers.setdefault(row["base_arxiv_id"], _paper_from_row(row))
+            if len(citers) == limit:
+                break
+        return list(citers.values())
+
+    def papers_cited_by(self, arxiv_id: str, *, limit: int = 50) -> list[Paper]:
+        """Held papers this paper's bibliography resolves to, in citation order.
+
+        The outward half of the graph: what a paper builds on, as far as the
+        corpus holds it. References to absent papers are `grow`'s business and
+        do not appear here.
+        """
+        base_arxiv_id, _ = split_arxiv_version(arxiv_id)
+        rows = self.connection.execute(
+            """
+            SELECT held.*, MIN(r.ordinal) AS first_ordinal
+            FROM paper_references AS r
+            JOIN papers AS held
+              ON held.base_arxiv_id = r.cited_arxiv_id AND held.is_latest = 1
+            WHERE r.citing_arxiv_id = ? AND r.cited_arxiv_id != ?
+            GROUP BY held.base_arxiv_id
+            ORDER BY first_ordinal
+            LIMIT ?
+            """,
+            (arxiv_id, base_arxiv_id, limit),
+        ).fetchall()
+        return [_paper_from_row(row) for row in rows]
+
+    def citation_counts(self, base_arxiv_ids: Sequence[str]) -> dict[str, int]:
+        """How many held papers cite each of these, keyed by base identifier.
+
+        Counts distinct citing papers, not bibliography rows, so a paper held
+        at two versions - each with its stored bibliography - counts once.
+        Identifiers nothing cites are simply absent from the result.
+        """
+        if not base_arxiv_ids:
+            return {}
+        unique = list(dict.fromkeys(base_arxiv_ids))
+        placeholders = ",".join("?" * len(unique))
+        rows = self.connection.execute(
+            f"""
+            SELECT r.cited_arxiv_id AS cited,
+                   COUNT(DISTINCT citer.base_arxiv_id) AS citations
+            FROM paper_references AS r
+            JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
+            WHERE r.cited_arxiv_id IN ({placeholders})
+              AND r.cited_arxiv_id != citer.base_arxiv_id
+            GROUP BY r.cited_arxiv_id
+            """,
+            unique,
+        ).fetchall()
+        return {row["cited"]: int(row["citations"]) for row in rows}
+
+    def most_cited_held_papers(self, *, limit: int = 25) -> list[tuple[Paper, int]]:
+        """The papers this corpus itself cites most, with their citer counts.
+
+        The held-paper counterpart of most_cited_absent_papers: that one is a
+        reading list, this one is an authority ranking. "What is the most
+        influential paper on X here" is a graph question, and no similarity
+        score answers it.
+        """
+        rows = self.connection.execute(
+            """
+            SELECT held.*, COUNT(DISTINCT citer.base_arxiv_id) AS citations
+            FROM paper_references AS r
+            JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
+            JOIN papers AS held
+              ON held.base_arxiv_id = r.cited_arxiv_id AND held.is_latest = 1
+            WHERE r.cited_arxiv_id != citer.base_arxiv_id
+            GROUP BY held.base_arxiv_id
+            ORDER BY citations DESC, held.base_arxiv_id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [(_paper_from_row(row), int(row["citations"])) for row in rows]
+
+    def citation_graph_stats(self) -> dict[str, int]:
+        """The size and reach of the internal citation graph.
+
+        An edge is one held paper citing another, counted once regardless of
+        how many versions of the citer were read. Connected means touching at
+        least one edge in either direction.
+        """
+        edges_sql = """
+            SELECT DISTINCT citer.base_arxiv_id AS citing, r.cited_arxiv_id AS cited
+            FROM paper_references AS r
+            JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
+            WHERE r.cited_arxiv_id IN (SELECT base_arxiv_id FROM papers)
+              AND r.cited_arxiv_id != citer.base_arxiv_id
+        """
+        edges = int(
+            self.connection.execute(
+                f"SELECT COUNT(*) FROM ({edges_sql})"
+            ).fetchone()[0]
+        )
+        connected = int(
+            self.connection.execute(
+                f"""
+                SELECT COUNT(*) FROM (
+                    SELECT citing AS node FROM ({edges_sql})
+                    UNION
+                    SELECT cited FROM ({edges_sql})
+                )
+                """
+            ).fetchone()[0]
+        )
+        papers = int(
+            self.connection.execute(
+                "SELECT COUNT(DISTINCT base_arxiv_id) FROM papers"
+            ).fetchone()[0]
+        )
+        return {"edges": edges, "connected_papers": connected, "papers": papers}
+
     def pending_paper_embeddings(
         self, model_id: str, *, limit: int | None = None
     ) -> list[Paper]:

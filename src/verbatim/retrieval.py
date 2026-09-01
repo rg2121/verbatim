@@ -8,6 +8,7 @@ from collections.abc import Callable
 from verbatim.chunking import BODY
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
+from verbatim.graph import anchored_matches
 from verbatim.expansion import (
     dedupe_queries,
     fuse_rankings,
@@ -98,6 +99,7 @@ def hybrid_search(
     include_references: bool = False,
     index: VectorIndex | None = None,
     use_titles: bool = False,
+    use_graph: bool = False,
     papers: PaperFilter | None = None,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
@@ -108,6 +110,11 @@ def hybrid_search(
     The keyword leg matches any term rather than all: requiring every word of a
     natural-language question matches nothing, which would silently reduce
     hybrid search to vector-only.
+
+    `use_graph` adds passages from the paper a definitional question is named
+    after, chosen by title match backed by in-corpus citations. It contributes
+    nothing to any other kind of question - that gate is what separates it
+    from `use_titles`, which runs everywhere and was measured worse overall.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -135,15 +142,31 @@ def hybrid_search(
         if use_titles
         else []
     )
+    # The anchor leg names its own papers, so it stands down whenever the
+    # caller has already said which papers are allowed: a search scoped to one
+    # paper or filtered by date or category must not be handed passages from
+    # outside that scope, however definitional the question.
+    anchors = (
+        anchored_matches(corpus, query, include_references=include_references)
+        if use_graph and arxiv_id is None and not papers
+        else []
+    )
+
+    legs = [keyword, vector]
+    if use_titles:
+        legs.append(titles)
+    if use_graph:
+        legs.append(anchors)
 
     fused: dict[str, float] = defaultdict(float)
-    for ranking in (keyword, vector, titles) if use_titles else (keyword, vector):
+    for ranking in legs:
         for rank, match in enumerate(ranking, start=1):
             fused[match.chunk.chunk_id] += 1.0 / (smoothing + rank)
 
     # Prefer the keyword leg's snippet: it highlights the matched terms.
     best: dict[str, ChunkMatch] = {match.chunk.chunk_id: match for match in vector}
     best.update({match.chunk.chunk_id: match for match in titles})
+    best.update({match.chunk.chunk_id: match for match in anchors})
     best.update({match.chunk.chunk_id: match for match in keyword})
 
     ordered = [

@@ -4,12 +4,15 @@ A reference list is the one part of a paper that names other papers, and
 LaTeXML marks it up properly: every entry is an <li class="ltx_bibitem">,
 where a PDF offers only a run of text that has to be guessed apart.
 
-What this is for is not a citation graph. Measured over 854 renderings, 10,707
-references carry a resolvable arXiv identifier and just 70 of them point at a
-paper this corpus holds - 69 edges, because the corpus is a slice of the newest
-papers in each category and new papers cite old ones. The useful direction is
-outward: the references say which papers this corpus keeps leaning on and does
-not contain, and that is a reading list for growing it.
+The references serve two directions. Outward, they say which papers this
+corpus keeps leaning on and does not contain - the reading list `grow` works
+from. Inward, they are the citation graph: measured over all 398,802 entries,
+12,781 distinct edges resolve into the corpus and 43% of papers touch at least
+one. (An earlier version of this docstring said a graph could not be built
+here, from 70 edges in an 11% sample - but that sample was the alphabetically
+first ids, the corpus's oldest papers, whose references point at work still
+absent. The conclusion did not survive the full corpus.) The graph itself
+lives in `verbatim.graph`.
 """
 
 from __future__ import annotations

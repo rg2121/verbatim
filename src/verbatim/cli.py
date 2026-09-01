@@ -187,6 +187,23 @@ def run() -> None:
         help="How many uncited-but-absent papers to name at the end",
     )
 
+    graph_parser = subparsers.add_parser(
+        "graph",
+        help="Walk the internal citation graph: what cites a paper, what it builds on",
+    )
+    graph_parser.add_argument(
+        "identifier", nargs="?",
+        help="arXiv ID or approximate title; omit for corpus-wide graph stats",
+    )
+    graph_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    graph_parser.add_argument(
+        "--top", type=int, default=10,
+        help="Without an identifier: how many most-cited held papers to list",
+    )
+    graph_parser.add_argument(
+        "--limit", type=int, default=25, help="Citing or cited papers to list per direction"
+    )
+
     grow_parser = subparsers.add_parser(
         "grow",
         help="Add the papers this corpus cites most and does not hold",
@@ -273,6 +290,12 @@ def run() -> None:
              "overall (mrr 0.866 -> 0.822) but finds definitional papers",
     )
     search_parser.add_argument(
+        "--no-graph", dest="use_graph", action="store_false",
+        help="Skip the citation-graph leg on definitional questions. On by "
+             "default: it holds recall@1 and lifts mrr 0.866 -> 0.869, and "
+             "touches no other kind of question",
+    )
+    search_parser.add_argument(
         "--since", help="Only papers published on or after this date (YYYY-MM-DD)"
     )
     search_parser.add_argument(
@@ -310,6 +333,12 @@ def run() -> None:
         "--plan", action="store_true",
         help="Split the question into parts and retrieve for each, for "
              "compound questions one retrieval cannot reach all of",
+    )
+    ask_parser.add_argument(
+        "--no-graph", dest="use_graph", action="store_false",
+        help="Skip the citation-graph leg on definitional questions. On by "
+             "default: it holds recall@1 and lifts mrr 0.866 -> 0.869, and "
+             "touches no other kind of question",
     )
     ask_parser.add_argument(
         "--llm",
@@ -633,6 +662,48 @@ def run() -> None:
 
         serve(state=args.state, embedding_model=args.model)
 
+    if args.command == "graph":
+        from verbatim.tools import get_citations
+
+        with CorpusStore(args.state) as corpus:
+            if args.identifier is None:
+                stats = corpus.citation_graph_stats()
+                top = corpus.most_cited_held_papers(limit=args.top)
+                degree = 2 * stats["edges"] / stats["papers"] if stats["papers"] else 0.0
+                print(
+                    f"  {stats['edges']:,} edges between held papers; "
+                    f"{stats['connected_papers']:,} of {stats['papers']:,} papers "
+                    f"({stats['connected_papers'] / (stats['papers'] or 1):.0%}) touch at "
+                    f"least one; average degree {degree:.2f}"
+                )
+                if top:
+                    print("\n  Most cited by this corpus, of the papers it holds:")
+                    for cited_paper, citations in top:
+                        print(
+                            f"  {citations:>4} citing papers   "
+                            f"arXiv:{cited_paper.arxiv_id}  {cited_paper.title}"
+                        )
+                return
+            citers = get_citations(corpus, args.identifier, direction="cited_by", limit=args.limit)
+            if citers is None:
+                raise SystemExit(f"error: no paper in the corpus matches {args.identifier!r}")
+            builds_on = get_citations(corpus, args.identifier, direction="references", limit=args.limit)
+        print(f"arXiv:{citers['arxiv_id']}  {citers['title']}")
+        # The identifier just resolved, so the second lookup cannot miss; the
+        # fallback only keeps a mid-command corpus rewrite from crashing this.
+        cited = builds_on["papers"] if builds_on else []
+        for label, related in (
+            ("builds on (held here)", cited),
+            ("cited by (held here)", citers["papers"]),
+        ):
+            print(f"\n  {label}: {len(related)}")
+            for entry in related:
+                print(f"    arXiv:{entry['arxiv_id']}  {entry['title']}")
+        print(
+            "\n  Only citations resolving into the corpus are shown; the paper's"
+            "\n  full bibliography is longer."
+        )
+
     if args.command == "grow":
         with CorpusStore(args.state) as corpus:
             wanted = [
@@ -722,7 +793,11 @@ def run() -> None:
                 )
             else:
                 search = vector_search if args.mode == "vector" else hybrid_search
-                extra = {"use_titles": args.use_titles} if args.mode == "hybrid" else {}
+                extra = (
+                    {"use_titles": args.use_titles, "use_graph": args.use_graph}
+                    if args.mode == "hybrid"
+                    else {}
+                )
                 matches = search(
                     corpus,
                     FastEmbedEmbedder(model_name=args.model),
@@ -777,6 +852,7 @@ def run() -> None:
                     arxiv_id=args.arxiv_id,
                     max_per_paper=args.max_per_paper,
                     include_references=args.include_references,
+                    use_graph=args.use_graph,
                 )
                 answer = answer_from_matches(corpus, completion, args.question, matches)
             if len(plan) > 1:

@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from verbatim.tools import call_tool, get_paper, list_papers, read_pages
+from verbatim.references import Reference
+from verbatim.tools import call_tool, get_citations, get_paper, list_papers, read_pages
 
 from helpers import chunked_corpus, paper
 
@@ -57,6 +58,46 @@ def test_read_pages_returns_only_the_requested_pages(tmp_path: Path) -> None:
     assert [c["page"] for c in page_two] == [2]
     assert "Page two" in page_two[0]["text"]
     assert sorted({c["page"] for c in two_and_three}) == [2, 3]
+
+
+def test_get_citations_walks_both_directions_of_the_graph(tmp_path: Path) -> None:
+    with corpus_with_dates(tmp_path) as corpus:
+        corpus.record_references(
+            [
+                Reference(
+                    citing_arxiv_id="2608.22222v1",
+                    ordinal=1,
+                    raw_text="[1] arXiv:2608.11111",
+                    cited_arxiv_id="2608.11111",
+                )
+            ],
+            source_sha256="abc123",
+        )
+        cited_by = get_citations(corpus, "2608.11111v1", direction="cited_by")
+        # Resolution goes through get_paper, so a bare base id works too.
+        references = get_citations(corpus, "2608.22222", direction="references")
+        missing = get_citations(corpus, "no such paper anywhere")
+
+    assert cited_by is not None
+    assert [p["arxiv_id"] for p in cited_by["papers"]] == ["2608.22222v1"]
+    assert references is not None
+    assert [p["arxiv_id"] for p in references["papers"]] == ["2608.11111v1"]
+    assert missing is None
+
+
+def test_get_citations_rejects_a_direction_it_never_offered(tmp_path: Path) -> None:
+    with corpus_with_dates(tmp_path) as corpus:
+        with pytest.raises(ValueError, match="direction"):
+            get_citations(corpus, "2608.11111v1", direction="sideways")
+
+
+def test_get_citations_dispatches_without_a_model(tmp_path: Path) -> None:
+    with corpus_with_dates(tmp_path) as corpus:
+        result = call_tool(
+            "get_citations", {"identifier": "2608.11111v1"}, corpus, embedder=None
+        )
+
+    assert result is not None and result["direction"] == "cited_by"
 
 
 def test_an_unknown_tool_name_is_rejected(tmp_path: Path) -> None:

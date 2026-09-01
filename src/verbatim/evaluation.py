@@ -212,6 +212,10 @@ def evaluate(
             corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
             use_titles=True,
         ),
+        "hybrid+graph": lambda q: hybrid_search(
+            corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
+            use_graph=True,
+        ),
     }
     # Only offered when a model is available to do the rewriting, so the
     # comparison is against the same corpus rather than a silently skipped leg.

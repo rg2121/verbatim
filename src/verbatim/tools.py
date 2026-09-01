@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from verbatim.corpus import CorpusStore
+from verbatim.corpus import CorpusStore, split_arxiv_version
 from verbatim.embedding import Embedder
 from verbatim.retrieval import hybrid_search
 
@@ -109,6 +109,42 @@ def list_papers(
     ]
 
 
+def get_citations(
+    corpus: CorpusStore,
+    identifier: str,
+    *,
+    direction: str = "cited_by",
+    limit: int = 20,
+) -> dict[str, Any] | None:
+    """What cites a paper, or what it builds on, within the corpus.
+
+    A graph question, not a retrieval one: influence and lineage live in the
+    bibliographies, and no similarity score can answer "what builds on this".
+    Only citations that resolve to held papers appear - the corpus can only
+    testify about itself.
+    """
+    if direction not in ("cited_by", "references"):
+        raise ValueError("direction must be 'cited_by' or 'references'")
+    found = get_paper(corpus, identifier)
+    if found is None:
+        return None
+    bounded = min(limit, MAX_RESULTS)
+    if direction == "references":
+        related = corpus.papers_cited_by(found["arxiv_id"], limit=bounded)
+    else:
+        base_arxiv_id, _ = split_arxiv_version(found["arxiv_id"])
+        related = corpus.papers_citing(base_arxiv_id, limit=bounded)
+    return {
+        "arxiv_id": found["arxiv_id"],
+        "title": found["title"],
+        "direction": direction,
+        "papers": [
+            {"arxiv_id": p.arxiv_id, "title": p.title, "published": p.published}
+            for p in related
+        ],
+    }
+
+
 def read_pages(
     corpus: CorpusStore, arxiv_id: str, pages: list[int]
 ) -> list[dict[str, Any]]:
@@ -171,6 +207,28 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_citations",
+        "description": (
+            "List the held papers that cite one paper (direction 'cited_by'), or "
+            "the held papers it builds on (direction 'references'). Use for "
+            "questions about influence, lineage, or what builds on what; passage "
+            "search cannot answer those."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "identifier": {"type": "string", "description": "arXiv ID or approximate title"},
+                "direction": {
+                    "type": "string",
+                    "enum": ["cited_by", "references"],
+                    "description": "cited_by: who cites it. references: what it cites",
+                },
+                "limit": {"type": "integer"},
+            },
+            "required": ["identifier"],
+        },
+    },
+    {
         "name": "read_pages",
         "description": "Read specific pages of one paper, to follow up on a search hit.",
         "parameters": {
@@ -211,6 +269,13 @@ def call_tool(
             # return an unfiltered list that looks like a filtered one.
             since=arguments.get("since"),
             category=arguments.get("category"),
+            limit=int(arguments.get("limit", 20)),
+        )
+    if name == "get_citations":
+        return get_citations(
+            corpus,
+            str(arguments.get("identifier", "")),
+            direction=str(arguments.get("direction", "cited_by")),
             limit=int(arguments.get("limit", 20)),
         )
     if name == "read_pages":
