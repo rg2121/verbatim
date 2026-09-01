@@ -31,6 +31,7 @@ arXiv API ──sync──▶ corpus.db  papers            every version seen, n
            pipeline ──▶ every stage above, in rounds, until nothing is pending
              search ──▶ ranked passages with citations
                 ask ──▶ an answer, every claim cited and verified
+             report ──▶ a sectioned literature review, one verified bibliography
 ```
 
 ## Try it without building a corpus
@@ -319,8 +320,21 @@ with how a question was divided needs to see the division.
 
 It is a multi-step loop, not a swarm of agents, and it is off by default:
 splitting a question that never needed splitting buys three mediocre
-retrievals in place of one good one. Whether it helps is a measurement waiting
-on the eval set, not a claim.
+retrievals in place of one good one. Measured on the compound cases it was
+built for, it lost - see *What was tried and rejected*.
+
+`report` composes the measured pieces into a literature review. One model
+call plans three to five section questions; each section then runs the same
+retrieval `ask` uses (graph gate on, comparison gate behind `--use-compare`)
+and is written by the same verified-citation path, so a claim cannot appear
+anywhere in the review unless its quoted words are in the passage it names.
+The assembly is what `ask` run several times would not give: one bibliography
+numbered across sections with the inline markers rewritten to match, each
+section's subject check printed beside it as a warning, and a section the
+corpus cannot support saying so in place. `--out review.md` writes it as
+markdown with version-pinned arXiv links. A hosted "deep research" product
+can show neither its retrieval nor a verification of its quotes; this one is
+built from parts whose numbers are all in this file.
 
 **A definitional question loses to the papers that merely use the thing.**
 `grow` added the Adam paper, and "what is the Adam optimizer?" still returns
