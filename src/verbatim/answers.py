@@ -296,6 +296,48 @@ class OllamaCompletion:
         )
         return body.get("message", {}).get("content", "")
 
+    def stream(self, system: str, user: str):
+        """Yield the reply's text as the model writes it.
+
+        The same call `complete` makes, with `stream: true`; Ollama then sends
+        one JSON object per line, each carrying a fragment. The caller joins
+        what it saw and parses it with parse_line_protocol, so streaming
+        changes when text is shown and nothing about what is accepted:
+        verification runs on the finished reply exactly as it always has.
+        """
+        request = Request(
+            f"{self.host}/api/chat",
+            data=json.dumps(
+                {
+                    "model": self.model,
+                    "stream": True,
+                    "messages": [
+                        {"role": "system", "content": f"{system}\n{LINE_PROTOCOL}"},
+                        {"role": "user", "content": user},
+                    ],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local host
+                for line in response:
+                    if not line.strip():
+                        continue
+                    body = json.loads(line)
+                    if "error" in body:
+                        raise RuntimeError(f"Ollama error: {body['error']}")
+                    fragment = body.get("message", {}).get("content", "")
+                    if fragment:
+                        yield fragment
+                    if body.get("done"):
+                        return
+        except URLError as error:
+            raise RuntimeError(
+                f"Cannot reach Ollama at {self.host} ({error.reason}). "
+                f"Is it running? Start it with 'ollama serve'."
+            ) from error
+
     def _first_available_model(self) -> str:
         models = [item["name"] for item in self._get("/api/tags").get("models", [])]
         if not models:
@@ -495,8 +537,24 @@ def answer_from_matches(
         )
 
     payload = completion.complete(SYSTEM_PROMPT, build_prompt(question, matches), ANSWER_SCHEMA)
-    chunks = {match.chunk.chunk_id: match.chunk for match in matches}
     papers = corpus.papers_by_id(sorted({match.chunk.arxiv_id for match in matches}))
+    return answer_from_payload(question, matches, payload, papers)
+
+
+def answer_from_payload(
+    question: str,
+    matches: list[ChunkMatch],
+    payload: dict[str, Any],
+    papers: dict[str, Any],
+) -> Answer:
+    """Verify a model's payload into an Answer, however the payload arrived.
+
+    Split from answer_from_matches so a streamed generation - whose deltas
+    were already shown to someone - finishes through exactly this same
+    verification, rather than a second copy of it. `papers` is passed in
+    rather than looked up so the caller can run this off the database thread.
+    """
+    chunks = {match.chunk.chunk_id: match.chunk for match in matches}
 
     citations: list[Citation] = []
     rejected: list[RejectedCitation] = []

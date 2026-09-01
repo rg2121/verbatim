@@ -13,16 +13,31 @@ would quietly undo that.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 from pathlib import Path
 from typing import Any
 
 from verbatim import config
+from verbatim.answers import (
+    SYSTEM_PROMPT,
+    Answer,
+    answer_from_payload,
+    build_prompt,
+    describe_subject,
+    parse_line_protocol,
+    subject_similarity,
+)
 from verbatim.citations import render_locator
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.retrieval import hybrid_search
 
 MAX_LIMIT = 50
+
+
+def _event(name: str, payload: dict[str, Any]) -> str:
+    """One server-sent event. The name routes it to the page's handler."""
+    return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
 
 
 def match_to_dict(match: ChunkMatch) -> dict[str, Any]:
@@ -47,11 +62,20 @@ def match_to_dict(match: ChunkMatch) -> dict[str, Any]:
 
 
 def create_app(
-    state: Path | None = None, embedding_model: str | None = None
+    state: Path | None = None,
+    embedding_model: str | None = None,
+    completion: Any = None,
+    encoder: Any = None,
 ) -> Any:
-    """Build the application. Kept a factory so tests can point it at a fixture."""
+    """Build the application. Kept a factory so tests can point it at a fixture.
+
+    `completion` is the answering model and `encoder` the embedder; tests
+    inject scripted ones, so the suite never loads ONNX weights or needs
+    Ollama running. By default Ollama is constructed lazily on the first
+    question, so serving the search page never requires a model at all.
+    """
     from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse, StreamingResponse
 
     database = state or config.STATE_PATH
     model_name = embedding_model or config.EMBEDDING_MODEL
@@ -75,10 +99,20 @@ def create_app(
             resources["corpus"] = CorpusStore(database)
         return resources["corpus"]
 
-    def embedder() -> FastEmbedEmbedder:
+    def embedder() -> Any:
         if "embedder" not in resources:
-            resources["embedder"] = FastEmbedEmbedder(model_name=model_name)
+            resources["embedder"] = encoder or FastEmbedEmbedder(model_name=model_name)
         return resources["embedder"]
+
+    def answering() -> Any:
+        if "completion" not in resources:
+            if completion is not None:
+                resources["completion"] = completion
+            else:
+                from verbatim.answers import OllamaCompletion
+
+                resources["completion"] = OllamaCompletion(config.OLLAMA_MODEL)
+        return resources["completion"]
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
@@ -116,6 +150,94 @@ def create_app(
         if found is None:
             raise HTTPException(status_code=404, detail=f"No paper {arxiv_id} in this corpus")
         return found.to_dict()
+
+    @app.get("/api/ask")
+    def ask(
+        q: str = Query(min_length=1, description="The question to answer"),
+        arxiv_id: str | None = Query(None, description="Restrict to one paper version"),
+    ) -> Any:
+        """Answer a question as a stream of server-sent events.
+
+        A local model takes twenty seconds to write an answer, and a silent
+        page for twenty seconds reads as a broken one. The draft streams as
+        the model writes it; verification then runs on the finished reply
+        exactly as it does everywhere else, and the final `answer` event
+        replaces the draft with the verified text and its citations. Nothing
+        is accepted differently for having been streamed.
+
+        Retrieval happens here, before the stream begins, because SQLite
+        connections belong to the thread that made them and the streaming
+        generator may run on another.
+        """
+        matches = hybrid_search(
+            corpus(), embedder(), q,
+            limit=config.ASK_PASSAGES,
+            arxiv_id=arxiv_id,
+            max_per_paper=config.ASK_MAX_PER_PAPER if arxiv_id is None else None,
+            use_graph=True,
+        )
+        papers = corpus().papers_by_id(sorted({m.chunk.arxiv_id for m in matches}))
+
+        def events() -> Any:
+            yield _event(
+                "passages",
+                {
+                    "passages": [
+                        {
+                            "arxiv_id": m.chunk.arxiv_id,
+                            "locator": render_locator(
+                                m.chunk.source_kind, m.chunk.page_number, m.chunk.section_path
+                            ),
+                        }
+                        for m in matches
+                    ]
+                },
+            )
+            if not matches:
+                yield _event(
+                    "answer",
+                    Answer(
+                        question=q,
+                        text="No passages in the corpus match this question.",
+                        citations=[], rejected=[], declined=True,
+                    ).to_dict(),
+                )
+                yield _event("done", {})
+                return
+            collected: list[str] = []
+            try:
+                for fragment in answering().stream(SYSTEM_PROMPT, build_prompt(q, matches)):
+                    collected.append(fragment)
+                    yield _event("delta", {"text": fragment})
+                payload = parse_line_protocol("".join(collected))
+                if payload is None:
+                    raise RuntimeError("The model did not answer in the expected format.")
+                answer = answer_from_payload(q, matches, payload, papers)
+                yield _event("answer", answer.to_dict())
+                # After the answer, not before: the check costs a model call,
+                # and the reader should not wait on a warning that usually
+                # does not fire.
+                subject = describe_subject(answering(), matches)
+                closeness = subject_similarity(embedder(), q, subject)
+                yield _event(
+                    "subject",
+                    {
+                        "subject": subject,
+                        "closeness": round(closeness, 3),
+                        "warn": closeness < config.SUBJECT_WARN_BELOW,
+                    },
+                )
+            # Named "failed" because EventSource fires its own "error" event
+            # for connection trouble, and the page must tell them apart.
+            except (RuntimeError, OSError) as error:
+                yield _event("failed", {"message": str(error)})
+            yield _event("done", {})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 
@@ -181,6 +303,12 @@ PAGE = """<!doctype html>
   button { background: var(--accent); color: #fff; border-color: transparent; cursor: pointer; }
   button[disabled] { opacity: .55; cursor: default; }
   .note { color: var(--muted); font-size: .85rem; margin: .75rem 0 1.5rem; }
+  .warn { color: #b45309; font-size: .85rem; margin: .6rem 0 0; }
+  .refs { margin-top: .75rem; border-top: 1px solid var(--line); padding-top: .6rem;
+          font-size: .85rem; }
+  .refs p { margin: .25rem 0; }
+  .refs a { color: var(--accent); text-decoration: none; }
+  .rejected { color: #b45309; }
   article {
     background: var(--card); border: 1px solid var(--line); border-radius: 8px;
     padding: .9rem 1rem; margin-bottom: .75rem;
@@ -213,6 +341,19 @@ PAGE = """<!doctype html>
 
   <p class="note" id="status"></p>
   <div id="results"></div>
+
+  <form id="askform">
+    <input type="search" id="aq" placeholder="Or ask a question, answered with verified citations"
+           aria-label="Ask a question">
+    <button type="submit" id="askgo">Ask</button>
+  </form>
+  <p class="note" id="askstatus"></p>
+  <article id="askcard" hidden>
+    <p class="text" id="asktext"></p>
+    <p class="warn" id="asksubject" hidden></p>
+    <div class="refs" id="askrefs" hidden></div>
+  </article>
+
   <footer id="stats"></footer>
 </main>
 <script>
@@ -290,7 +431,96 @@ async function loadStats() {
   }
 }
 
+function locatorOf(citation) {
+  if (citation.source_kind !== "html") return "p. " + citation.page_number;
+  const parts = (citation.section_path || "").split(" > ");
+  const heading = parts[parts.length - 1].trim();
+  return heading ? "section " + heading : "section " + citation.page_number;
+}
+
+function renderReference(citation, index) {
+  return '<p>[' + (index + 1) + '] <a href="' + escapeHtml(citation.source_url) + '">'
+    + escapeHtml(citation.title) + "</a>"
+    + '<span class="meta"> — arXiv:' + escapeHtml(citation.arxiv_id)
+    + ", " + escapeHtml(locatorOf(citation)) + "</span></p>";
+}
+
+let asking = null;
+
+function runAsk(event) {
+  event.preventDefault();
+  const question = $("aq").value.trim();
+  if (!question) return;
+  if (asking) asking.close();
+  $("askgo").disabled = true;
+  $("askcard").hidden = false;
+  $("asktext").textContent = "";
+  $("askrefs").hidden = true;
+  $("askrefs").innerHTML = "";
+  $("asksubject").hidden = true;
+  $("askstatus").textContent = "Retrieving passages…";
+  let draft = "";
+
+  asking = new EventSource("/api/ask?q=" + encodeURIComponent(question));
+  asking.addEventListener("passages", (e) => {
+    const got = JSON.parse(e.data).passages;
+    const papers = new Set(got.map((p) => p.arxiv_id)).size;
+    if (got.length) {
+      $("askstatus").textContent =
+        "Reading " + got.length + " passages from " + papers + " papers. Drafting…";
+    }
+  });
+  asking.addEventListener("delta", (e) => {
+    draft += JSON.parse(e.data).text;
+    // Show the ANSWER prose as it arrives; the CITE lines that follow are
+    // input to the verifier, not part of the answer.
+    $("asktext").textContent =
+      draft.split(/\\n\\s*CITE\\s*\\[/)[0].replace(/^[\\s\\S]*?ANSWER:\\s*/, "");
+  });
+  asking.addEventListener("answer", (e) => {
+    const answer = JSON.parse(e.data);
+    $("asktext").textContent = answer.text;
+    if (answer.declined) { $("askstatus").textContent = ""; return; }
+    $("askstatus").textContent =
+      answer.citations.length + " citation(s) verified against their passages. "
+      + "Checking what the passages are about…";
+    let refs = answer.citations.map(renderReference).join("");
+    if (answer.rejected.length) {
+      refs += '<p class="rejected">' + answer.rejected.length
+        + " citation(s) failed verification and are marked [unverified].</p>";
+    }
+    if (refs) { $("askrefs").innerHTML = refs; $("askrefs").hidden = false; }
+  });
+  asking.addEventListener("subject", (e) => {
+    const check = JSON.parse(e.data);
+    $("askstatus").textContent = $("askstatus").textContent
+      .replace(" Checking what the passages are about…", "");
+    if (check.warn) {
+      $("asksubject").hidden = false;
+      $("asksubject").textContent = "These passages are about: " + check.subject
+        + " — which may not be what you asked ("
+        + check.closeness.toFixed(2) + " similarity).";
+    }
+  });
+  asking.addEventListener("failed", (e) => {
+    $("askstatus").textContent = "Answering failed: " + JSON.parse(e.data).message;
+  });
+  asking.addEventListener("done", () => {
+    asking.close();
+    asking = null;
+    $("askgo").disabled = false;
+  });
+  asking.onerror = () => {
+    if (!asking) return;
+    asking.close();
+    asking = null;
+    $("askstatus").textContent = "Connection lost while answering.";
+    $("askgo").disabled = false;
+  };
+}
+
 $("search").addEventListener("submit", runSearch);
+$("askform").addEventListener("submit", runAsk);
 loadStats();
 </script>
 </body>
