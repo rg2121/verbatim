@@ -382,6 +382,67 @@ the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.
 
+## Orchestrating specialist roles
+
+`report --agents` is the multi-agent version of the review, and it was
+designed from what the 2026 literature agrees on rather than from enthusiasm.
+Published orchestrator-workers systems and the LangGraph benchmark both find that an
+orchestrator delegating to parallel specialists beats a single agent on
+breadth-first work, at a cost of 3 to 15 times the tokens; one such system also
+keeps citation checking in a separate agent because one agent both writing
+and checking plays "a game of telephone". Magentic-One's orchestrator keeps a
+ledger of progress and retries on error, and OrchestraBench (arXiv:2608.05263,
+held in this corpus) shows why the ledger matters: blind retry reproduces
+latent faults, and containment needs detection *with attribution*. The
+MAST taxonomy finds most multi-agent failures are design failures - weak
+specification, misaligned roles, missing verification - not model failures.
+And the guidance on when to split at all is to divide by *context*, not by
+problem type: facets that share context belong to one agent.
+
+That last rule explains a result in this file. Splitting one question into
+sub-questions lost on its own compound cases, because the parts share the
+question's context and divide its retrieval budget. A review's *sections*
+share a topic and nothing else, which is exactly the split the literature
+says parallel workers are for.
+
+So the roles here differ in kind, not in subject, and the supervisor is code:
+
+| role | who | what it does |
+|---|---|---|
+| planner | model | one call, section questions as flat lines |
+| router | code | the section's shape picks a ladder of strategies |
+| retrievers | code, and the tool-choosing agent as the last rung | `hybrid` (graph gate inside), `compare`, `titles`, `agent` |
+| writer | model | the existing verified-citation path, unchanged |
+| verifier | code | the quote check, plus the describe-then-compare subject check |
+| supervisor | code | ledger, retries, parallel sections, assembly |
+
+The verifier never asks a model whether a section is good: asked that, every
+model tested here says yes. A section is accepted on numbers - at least one
+citation survived verification and the passages are on-subject - and
+otherwise retried with the *next* strategy on its ladder, so a retry is never
+the same retrieval twice. The best attempt is kept, not the last, since an
+escalation can retrieve worse than what it replaced. The supervisor forwards
+each verified answer untouched, because the LangGraph benchmark's dominant
+failure mode was the supervisor's own paraphrasing. Every attempt goes into
+a ledger that the review prints as its final section, so a reader can see
+which strategy each section took, what verified, and what was retried.
+
+Sections run in parallel with `--workers N`, each thread on its own SQLite
+connection. **Measured, it buys nothing here:** a four-section review took
+424s with one worker and 423s with three. Ollama serves one request to a model
+at a time unless `OLLAMA_NUM_PARALLEL` is raised, so the workers queue behind
+the same server and the wall clock is set by generation either way. The
+orchestration costs nothing measurable, and it earns nothing either.
+
+That is worth stating plainly because the literature's headline claim for
+multi-agent systems is throughput through parallelism. On a single local model
+server that claim does not transfer: the parallelism has nowhere to go. What
+does transfer here is the *other* half - routing by shape, retrying with a
+different strategy, and refusing to accept a section on a model's say-so -
+and those are measured in the tables above. Raise `OLLAMA_NUM_PARALLEL`, or
+point the writer at a server that batches, and `--workers` becomes worth
+having; until then it is off by default at one worker.
+
 ## What retrieval measures
 
 Over 76 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered -
