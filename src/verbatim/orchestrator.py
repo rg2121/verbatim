@@ -1,0 +1,340 @@
+"""Roles that differ in kind, coordinated in code, and measured against not doing it.
+
+The 2026 literature on multi-agent systems agrees on more than it argues
+about, and this module is built from the parts that agree:
+
+- **Orchestrator and workers.** A lead coordinates specialists that work in
+  parallel on independent facets; a published orchestrator-workers research system reports a
+  90% gain over a single agent on breadth-first tasks, and the LangGraph
+  benchmark finds supervisor designs stay accurate as tools proliferate
+  where a single agent degrades. The cost is tokens - 3 to 15 times a
+  single agent - so the work has to be worth it.
+- **Divide by context, not by problem type.** Facets that share context
+  belong to one agent; facets that share nothing may be split. This is why
+  splitting one question into sub-questions lost here (measured: worse on
+  its own compound cases) while a review's *sections* are the right split -
+  they share a topic and nothing else.
+- **A verifier that is not the writer.** The separate citation agent in those systems
+  exists because one agent both writing and checking plays "a game of
+  telephone". Here the verifier is stronger than an agent: it is the
+  deterministic quote check, and it never asks a model whether the answer is
+  good, because models asked that always say yes (measured, four ways).
+- **A ledger, and no blind retries.** Magentic-One's orchestrator keeps a
+  progress ledger and retries on error; OrchestraBench (arXiv:2608.05263)
+  finds blind retry reproduces latent faults and that detection *with
+  attribution* is what makes containment possible. So every attempt here is
+  recorded with what it retrieved, what verified, and why it was rejected,
+  and a retry always changes strategy.
+- **The supervisor never paraphrases.** The LangGraph benchmark's main
+  failure mode was the supervisor's "translation layer" rewriting worker
+  output. The supervisor here forwards each section's verified answer
+  untouched.
+
+The supervisor is code rather than a model for the same reason the retrieval
+gates are: routing by question shape was measured to win, and code can be
+tested offline in two seconds. Models do the narrow jobs - planning sections,
+writing prose, naming what passages are about, and, as the last rung of the
+ladder, choosing a tool - and the ledger says which one did what.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, datetime
+import re
+import threading
+from typing import Any
+
+from verbatim import config
+from verbatim.agent import ToolCaller, gather
+from verbatim.answers import (
+    Answer,
+    Completion,
+    answer_from_matches,
+    describe_subject,
+    subject_similarity,
+)
+from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.embedding import Embedder
+from verbatim.graph import definitional_subject
+from verbatim.report import Report, ReportSection, plan_sections
+from verbatim.retrieval import comparison_shaped, hybrid_search
+
+# Questions about what is new, which passage similarity cannot answer and the
+# tool-using agent can, by choosing the recency tool.
+RECENCY = re.compile(
+    r"\b(?:latest|newest|most recent|recently|this (?:week|month|year)|last (?:week|month|year))\b",
+    re.IGNORECASE,
+)
+
+# The strategies a section may be retrieved with, in the order each shape
+# tries them. Every rung is a different retrieval, so a retry is never blind.
+# "hybrid" is the measured default (the definitional graph gate is inside it);
+# "compare" and "titles" are the legs measured best on multi-paper questions;
+# "agent" lets a model choose a tool, which is the only rung that can answer a
+# recency or named-paper question, and the most expensive.
+LADDERS: dict[str, tuple[str, ...]] = {
+    "definitional": ("hybrid", "titles", "agent"),
+    "comparison": ("compare", "titles", "agent"),
+    "recency": ("agent", "hybrid"),
+    "open": ("hybrid", "titles", "agent"),
+}
+STRATEGY_FLAGS: dict[str, dict[str, bool]] = {
+    "hybrid": {"use_graph": True},
+    "compare": {"use_graph": True, "use_compare": True},
+    "titles": {"use_graph": True, "use_titles": True},
+}
+ACCEPTED = "accepted"
+RETRY = "retry"
+
+
+def question_shape(question: str) -> str:
+    """Which ladder a section climbs. Deterministic, like the retrieval gates."""
+    if RECENCY.search(question):
+        return "recency"
+    if comparison_shaped(question):
+        return "comparison"
+    if definitional_subject(question) is not None:
+        return "definitional"
+    return "open"
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One rung of the ladder: what was tried, and what the verifier found."""
+
+    strategy: str
+    passages: int
+    verified: int
+    rejected: int
+    closeness: float | None
+    verdict: str
+
+
+@dataclass(frozen=True)
+class SectionLedger:
+    heading: str
+    shape: str
+    attempts: tuple[Attempt, ...]
+    outcome: str
+
+
+@dataclass(frozen=True)
+class Ledger:
+    """What every role did for every section - the trace, kept for the reader."""
+
+    sections: list[SectionLedger]
+
+    @property
+    def escalations(self) -> int:
+        return sum(len(section.attempts) - 1 for section in self.sections)
+
+    def render_markdown(self) -> str:
+        lines = [
+            "## How this review was made",
+            "",
+            "Each section was routed by its shape, retrieved by a specialist "
+            "strategy, written by the model, and checked mechanically: a "
+            "section whose citations failed verification, or whose passages "
+            "drifted off-subject, was retried with the next strategy rather "
+            "than the same one again. The best attempt is the one printed.",
+            "",
+        ]
+        for section in self.sections:
+            lines.append(f"- **{section.heading}** ({section.shape}) - {section.outcome}")
+            for attempt in section.attempts:
+                subject = (
+                    f"subject {attempt.closeness:.2f}"
+                    if attempt.closeness is not None
+                    else "subject unchecked"
+                )
+                lines.append(
+                    f"  - `{attempt.strategy}`: {attempt.passages} passages, "
+                    f"{attempt.verified} verified, {attempt.rejected} rejected, "
+                    f"{subject} -> {attempt.verdict}"
+                )
+        return "\n".join(lines)
+
+
+def verdict_for(answer: Answer, closeness: float | None, warn_below: float) -> str:
+    """Accept or retry, from numbers only.
+
+    A section is accepted when at least one citation survived verification
+    and the passages are about what the section asks. No model is asked
+    whether the answer is good: asked that, every model tested says yes.
+    """
+    if not answer.citations:
+        return RETRY
+    if closeness is not None and closeness < warn_below:
+        return RETRY
+    return ACCEPTED
+
+
+def retrieve(
+    strategy: str,
+    corpus: CorpusStore,
+    embedder: Embedder,
+    question: str,
+    *,
+    limit: int,
+    max_per_paper: int | None,
+    caller: ToolCaller | None,
+) -> list[ChunkMatch]:
+    """Run one strategy. The agent rung needs a tool-choosing model."""
+    if strategy == "agent":
+        if caller is None:
+            return []
+        matches, _trace = gather(corpus, embedder, caller, question)
+        return matches[:limit]
+    return hybrid_search(
+        corpus, embedder, question,
+        limit=limit, max_per_paper=max_per_paper, **STRATEGY_FLAGS[strategy],
+    )
+
+
+def work_section(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    completion: Completion,
+    heading: str,
+    *,
+    caller: ToolCaller | None = None,
+    per_section: int = 6,
+    max_per_paper: int | None = 2,
+    check_subject: bool = True,
+    warn_below: float = config.SUBJECT_WARN_BELOW,
+) -> tuple[ReportSection, SectionLedger]:
+    """Climb the ladder for one section until the verifier accepts.
+
+    The best attempt is kept, not the last: an escalation can retrieve worse
+    than what it replaced, and the reader should get the strongest section
+    the ladder found, with the ledger showing the rest.
+    """
+    shape = question_shape(heading)
+    candidates: list[tuple[Attempt, ReportSection]] = []
+    for strategy in LADDERS[shape]:
+        matches = retrieve(
+            strategy, corpus, embedder, heading,
+            limit=per_section, max_per_paper=max_per_paper, caller=caller,
+        )
+        answer = answer_from_matches(corpus, completion, heading, matches)
+        subject = closeness = None
+        if matches and check_subject:
+            subject = describe_subject(completion, matches)
+            closeness = subject_similarity(embedder, heading, subject)
+        verdict = verdict_for(answer, closeness, warn_below)
+        candidates.append(
+            (
+                Attempt(
+                    strategy=strategy, passages=len(matches),
+                    verified=len(answer.citations), rejected=len(answer.rejected),
+                    closeness=closeness, verdict=verdict,
+                ),
+                ReportSection(
+                    heading=heading, answer=answer,
+                    subject=subject, subject_closeness=closeness,
+                ),
+            )
+        )
+        if verdict == ACCEPTED:
+            break
+    best_attempt, best_section = max(
+        candidates,
+        key=lambda pair: (
+            pair[0].verdict == ACCEPTED, pair[0].verified, pair[0].closeness or 0.0
+        ),
+    )
+    if best_attempt.verdict == ACCEPTED:
+        outcome = "accepted"
+    elif best_attempt.verified:
+        outcome = "accepted with a subject warning"
+    else:
+        outcome = "gap: no strategy produced a verified citation"
+    return best_section, SectionLedger(
+        heading=heading, shape=shape,
+        attempts=tuple(attempt for attempt, _ in candidates), outcome=outcome,
+    )
+
+
+class _Serialized:
+    """One embedder shared by worker threads, one call at a time.
+
+    ONNX inference is cheap next to generation, so serialising it costs
+    nothing measurable and removes a class of race the threads would
+    otherwise have on first load.
+    """
+
+    def __init__(self, embedder: Embedder) -> None:
+        self._embedder = embedder
+        self._lock = threading.Lock()
+
+    @property
+    def model(self) -> Any:
+        with self._lock:
+            return self._embedder.model
+
+    def embed_query(self, text: str) -> list[float]:
+        with self._lock:
+            return self._embedder.embed_query(text)
+
+    def embed_passages(self, texts: Any) -> list[list[float]]:
+        with self._lock:
+            return self._embedder.embed_passages(texts)
+
+
+def orchestrate(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    completion: Completion,
+    complete_text: Callable[[str, str], str],
+    topic: str,
+    *,
+    caller: ToolCaller | None = None,
+    max_sections: int = 4,
+    per_section: int = 6,
+    max_per_paper: int | None = 2,
+    workers: int = 1,
+    check_subject: bool = True,
+    warn_below: float = config.SUBJECT_WARN_BELOW,
+    on_section: Callable[[str, int, int], None] | None = None,
+) -> tuple[Report, Ledger]:
+    """Plan a review, then work its sections - in parallel when asked.
+
+    Sections share a topic and nothing else, which is the division of labour
+    the literature says parallel workers are for. Each worker thread opens
+    its own connection to the corpus, because SQLite connections belong to
+    the thread that made them, and shares one serialised embedder.
+    """
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+    headings = plan_sections(complete_text, topic, max_sections=max_sections)
+    shared = _Serialized(embedder) if workers > 1 else embedder
+
+    def run(position: int, heading: str) -> tuple[ReportSection, SectionLedger]:
+        if on_section is not None:
+            on_section(heading, position, len(headings))
+        options = dict(
+            caller=caller, per_section=per_section, max_per_paper=max_per_paper,
+            check_subject=check_subject, warn_below=warn_below,
+        )
+        if workers == 1:
+            return work_section(corpus, shared, completion, heading, **options)
+        with CorpusStore(corpus.path) as own:
+            return work_section(own, shared, completion, heading, **options)
+
+    if workers == 1:
+        results = [run(position, heading) for position, heading in enumerate(headings, start=1)]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda pair: run(*pair), enumerate(headings, start=1)))
+
+    return (
+        Report(
+            topic=topic,
+            sections=[section for section, _ in results],
+            generated_at=datetime.now(UTC).strftime("%Y-%m-%d"),
+        ),
+        Ledger(sections=[ledger for _, ledger in results]),
+    )

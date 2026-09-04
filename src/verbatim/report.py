@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import re
+from typing import Any
 
 from verbatim import config
 from verbatim.answers import (
@@ -137,7 +138,10 @@ def build_report(
 
 
 def render_markdown(
-    report: Report, *, warn_below: float = config.SUBJECT_WARN_BELOW
+    report: Report,
+    *,
+    warn_below: float = config.SUBJECT_WARN_BELOW,
+    ledger: Any = None,
 ) -> str:
     """The review as one markdown document with a single bibliography.
 
@@ -191,4 +195,9 @@ def render_markdown(
         # paragraph.
         for reference in render_bibliography(citations).splitlines():
             lines += ["", reference]
+    if ledger is not None:
+        # The orchestrator's trace, when there was one: which strategy each
+        # section took, what verified, and what was retried. Rendered by the
+        # ledger itself so this module need not know its shape.
+        lines += ["", ledger.render_markdown()]
     return "\n".join(lines)

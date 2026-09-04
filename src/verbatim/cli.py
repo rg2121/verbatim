@@ -411,6 +411,16 @@ def run() -> None:
     report_parser.add_argument(
         "--out", type=Path, help="Write the review to this markdown file instead of printing it"
     )
+    report_parser.add_argument(
+        "--agents", action="store_true",
+        help="Orchestrate specialist roles per section: route by shape, retry a "
+             "section that fails verification with the next strategy, and append "
+             "the ledger of what each role did",
+    )
+    report_parser.add_argument(
+        "--workers", type=int, default=1,
+        help="With --agents: sections worked in parallel by this many threads",
+    )
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -945,23 +955,41 @@ def run() -> None:
 
         embedder = FastEmbedEmbedder(model_name=args.model)
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        progress = lambda heading, done, total: print(f"  [{done}/{total}] {heading}", flush=True)
+        ledger = None
         with CorpusStore(args.state) as corpus:
-            built = build_report(
-                corpus,
-                embedder,
-                completion,
-                lambda system, user: completion.complete_text(system, user),
-                args.topic,
-                max_sections=args.sections,
-                per_section=args.passages,
-                max_per_paper=args.max_per_paper,
-                use_compare=args.use_compare,
-                check_subject=not args.no_subject_check,
-                on_section=lambda heading, done, total: print(
-                    f"  [{done}/{total}] {heading}", flush=True
-                ),
-            )
-        markdown = render_markdown(built)
+            if args.agents:
+                from verbatim.orchestrator import orchestrate
+
+                built, ledger = orchestrate(
+                    corpus,
+                    embedder,
+                    completion,
+                    lambda system, user: completion.complete_text(system, user),
+                    args.topic,
+                    caller=OllamaToolCaller(args.llm or config.OLLAMA_MODEL),
+                    max_sections=args.sections,
+                    per_section=args.passages,
+                    max_per_paper=args.max_per_paper,
+                    workers=args.workers,
+                    check_subject=not args.no_subject_check,
+                    on_section=progress,
+                )
+            else:
+                built = build_report(
+                    corpus,
+                    embedder,
+                    completion,
+                    lambda system, user: completion.complete_text(system, user),
+                    args.topic,
+                    max_sections=args.sections,
+                    per_section=args.passages,
+                    max_per_paper=args.max_per_paper,
+                    use_compare=args.use_compare,
+                    check_subject=not args.no_subject_check,
+                    on_section=progress,
+                )
+        markdown = render_markdown(built, ledger=ledger)
         if args.out is not None:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(markdown + "\n", encoding="utf-8")

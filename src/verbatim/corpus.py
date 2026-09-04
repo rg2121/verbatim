@@ -129,6 +129,9 @@ class CorpusStore:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Kept so a worker thread can open its own connection to the same
+        # database: SQLite connections belong to the thread that made them.
+        self.path = Path(path)
         self.connection = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
