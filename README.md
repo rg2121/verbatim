@@ -443,10 +443,57 @@ and those are measured in the tables above. Raise `OLLAMA_NUM_PARALLEL`, or
 point the writer at a server that batches, and `--workers` becomes worth
 having; until then it is off by default at one worker.
 
+**Measured, three more ways.** First the router: `hybrid+routed` - both
+shape gates on, which is every section's first rung - scores exactly
+`hybrid+graph` on the single-subject table (0.81 / 0.95 / 0.97 / mrr 0.869)
+and exactly `hybrid+compare` on the compound table (cov@10 0.73, all@10
+0.55). The gates compose without touching each other's questions; that was
+predicted, and is now a row.
+
+Second, the orchestrated review against the deterministic one on a topic the
+corpus covers well ("reinforcement learning for reasoning in large language
+models", four sections each): `report` took 343 s; `--agents` took 411 s
+with one worker and 395 s with two, and **every section was accepted on its
+first rung** in both runs. Zero escalations, so on this topic the
+orchestrator bought a ledger and nothing else, at about 20% more time - the
+same conclusion as the timing above, reached again. (The planner is a model,
+so the sections differ between runs; these are not controlled pairs.)
+
+Third, the measurement the ladder exists for: a topic the corpus covers
+unevenly ("comparing MOND and dark matter in galaxy clusters, and what Planck
+2018 constrains"). The deterministic review took 360 s and produced a fluent,
+fully cited section on Planck constraints that never mentions MOND. The
+passages are about Planck, so the subject check passed it at 0.77 - it
+answers a question the section did not ask. The orchestrated review took
+841 s. Its Planck-constrains-MOND section was retrieved three ways -
+`hybrid`, `titles`, then the tool-choosing `agent` - and the writer declined
+to cite anything all three times, so the verifier read zero verified
+citations, the ladder ran out, and the section says so:
+
+> The passages do not contain information regarding the extent to which
+> Planck 2018 cosmological constraints limit the viability of MOND when
+> applied to cluster dynamics.
+
+That is the `no_answer` case - subject covered, question unanswered - which
+*What was tried and rejected* records as invisible to every retrieval signal
+tried, and it is still invisible to retrieval. What catches it here is the
+writer's own refusal to cite, turned into a number the supervisor acts on,
+and the ladder then proves the gap is not one strategy's blind spot before
+declaring it. The cost is real: the failed section alone is most of the
+extra eight minutes. It is the price of a review that says "the corpus does
+not answer this" instead of answering something else.
+
+So `--agents` stays off by default and is worth turning on when the topic is
+one the corpus might not fully cover - which is when the ledger earns its
+appendix. The keyword router is the known weak point: OrchestraBench found
+flag routers score zero on adversarially phrased tasks, and the tool-choosing
+agent on the last rung is the intent-reasoning fallback for exactly that.
+
 ## What retrieval measures
 
-Over 76 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered -
-across 7,921 papers and 835,743 vectors:
+Over 87 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered,
+11 compound (scored in their own table below) - across 7,921 papers and
+835,743 vectors:
 
 | mode | r@1 | r@5 | r@10 | mrr |
 |---|---|---|---|---|
