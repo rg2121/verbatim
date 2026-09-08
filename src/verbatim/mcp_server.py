@@ -99,8 +99,21 @@ def _tool_function(schema: dict[str, Any], worker: ThreadPoolExecutor, run_tool:
         "string": "str", "integer": "int", "number": "float", "boolean": "bool",
     }
 
+    def annotation(spec: dict[str, Any]) -> str:
+        """The Python annotation MCP should derive this parameter's type from.
+
+        Arrays were falling through to `str`, so read_pages published `pages`
+        as a string and a conforming client could not call it correctly: the
+        tool took "16" and read pages 1 and 6. The parity test compared the
+        schema to itself and saw nothing.
+        """
+        if spec.get("type") == "array":
+            item = (spec.get("items") or {}).get("type")
+            return f"list[{types_by_name.get(item, 'str')}]"
+        return types_by_name.get(spec.get("type"), "str")
+
     parameters = ", ".join(
-        f"{name}: {types_by_name.get(properties[name].get('type'), 'str')}"
+        f"{name}: {annotation(properties[name])}"
         + ("" if name in required else " | None = None")
         for name in order
     )

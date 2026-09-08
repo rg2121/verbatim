@@ -58,6 +58,7 @@ from verbatim.answers import (
 )
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
+from verbatim.evidence import describe_evidence
 from verbatim.graph import definitional_subject
 from verbatim.report import Report, ReportSection, plan_sections
 from verbatim.retrieval import comparison_shaped, hybrid_search
@@ -103,7 +104,16 @@ def question_shape(question: str) -> str:
 
 @dataclass(frozen=True)
 class Attempt:
-    """One rung of the ladder: what was tried, and what the verifier found."""
+    """One rung of the ladder: what was tried, and what the verifier found.
+
+    `route` records how the agent rung actually gathered its passages - which
+    tools it called, in order. Without it the ledger says a rung ran and not
+    what it did, and this module's own argument is that containment needs
+    detection *with attribution*.
+
+    `error` records a rung that could not run at all, so a model that fell over
+    is distinguishable in the ledger from one that answered badly.
+    """
 
     strategy: str
     passages: int
@@ -111,6 +121,8 @@ class Attempt:
     rejected: int
     closeness: float | None
     verdict: str
+    route: str = ""
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,8 +162,14 @@ class Ledger:
                     if attempt.closeness is not None
                     else "subject unchecked"
                 )
+                if attempt.error:
+                    lines.append(
+                        f"  - `{attempt.strategy}`: failed - {attempt.error}"
+                    )
+                    continue
+                route = f" via {attempt.route}" if attempt.route else ""
                 lines.append(
-                    f"  - `{attempt.strategy}`: {attempt.passages} passages, "
+                    f"  - `{attempt.strategy}`{route}: {attempt.passages} passages, "
                     f"{attempt.verified} verified, {attempt.rejected} rejected, "
                     f"{subject} -> {attempt.verdict}"
                 )
@@ -181,17 +199,22 @@ def retrieve(
     limit: int,
     max_per_paper: int | None,
     caller: ToolCaller | None,
-) -> list[ChunkMatch]:
-    """Run one strategy. The agent rung needs a tool-choosing model."""
+) -> tuple[list[ChunkMatch], str]:
+    """Run one strategy, returning its passages and how it got them.
+
+    The route is empty for the deterministic strategies, whose name already
+    says what they did, and is the agent's tool trace on the agent rung, which
+    is the only rung whose behaviour varies from question to question.
+    """
     if strategy == "agent":
         if caller is None:
-            return []
-        matches, _trace = gather(corpus, embedder, caller, question)
-        return matches[:limit]
+            return [], "no tool-choosing model available"
+        matches, trace = gather(corpus, embedder, caller, question)
+        return matches[:limit], trace.describe()
     return hybrid_search(
         corpus, embedder, question,
         limit=limit, max_per_paper=max_per_paper, **STRATEGY_FLAGS[strategy],
-    )
+    ), ""
 
 
 def work_section(
@@ -205,36 +228,67 @@ def work_section(
     max_per_paper: int | None = 2,
     check_subject: bool = True,
     warn_below: float = config.SUBJECT_WARN_BELOW,
+    ladder: tuple[str, ...] | None = None,
 ) -> tuple[ReportSection, SectionLedger]:
     """Climb the ladder for one section until the verifier accepts.
 
     The best attempt is kept, not the last: an escalation can retrieve worse
     than what it replaced, and the reader should get the strongest section
     the ladder found, with the ledger showing the rest.
+
+    `ladder` overrides the router's choice, which is how the plain report runs
+    this same loop with a single rung and no escalation.
+
+    A rung that raises - an unreachable model, a corpus error - is recorded as
+    a failed attempt and the ladder continues. One failure in one section must
+    not discard a review that may have taken ten minutes to write.
     """
     shape = question_shape(heading)
     candidates: list[tuple[Attempt, ReportSection]] = []
-    for strategy in LADDERS[shape]:
-        matches = retrieve(
-            strategy, corpus, embedder, heading,
-            limit=per_section, max_per_paper=max_per_paper, caller=caller,
-        )
-        answer = answer_from_matches(corpus, completion, heading, matches)
-        subject = closeness = None
-        if matches and check_subject:
-            subject = describe_subject(completion, matches)
-            closeness = subject_similarity(embedder, heading, subject)
+    for strategy in ladder or LADDERS[shape]:
+        try:
+            matches, route = retrieve(
+                strategy, corpus, embedder, heading,
+                limit=per_section, max_per_paper=max_per_paper, caller=caller,
+            )
+            answer = answer_from_matches(corpus, completion, heading, matches)
+            subject = closeness = None
+            if matches and check_subject:
+                subject = describe_subject(completion, matches)
+                closeness = subject_similarity(embedder, heading, subject)
+        except (RuntimeError, OSError) as error:
+            candidates.append(
+                (
+                    Attempt(
+                        strategy=strategy, passages=0, verified=0, rejected=0,
+                        closeness=None, verdict=RETRY, error=str(error)[:200],
+                    ),
+                    ReportSection(
+                        heading=heading,
+                        answer=Answer(
+                            question=heading,
+                            text=f"This section could not be written: {error}",
+                            citations=[], rejected=[], declined=True,
+                        ),
+                    ),
+                )
+            )
+            continue
         verdict = verdict_for(answer, closeness, warn_below)
+        evidence = describe_evidence(
+            corpus, heading, matches, subject=subject, closeness=closeness
+        )
         candidates.append(
             (
                 Attempt(
                     strategy=strategy, passages=len(matches),
                     verified=len(answer.citations), rejected=len(answer.rejected),
-                    closeness=closeness, verdict=verdict,
+                    closeness=closeness, verdict=verdict, route=route,
                 ),
                 ReportSection(
                     heading=heading, answer=answer,
                     subject=subject, subject_closeness=closeness,
+                    evidence_lines=tuple(evidence.lines()),
                 ),
             )
         )
@@ -246,10 +300,19 @@ def work_section(
             pair[0].verdict == ACCEPTED, pair[0].verified, pair[0].closeness or 0.0
         ),
     )
+    errored = [attempt for attempt, _ in candidates if attempt.error]
     if best_attempt.verdict == ACCEPTED:
         outcome = "accepted"
     elif best_attempt.verified:
         outcome = "accepted with a subject warning"
+    elif errored:
+        # Nothing was written and something fell over: report the failure
+        # rather than the absence. A gap is a statement about the corpus, and
+        # an unreachable model says nothing about the corpus at all.
+        outcome = (
+            f"failed: {len(errored)} of {len(candidates)} strategies errored "
+            f"({errored[0].error})"
+        )
     else:
         outcome = "gap: no strategy produced a verified citation"
     return best_section, SectionLedger(
@@ -298,6 +361,7 @@ def orchestrate(
     workers: int = 1,
     check_subject: bool = True,
     warn_below: float = config.SUBJECT_WARN_BELOW,
+    ladder: tuple[str, ...] | None = None,
     on_section: Callable[[str, int, int], None] | None = None,
 ) -> tuple[Report, Ledger]:
     """Plan a review, then work its sections - in parallel when asked.
@@ -317,7 +381,7 @@ def orchestrate(
             on_section(heading, position, len(headings))
         options = dict(
             caller=caller, per_section=per_section, max_per_paper=max_per_paper,
-            check_subject=check_subject, warn_below=warn_below,
+            check_subject=check_subject, warn_below=warn_below, ladder=ladder,
         )
         if workers == 1:
             return work_section(corpus, shared, completion, heading, **options)

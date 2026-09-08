@@ -962,10 +962,19 @@ def run() -> None:
             # Loud on purpose: an unverifiable citation is the failure this
             # tool exists to catch.
             print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+        print(f"\n  {_usage_footer(completion)}")
 
     if args.command == "report":
         from verbatim.report import build_report, render_markdown
 
+        if args.agents and args.use_compare:
+            # Refused rather than ignored: with --agents the shape router
+            # picks a strategy per section, so honouring this flag would mean
+            # overriding the router on sections it never applies to.
+            raise SystemExit(
+                "error: --use-compare has no effect with --agents; the shape "
+                "router chooses each section's strategy. Drop one of the two."
+            )
         embedder = FastEmbedEmbedder(model_name=args.model)
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
         progress = lambda heading, done, total: print(f"  [{done}/{total}] {heading}", flush=True)
@@ -1010,6 +1019,7 @@ def run() -> None:
         else:
             print()
             print(markdown)
+        print(f"\n  {_usage_footer(completion)}")
 
     if args.command == "chunk":
         if args.manifest is not None:
@@ -1071,6 +1081,16 @@ def run() -> None:
                 f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
                 f"corpus holds {exported}. Exported to {args.output}"
             )
+
+
+def _usage_footer(completion: object) -> str:
+    """What the run cost, when the backend counted it.
+
+    Read defensively: the Completion protocol does not require usage, and a
+    scripted stand-in in the tests has none.
+    """
+    usage = getattr(completion, "usage", None)
+    return usage.render() if usage is not None else "cost not reported"
 
 
 def _line_completion(model: str | None) -> "Callable[[str, str], str]":

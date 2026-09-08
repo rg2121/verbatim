@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import re
+import threading
 from typing import Any, Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -90,6 +91,42 @@ ANSWER_SCHEMA: dict[str, Any] = {
     "required": ["relevant", "answer", "citations"],
     "additionalProperties": False,
 }
+
+
+@dataclass
+class Usage:
+    """What the model was asked to do, counted.
+
+    The orchestrator's whole justification is a cost/benefit argument - a
+    ladder that retries costs generations - and the argument was being made
+    without numbers. Ollama returns them on every call and they were being
+    thrown away.
+
+    Mutable and shared: report sections run in parallel threads against one
+    client, so the increments are taken under a lock.
+    """
+
+    calls: int = 0
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    seconds: float = 0.0
+    _lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def record(self, body: dict[str, Any]) -> None:
+        """Add one Ollama response's counters. Absent fields count as zero."""
+        with self._lock:
+            self.calls += 1
+            self.prompt_tokens += int(body.get("prompt_eval_count") or 0)
+            self.output_tokens += int(body.get("eval_count") or 0)
+            # Ollama reports nanoseconds.
+            self.seconds += float(body.get("total_duration") or 0) / 1e9
+
+    def render(self) -> str:
+        return (
+            f"{self.calls} model call{'s' if self.calls != 1 else ''}, "
+            f"{self.prompt_tokens:,} tokens in, {self.output_tokens:,} out, "
+            f"{self.seconds:.1f}s in the model"
+        )
 
 
 @dataclass(frozen=True)
@@ -226,6 +263,8 @@ class OllamaCompletion:
         timeout: float | None = None,
     ) -> None:
         self.host = (host or config.OLLAMA_HOST).rstrip("/")
+        # What this client has been asked to do, for the cost footer.
+        self.usage = Usage()
         # Set before model discovery, which makes a request.
         self.timeout = config.OLLAMA_TIMEOUT if timeout is None else timeout
         self.model = model or config.OLLAMA_MODEL or self._first_available_model()
@@ -248,6 +287,7 @@ class OllamaCompletion:
                 ],
             },
         )
+        self.usage.record(body)
         return str(body.get("message", {}).get("content", "")).strip()
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -271,6 +311,7 @@ class OllamaCompletion:
                 ],
             },
         )
+        self.usage.record(body)
         content = body.get("message", {}).get("content", "")
         payload = parse_line_protocol(content)
         if payload is None:
@@ -294,6 +335,7 @@ class OllamaCompletion:
                 ],
             },
         )
+        self.usage.record(body)
         return body.get("message", {}).get("content", "")
 
     def stream(self, system: str, user: str):
@@ -331,6 +373,7 @@ class OllamaCompletion:
                     if fragment:
                         yield fragment
                     if body.get("done"):
+                        self.usage.record(body)
                         return
         except URLError as error:
             raise RuntimeError(

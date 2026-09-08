@@ -52,12 +52,15 @@ SECTION_SYSTEM = (
 
 @dataclass(frozen=True)
 class ReportSection:
-    """One section: the question it asks, the answer, and its subject check."""
+    """One section: the question it asks, the answer, and what it rests on."""
 
     heading: str
     answer: Answer
     subject: str | None = None
     subject_closeness: float | None = None
+    # The evidence account, already rendered to lines. Carried as text so this
+    # module needs no opinion about how evidence is computed.
+    evidence_lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,41 +103,34 @@ def build_report(
 ) -> Report:
     """Plan, retrieve, and write every section of a review on one topic.
 
-    Each section runs the same retrieval `ask` would - hybrid with the
-    definitional graph gate on, the comparison gate only if the caller turned
-    it on - and the same subject check, kept per section because a review's
-    sections can drift off-corpus one at a time.
+    This is the orchestrator run with a single rung and no escalation: each
+    section is retrieved once with the measured defaults, written by the
+    verified-citation path, and subject-checked. The loop lived here in
+    duplicate until the two drifted - the orchestrated path gained per-section
+    error containment and evidence disclosure and this one did not - so there
+    is now one loop and this function chooses its ladder.
     """
-    headings = plan_sections(complete_text, topic, max_sections=max_sections)
-    sections: list[ReportSection] = []
-    for position, heading in enumerate(headings, start=1):
-        if on_section is not None:
-            on_section(heading, position, len(headings))
-        matches = hybrid_search(
-            corpus,
-            embedder,
-            heading,
-            limit=per_section,
-            max_per_paper=max_per_paper,
-            use_graph=True,
-            use_compare=use_compare,
-        )
-        answer = answer_from_matches(corpus, completion, heading, matches)
-        subject = closeness = None
-        if matches and check_subject:
-            subject = describe_subject(completion, matches)
-            closeness = subject_similarity(embedder, heading, subject)
-        sections.append(
-            ReportSection(
-                heading=heading, answer=answer,
-                subject=subject, subject_closeness=closeness,
-            )
-        )
-    return Report(
-        topic=topic,
-        sections=sections,
-        generated_at=datetime.now(UTC).strftime("%Y-%m-%d"),
+    # Imported here rather than at module scope: the orchestrator imports this
+    # module for Report and ReportSection, and a top-level import either way
+    # would be circular.
+    from verbatim.orchestrator import orchestrate
+
+    report, _ledger = orchestrate(
+        corpus,
+        embedder,
+        completion,
+        complete_text,
+        topic,
+        caller=None,
+        max_sections=max_sections,
+        per_section=per_section,
+        max_per_paper=max_per_paper,
+        workers=1,
+        check_subject=check_subject,
+        ladder=("compare",) if use_compare else ("hybrid",),
+        on_section=on_section,
     )
+    return report
 
 
 def render_markdown(
@@ -173,6 +169,11 @@ def render_markdown(
             return f"[{mapping[local]}]" if local in mapping else match.group(0)
 
         lines += ["", f"## {section.heading}", "", MARKER.sub(remap, section.answer.text)]
+        if section.evidence_lines:
+            # Always, not on a threshold: the case a threshold would catch is
+            # exactly the one no threshold sees, so the section says what it
+            # rests on and lets the reader judge.
+            lines += ["", "> " + " ".join(section.evidence_lines)]
         if (
             section.subject_closeness is not None
             and section.subject_closeness < warn_below

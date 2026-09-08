@@ -10,12 +10,13 @@ from verbatim.orchestrator import (
     ACCEPTED,
     LADDERS,
     RETRY,
+    Ledger,
     orchestrate,
     question_shape,
     verdict_for,
     work_section,
 )
-from verbatim.report import render_markdown
+from verbatim.report import build_report, render_markdown
 
 from helpers import corpus_with
 
@@ -181,3 +182,120 @@ def test_orchestrate_works_sections_in_parallel_and_keeps_their_order(tmp_path: 
     assert sorted(seen) == ["How does charge move?", "What is flux?"]
     assert "## How this review was made" in markdown
     assert "`hybrid`: " in markdown and "-> accepted" in markdown
+
+
+class Unreachable:
+    """A model that is down, to prove one dead section does not kill a run."""
+
+    def __init__(self, fail_on: str | None = None) -> None:
+        self.fail_on = fail_on
+
+    def complete(self, system, user, schema):
+        if self.fail_on is None or self.fail_on in user:
+            raise RuntimeError("Cannot reach Ollama at http://localhost:11434")
+        return {"relevant": True, "answer": "Fine.", "citations": []}
+
+    def judge(self, system, user):
+        return "flux and charge"
+
+
+class TracingCaller:
+    """A tool-choosing model that calls search once, so a route exists."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def choose_tool(self, system, messages, tools):
+        self.calls += 1
+        return ("search_chunks", {"query": "flux"}) if self.calls == 1 else None
+
+
+def test_a_section_whose_every_rung_errors_is_contained_not_fatal(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        section, ledger = work_section(
+            corpus, StubEmbedder(), Unreachable(), "how does flux behave?", caller=None,
+        )
+
+    assert section.answer.declined
+    assert "could not be written" in section.answer.text
+    assert [a.strategy for a in ledger.attempts] == ["hybrid", "titles", "agent"]
+    # The two writing rungs errored; the agent rung had no tool-caller, so it
+    # retrieved nothing and never reached the model at all.
+    assert [bool(a.error) for a in ledger.attempts] == [True, True, False]
+    assert ledger.outcome.startswith("failed: 2 of 3 strategies errored")
+    # A failure is reported as a failure, never as a gap: a gap is a claim
+    # about the corpus, and an unreachable model makes no such claim.
+    assert "gap" not in ledger.outcome
+    assert "failed - Cannot reach Ollama" in Ledger(sections=[ledger]).render_markdown()
+
+
+def test_one_dead_section_does_not_discard_the_rest_of_the_review(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        report, ledger = orchestrate(
+            corpus, StubEmbedder(), Unreachable(fail_on="charge"),
+            lambda system, user: "What is flux?\nHow does charge move?",
+            "electromagnetism",
+        )
+
+    assert [s.heading for s in report.sections] == ["What is flux?", "How does charge move?"]
+    assert not report.sections[0].answer.declined
+    assert report.sections[1].answer.declined
+    assert ledger.sections[1].outcome.startswith("failed")
+
+
+def test_the_agent_rung_records_the_tools_it_called(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        # Two rungs decline to cite, so the ladder reaches the agent, which
+        # cites correctly and is accepted.
+        nothing = {"relevant": True, "answer": "The passages do not say.", "citations": []}
+        completion = QueueCompletion([nothing, nothing, cite(chunk.chunk_id, "Magnetic flux threads the ring.")])
+        caller = TracingCaller()
+        _section, ledger = work_section(
+            corpus, StubEmbedder(), completion, "how does flux behave?", caller=caller,
+        )
+
+    agent_attempt = ledger.attempts[-1]
+    assert agent_attempt.strategy == "agent"
+    assert "search_chunks" in agent_attempt.route
+    assert f"via {agent_attempt.route}" in Ledger(sections=[ledger]).render_markdown()
+    # A deterministic rung has no route to report; its name is what it did.
+    assert ledger.attempts[0].route == ""
+
+
+def test_every_section_says_what_it_rests_on(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        completion = ScriptedAnswers({
+            "What is flux?": cite(chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."),
+        })
+        report, ledger = orchestrate(
+            corpus, StubEmbedder(), completion,
+            lambda system, user: "What is flux?", "electromagnetism",
+        )
+        markdown = render_markdown(report, ledger=ledger)
+
+    assert report.sections[0].evidence_lines
+    assert "Answered from" in markdown
+    assert "Those passages are about:" in markdown
+
+
+def test_the_plain_report_is_the_orchestrator_with_one_rung(tmp_path: Path) -> None:
+    """build_report is no longer a second copy of the loop."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        payload = cite(chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring.")
+        plain = build_report(
+            corpus, StubEmbedder(), ScriptedAnswers({"What is flux?": payload}),
+            lambda system, user: "What is flux?", "electromagnetism",
+        )
+        laddered, ledger = orchestrate(
+            corpus, StubEmbedder(), ScriptedAnswers({"What is flux?": payload}),
+            lambda system, user: "What is flux?", "electromagnetism",
+        )
+
+    assert [s.heading for s in plain.sections] == [s.heading for s in laddered.sections]
+    assert plain.sections[0].answer.text == laddered.sections[0].answer.text
+    assert plain.sections[0].evidence_lines == laddered.sections[0].evidence_lines
+    # One rung means no escalation was even possible.
+    assert len(ledger.sections[0].attempts) == 1

@@ -41,6 +41,12 @@ def search_chunks(
         limit=min(limit, MAX_RESULTS),
         arxiv_id=arxiv_id,
         max_per_paper=3 if arxiv_id is None else None,
+        # The measured default, and it was reaching only the CLI: every caller
+        # of this tool - MCP clients, `ask --tools`, the orchestrator's agent
+        # rung - was searching without the leg the README calls default-on.
+        # It gates itself to definition-shaped questions, so nothing else
+        # changes.
+        use_graph=True,
     )
     return [
         {

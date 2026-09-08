@@ -414,7 +414,8 @@ So the roles here differ in kind, not in subject, and the supervisor is code:
 | retrievers | code, and the tool-choosing agent as the last rung | `hybrid` (graph gate inside), `compare`, `titles`, `agent` |
 | writer | model | the existing verified-citation path, unchanged |
 | verifier | code | the quote check, plus the describe-then-compare subject check |
-| supervisor | code | ledger, retries, parallel sections, assembly |
+| discloser | code | what the section rests on: passages, papers, subject, named-after paper |
+| supervisor | code | ledger, retries, containment, parallel sections, assembly |
 
 The verifier never asks a model whether a section is good: asked that, every
 model tested here says yes. A section is accepted on numbers - at least one
@@ -425,7 +426,31 @@ escalation can retrieve worse than what it replaced. The supervisor forwards
 each verified answer untouched, because the LangGraph benchmark's dominant
 failure mode was the supervisor's own paraphrasing. Every attempt goes into
 a ledger that the review prints as its final section, so a reader can see
-which strategy each section took, what verified, and what was retried.
+which strategy each section took, what verified, and what was retried. The
+agent rung records the tools it actually called (`via search_chunks(...) ->
+get_paper(...)`), because it is the only rung whose behaviour varies question
+to question, and a ledger that says a rung ran without saying what it did is
+the attribution OrchestraBench found containment needs.
+
+A rung that *errors* - an unreachable model, a corpus fault - is recorded as a
+failed attempt and the ladder carries on to the next strategy. One dead
+section no longer discards a review that took ten minutes to write, and the
+outcome distinguishes the two cases that matter: a section nothing could
+support is a **gap**, which is a claim about the corpus, while a section whose
+strategies fell over is a **failure**, which is a claim about the machinery
+and says nothing about the corpus at all.
+
+Every section also prints what it rests on - passages, papers, what those
+passages are about - by the same rule the single-answer path follows: always,
+not on a threshold, because the case a threshold would catch is the one no
+threshold sees.
+
+The plain `report` is now this same loop with a single rung and no
+escalation, rather than a second copy of it. The two had already drifted once:
+the orchestrated path gained containment and disclosure and the deterministic
+one did not. `--use-compare` is refused with `--agents` rather than silently
+ignored, since with a shape router there is no section-independent strategy to
+force.
 
 Sections run in parallel with `--workers N`, each thread on its own SQLite
 connection. **Measured, it buys nothing here:** a four-section review took
@@ -433,6 +458,11 @@ connection. **Measured, it buys nothing here:** a four-section review took
 at a time unless `OLLAMA_NUM_PARALLEL` is raised, so the workers queue behind
 the same server and the wall clock is set by generation either way. The
 orchestration costs nothing measurable, and it earns nothing either.
+
+Both `ask` and `report` now close with what the run cost - model calls, tokens
+in and out, and seconds spent inside the model, which Ollama returns on every
+call and this project was discarding. The orchestrator's entire case is a
+cost/benefit argument, and it was being made without the cost.
 
 That is worth stating plainly because the literature's headline claim for
 multi-agent systems is throughput through parallelism. On a single local model

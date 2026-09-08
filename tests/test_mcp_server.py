@@ -87,3 +87,30 @@ async def test_a_tool_declares_the_arguments_it_actually_takes(tmp_path: Path) -
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_an_array_parameter_is_published_as_a_list_not_a_string(tmp_path: Path) -> None:
+    """read_pages takes a list of page numbers, and published `pages` as str.
+
+    A conforming client could not call it: the tool took "16" and read pages 1
+    and 6. The earlier parity test compared TOOL_SCHEMAS to itself, so a
+    generator that silently downgraded every array passed it. This checks the
+    schema the server actually publishes.
+    """
+    from helpers import chunked_corpus
+    from verbatim.mcp_server import build_server
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Body text."]}):
+        pass
+
+    server = build_server(tmp_path / "corpus.db", "BAAI/bge-small-en-v1.5")
+    listed = {tool.name: tool for tool in await server.list_tools()}
+
+    pages = listed["read_pages"].input_schema["properties"]["pages"]
+    assert pages["type"] == "array"
+    assert pages["items"]["type"] == "integer"
+    # Every tool still declares exactly the arguments the agent's schema does.
+    for schema in TOOL_SCHEMAS:
+        published = set(listed[schema["name"]].input_schema["properties"])
+        assert published == set(schema["parameters"]["properties"])
