@@ -48,6 +48,11 @@ ANCHOR_CANDIDATES = 8
 PASSAGES_PER_ANCHOR = 3
 
 
+# "what is a tensor" names the subject "tensor"; the article is grammar, not
+# part of what a paper would be titled after.
+LEADING_ARTICLE = re.compile(r"^(?:a|an|the)\s+", re.IGNORECASE)
+
+
 def definitional_subject(question: str) -> str | None:
     """The subject of a definition-shaped question, or None for any other.
 
@@ -59,7 +64,7 @@ def definitional_subject(question: str) -> str | None:
     match = DEFINITIONAL.match(question)
     if match is None:
         return None
-    subject = match.group("subject").strip()
+    subject = LEADING_ARTICLE.sub("", match.group("subject").strip()).strip()
     return subject or None
 
 

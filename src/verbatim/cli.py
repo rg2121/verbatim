@@ -48,6 +48,7 @@ from verbatim.html_source import (
     html_url_for,
     parse_html_sections,
 )
+from verbatim.evidence import describe_evidence
 from verbatim.evaluation import (
     describe_case_mix,
     evaluate,
@@ -931,15 +932,27 @@ def run() -> None:
                     print(f"  - {part}")
                 print()
             subject = None
+            closeness = None
             if matches and not args.no_subject_check:
                 # Asked what the passages discuss rather than whether they are
                 # relevant: every model tested says yes to the latter.
                 subject = describe_subject(completion, matches)
                 closeness = subject_similarity(embedder, args.question, subject)
+            # Computed here, while the corpus is open; printed below with the
+            # answer.
+            evidence = describe_evidence(
+                corpus, args.question, matches, subject=subject, closeness=closeness
+            )
         print(answer.text)
         if answer.citations:
             print("\nReferences")
             print(render_bibliography(answer.citations))
+        # Always said, not only when a threshold trips: the case where the
+        # corpus covers a subject and answers nothing about it is invisible to
+        # every detector tried, so the reader is told what the answer rests on
+        # and judges it themselves.
+        for line in evidence.lines():
+            print(f"  {line}")
         if subject is not None and closeness < config.SUBJECT_WARN_BELOW:
             # A warning, never a suppression: the ranges for answerable and
             # unanswerable questions overlap, so this cannot decide, only show.

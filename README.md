@@ -509,6 +509,37 @@ appendix. The keyword router is the known weak point: OrchestraBench found
 flag routers score zero on adversarially phrased tasks, and the tool-choosing
 agent on the last rung is the intent-reasoning fallback for exactly that.
 
+## Saying what an answer rests on
+
+Seven approaches have now tried to *detect* the covered-but-unanswered case,
+and all seven measured 0 on the labelled cases. The reason does not change:
+the passages really are on the subject and the quotes really do verify, so
+nothing in retrieval or verification can separate a question that was answered
+from one that was not.
+
+So `ask` stops trying to decide, and reports instead. Every answer carries a
+short, deterministic account of what it was written from - how many passages,
+in how many papers, what those passages are about, and, for a question asking
+what something *is*, the paper the subject is named after when the corpus holds
+one:
+
+```
+The passages provided do not define what a tensor is.
+  Answered from 8 passages in 8 papers.
+  Those passages are about: Tensor properties and their architectural implications.
+```
+
+The subject line used to appear only when similarity fell below 0.65. It is
+now always shown, because the case it would catch is exactly the case no
+threshold sees.
+
+One line was built, measured and removed: the negative of the named-after
+fact - "no paper here is named after X". It fired on all 4 `no_answer` cases,
+and on **13 of the 19** definition-shaped answerable ones. True every time and
+useless: a line that fires on two thirds of good answers is one readers learn
+to skip, which is the same reason the subject threshold was not raised to
+0.79. Its absence is left to speak for itself.
+
 ## What retrieval measures
 
 Over 87 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered,

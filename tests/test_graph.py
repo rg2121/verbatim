@@ -27,7 +27,10 @@ def cite(corpus: CorpusStore, citing_arxiv_id: str, cited_base_ids: list[str]) -
 
 
 def test_definitional_subject_matches_definition_shaped_questions() -> None:
-    assert definitional_subject("what is the Adam optimizer?") == "the Adam optimizer"
+    # The article is grammar, not part of what a paper is titled after: no
+    # paper is called "the Adam optimizer" or "a tensor".
+    assert definitional_subject("what is the Adam optimizer?") == "Adam optimizer"
+    assert definitional_subject("what is a tensor?") == "tensor"
     assert definitional_subject("What are fiber bundles") == "fiber bundles"
     assert definitional_subject("define entropy") == "entropy"
     assert definitional_subject("definition of masked language modelling") == (
