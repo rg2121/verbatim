@@ -474,14 +474,34 @@ citations, the ladder ran out, and the section says so:
 > Planck 2018 cosmological constraints limit the viability of MOND when
 > applied to cluster dynamics.
 
-That is the `no_answer` case - subject covered, question unanswered - which
-*What was tried and rejected* records as invisible to every retrieval signal
-tried, and it is still invisible to retrieval. What catches it here is the
-writer's own refusal to cite, turned into a number the supervisor acts on,
-and the ladder then proves the gap is not one strategy's blind spot before
-declaring it. The cost is real: the failed section alone is most of the
-extra eight minutes. It is the price of a review that says "the corpus does
-not answer this" instead of answering something else.
+That reads like the `no_answer` case - subject covered, question unanswered -
+finally being caught. **Measured against the answer key, it is not.** Every
+one of the four labelled `no_answer` questions was *accepted* by the ladder:
+
+| class | gap declared |
+|---|---|
+| `no_answer` | **0 / 4** |
+| `no_coverage` | 6 / 9 |
+| answerable | **0 / 25** |
+
+The four are accepted because the corpus really does hold passages about
+tensors and about cosmology, the writer really can quote them, and the quotes
+really do verify. Verification asks whether the words are there, not whether
+they answer, so a covered-but-unanswered question sails through exactly as it
+always did.
+
+What the verdict does detect is a *coverage* gap, at 6 of 9 with no false
+declaration in 25 answerable questions. That precision is real and the recall
+is not new: all six are cases the subject check already catches, and the three
+it misses - Venus, cuprates, solar panels - are a superset of the subject
+check's two misses. As a detector it is a strict subset of one that costs a
+single call instead of three retrievals and three generations.
+
+So the Planck-and-MOND section above is a narrower thing than it appears: no
+passage supported that specific intersection, which is a local absence rather
+than the `no_answer` class. Worth having, because a review that says "the
+corpus does not answer this" beats one that answers something else - but it is
+a gap declared about one claim, not a solution to the open problem.
 
 So `--agents` stays off by default and is worth turning on when the topic is
 one the corpus might not fully cover - which is when the ledger earns its
