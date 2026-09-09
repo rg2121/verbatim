@@ -639,6 +639,65 @@ papers left retrieval where it was. The headline number is lower because the
 answer key is harder: the 21 cases added since score mrr 0.764, and eight of
 them are definitional questions of the kind this corpus is worst at.
 
+## What a held-out set measures
+
+Everything above was measured on an answer key written alongside the system.
+That is a real weakness and not a small one: a question that retrieved badly
+could be reworded until it did not, and no amount of care rules that out from
+the inside. So a second key was built to be uncontaminated -
+`evals/heldout.jsonl`, 41 cases authored from each paper's title and abstract
+only, with no retrieval run against any question, committed before it was
+scored, and reported at whatever it scored. Papers were picked by a fixed rule
+before any question existed, excluding every paper already in the development
+key and every subject probed by hand while building the system.
+
+| mode | r@1 | r@5 | r@10 | mrr | mrr on the development key |
+|---|---|---|---|---|---|
+| keyword-any | 0.64 | 0.72 | 0.83 | 0.685 | 0.705 |
+| vector | 0.64 | 0.75 | 0.83 | 0.683 | 0.818 |
+| hybrid | 0.58 | 0.81 | 0.89 | 0.675 | 0.866 |
+| hybrid+graph *(default)* | 0.58 | 0.81 | 0.89 | 0.675 | **0.869** |
+| hybrid+compare | 0.58 | 0.81 | 0.89 | 0.668 | 0.866 |
+| **hybrid+titles** | **0.64** | **0.83** | **0.92** | **0.727** | 0.822 |
+
+Two things fall out, and the second is uncomfortable.
+
+**The development numbers are inflated by about a fifth.** The shipped default
+scores mrr 0.869 there and **0.675** here, on questions of the same kind over
+the same corpus. The difference is not the retrieval; it is that one set of
+questions was written while watching the retrieval and the other was not. Any
+figure in the section above should be read with that discount in mind.
+
+**The ranking reverses.** `hybrid+titles` is measured *worse* on the
+development key - 0.822 against 0.866 - and ships off by default because of
+it. On questions that were never tuned against, it is the best mode by every
+measure, and by a wider margin than it lost by. The leg this file spends
+several paragraphs explaining the cost of may in fact be the one to run.
+
+That is not enough to flip the default, and it has not been flipped. Thirty-six
+answerable cases are few, they carry an authoring bias of their own - the
+instruction to avoid the title's phrasing can overshoot into questions no
+researcher would type, which is most of what the three total misses look like -
+and reversing a default on one small set would repeat the original mistake
+facing the other way. What it is enough for is to stop treating the
+development ranking as settled, and to say so here rather than in a footnote.
+
+Two smaller results. The graph gate contributes exactly nothing on this set
+(0.675 either way), which is correct: no case here is definition-shaped, and
+the gate is supposed to be inert on everything else - the first independent
+check that its scoping does what it claims. And the comparison gate finally
+has its missing price: on the four comparison-shaped questions with a single
+answering paper, it costs mrr 0.675 -> 0.668. Set against the gain it was
+measured to give on genuinely compound questions (all@10 0.36 -> 0.55), the
+trade is now a number in both directions rather than a benefit with an
+unmeasured cost.
+
+A twelve-question tripwire over the shipped sample corpus runs in CI on every
+push and fails the build below mrr 0.90 (`evals/gate.jsonl`). It is coarse by
+construction - twelve plainly distinct papers out of forty - and it exists to
+catch retrieval breaking, not retrieval slipping. A measurement nothing
+enforces is a claim rather than a guarantee.
+
 ## What was tried and rejected
 
 Kept here because the negative results are the useful part.
@@ -955,13 +1014,15 @@ corpus itself cites. That handles subjects a held paper is named after;
 "what is a tensor" still has no defining paper to anchor to, and remains
 unanswerable for reasons no ranking can fix.
 
-**Retrieval quality is measured on one 87-case set** written alongside the
-system, over a corpus in physics and machine learning - 63 answerable by one
-paper, 11 compound, 13 unanswerable. The numbers here do not transfer to
-another corpus without re-measuring. Twenty of the answerable cases are an
-auto-seeded floor of paper titles, and a title retrieves its own paper for
-reasons a real question does not; the rest are natural questions with a
-verified answering paper.
+**Retrieval quality is measured on two sets, and they disagree.** The
+87-case development key was written alongside the system - 63 answerable by
+one paper, 11 compound, 13 unanswerable - and twenty of the answerable cases
+are an auto-seeded floor of paper titles, which retrieve their own paper for
+reasons a real question does not. The 41-case held-out key was authored blind
+and frozen before scoring, and the default scores mrr 0.675 on it against
+0.869 on the development key. Neither set transfers to another corpus without
+re-measuring, and the held-out one is small enough that its own ranking is
+not yet decisive. See *What a held-out set measures*.
 
 **Vector search is brute force.** sqlite-vec scans every vector, which is
 measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at

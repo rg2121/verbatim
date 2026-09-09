@@ -152,6 +152,15 @@ def run() -> None:
         "--hyde", action="store_true",
         help="Also score retrieval with a hypothetical answer added to the query",
     )
+    eval_parser.add_argument(
+        "--min-mrr", type=float,
+        help="Exit non-zero if --gate-mode scores below this. For CI: a "
+             "measurement nothing enforces is a claim, not a guarantee",
+    )
+    eval_parser.add_argument(
+        "--gate-mode", default="hybrid+graph",
+        help="Which mode --min-mrr applies to (default: the shipped default)",
+    )
 
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -558,6 +567,23 @@ def run() -> None:
         if compound_scores:
             print()
             print(render_compound_report(compound_scores))
+        if args.min_mrr is not None:
+            gated = next((s for s in scores if s.mode == args.gate_mode), None)
+            if gated is None:
+                raise SystemExit(
+                    f"error: --gate-mode {args.gate_mode!r} is not one of "
+                    f"{', '.join(sorted(s.mode for s in scores))}"
+                )
+            print(
+                f"\n  gate: {gated.mode} scored mrr {gated.mrr:.3f} "
+                f"against a floor of {args.min_mrr:.3f}"
+            )
+            if gated.mrr < args.min_mrr:
+                raise SystemExit(
+                    f"error: {gated.mode} regressed to mrr {gated.mrr:.3f}, "
+                    f"below the floor of {args.min_mrr:.3f}. Either a change made "
+                    f"retrieval worse, or the floor needs re-measuring on purpose."
+                )
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)

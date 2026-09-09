@@ -1,0 +1,21 @@
+# Regression tripwire for CI, scored against the shipped sample corpus - the
+# only corpus a clean checkout has. Twelve questions on twelve plainly
+# distinct papers, so retrieval should find them easily and any drop means
+# something broke rather than that the questions were hard.
+#
+# This is NOT a quality measurement and its mrr is not a claim about the
+# system. The honest numbers come from evals/retrieval.jsonl over the full
+# corpus and from evals/heldout.jsonl, which was frozen before it was scored.
+# This file exists to fail a build.
+{"question": "how can a large language model be finetuned on a single GPU using quantized weights?", "expect_papers": ["2305.14314v1"], "note": "source=gate"}
+{"question": "how can a language model be aligned to human preferences without training a separate reward model?", "expect_papers": ["2305.18290v3"], "note": "source=gate"}
+{"question": "how can the context window of a pretrained model be extended efficiently?", "expect_papers": ["2309.00071v3"], "note": "source=gate"}
+{"question": "which open foundation language models were trained only on publicly available data?", "expect_papers": ["2302.13971v1"], "note": "source=gate"}
+{"question": "how can retrieval models be compared zero-shot across heterogeneous tasks?", "expect_papers": ["2104.08663v4"], "note": "source=gate"}
+{"question": "how capable can a small language model running on a phone be?", "expect_papers": ["2404.14219v4"], "note": "source=gate"}
+{"question": "how can a vision encoder be connected to a language model using instruction following data?", "expect_papers": ["2304.08485v2", "2304.10592v2", "2310.09478v3"], "note": "source=gate; three vision-language papers here can answer it"}
+{"question": "how can a single agent master many different domains using a learned world model?", "expect_papers": ["2301.04104v2"], "note": "source=gate"}
+{"question": "how do glyph and pronunciation features improve Chinese language model pretraining?", "expect_papers": ["2106.16038v3"], "note": "source=gate"}
+{"question": "what does a new measurement of the primordial helium abundance imply for cosmology?", "expect_papers": ["2506.24050v3"], "note": "source=gate"}
+{"question": "how does superfluidity behave for a condensate confined to a fuzzy sphere?", "expect_papers": ["2607.27470v1"], "note": "source=gate"}
+{"question": "how can graph-based nearest neighbour indexing be scaled to very large collections?", "expect_papers": ["2602.21247v3"], "note": "source=gate"}
