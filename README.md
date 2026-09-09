@@ -29,6 +29,7 @@ arXiv API ──sync──▶ corpus.db  papers            every version seen, n
               chunk ──▶ data/chunks.jsonl   (export, not the store)
               embed ──▶ vectors in corpus.db
            pipeline ──▶ every stage above, in rounds, until nothing is pending
+               runs ──▶ what each command did, and whether it finished
              search ──▶ ranked passages with citations
                 ask ──▶ an answer, every claim cited and verified
              report ──▶ a sectioned literature review, one verified bibliography
@@ -948,6 +949,54 @@ set of the time). Reranking pays when the right passage sits at rank 8; at
 r@1 0.86 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
 
+## What each run did
+
+`stats` says what the corpus holds. Until recently nothing said how it got
+there - an ingest that runs unattended could fail, half-finish, or embed with
+a different model than yesterday, and the only evidence was whatever scrolled
+past in a terminal. Every command that touches the corpus now writes a row:
+when it started and finished, whether it succeeded, what it was asked to do,
+what it produced, and the corpus counts before and after.
+
+```
+uv run verbatim runs
+
+  when                 command              took  what it did
+  2026-09-09T17:28:53  ask          ok       3.2s  passages=8, papers=4, citations=1, rejected=1
+  2026-09-09T17:28:52  index        ok       0.2s  added=0, removed=0, vectors=3139
+  2026-09-09T14:02:11  embed        FAIL    12.4s  RuntimeError: Cannot reach Ollama
+```
+
+Failures are recorded, which is the point: a ledger that holds only successes
+is a ledger of the wrong half. `runs --json` emits the same rows for a driver
+to read, and exits non-zero if any of them failed, so `ingest.sh` ends by
+writing a summary and checking it rather than by printing DONE and hoping.
+
+Recording is best-effort by construction. A command's job is the corpus, not
+the bookkeeping, so a failure to write a row is swallowed rather than allowed
+to fail work that otherwise succeeded.
+
+`GET /api/health` reads the same ledger:
+
+```json
+{
+  "ok": false,
+  "corpus": {"papers": 7921, "passages": 835743, "vectors": 835743,
+             "pending": {"downloads": 0, "chunking": 0, "embedding": 0}},
+  "last_run": {"embed": {"at": "...", "ok": false, "error": "RuntimeError: ..."}},
+  "failing": ["embed"],
+  "answers": {"runs": 41, "citations_verified": 118, "citations_rejected": 39,
+              "rejection_rate": 0.248}
+}
+```
+
+It is deliberately more than a 200. An empty corpus and a corpus whose last
+ingest failed both serve pages perfectly well, and both are what a check is
+actually asking about. The citation rejection rate comes from the ledger
+rather than being recomputed, so it describes what happened rather than what
+would happen now - and it is a property of the model, not a fault: the check
+exists because models paraphrase.
+
 ## Serving it over HTTP
 
 `verbatim serve` runs a small FastAPI service with a search page at `/`,
@@ -964,6 +1013,7 @@ verbatim serve --port 8000
 | `GET /api/report?topic=&sections=&passages=&agents=` | a sectioned review as server-sent events, each section streamed as it lands |
 | `GET /api/papers/{arxiv_id}` | one paper's metadata, or 404 |
 | `GET /api/stats` | the same pipeline counts `stats` prints |
+| `GET /api/health` | corpus state, the last run of each command, and the citation rejection rate |
 
 The ask route streams because a local model takes twenty seconds to write and
 a silent page for twenty seconds reads as broken. The event order is the

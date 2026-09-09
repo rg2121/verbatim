@@ -42,6 +42,10 @@ def sse_events(text: str) -> list[tuple[str, dict]]:
 class StubEncoder:
     """Enough embedder for the ask flow, with no ONNX weights to load."""
 
+    # The real embedder names its vectors without loading them, and the app
+    # relies on that for /api/stats and /api/health.
+    model_id = "stub"
+
     def __init__(self) -> None:
         from verbatim.corpus import EmbeddingModel
 
@@ -478,3 +482,33 @@ def test_the_review_cost_is_this_review_not_the_servers_lifetime() -> None:
         "2 model calls, 15 tokens in, 5 out, 1.5s in the model"
     )
     assert _cost_since(None, model) == "cost not reported"
+
+
+def test_health_reports_the_corpus_and_the_last_run_of_each_command(tmp_path: Path) -> None:
+    """A served page and an empty or half-ingested corpus look identical."""
+    from verbatim.corpus import CorpusStore
+    from verbatim.runs import record_run
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Superconducting qubits decohere."]}):
+        pass
+    with CorpusStore(tmp_path / "corpus.db") as store:
+        with record_run(store, "ask") as run:
+            run.record(citations=3, rejected=1)
+        with pytest.raises(RuntimeError):
+            with record_run(store, "embed"):
+                raise RuntimeError("Ollama unreachable")
+
+    body = TestClient(
+        create_app(tmp_path / "corpus.db", encoder=StubEncoder())
+    ).get("/api/health").json()
+
+    assert body["ok"] is False          # the last embed failed
+    assert body["failing"] == ["embed"]
+    assert body["corpus"]["papers"] == 1 and body["corpus"]["passages"] >= 1
+    assert body["last_run"]["embed"]["ok"] is False
+    assert "Ollama unreachable" in body["last_run"]["embed"]["error"]
+    # The rejection rate is read from the ledger, not recomputed.
+    assert body["answers"] == {
+        "runs": 1, "citations_verified": 3, "citations_rejected": 1,
+        "rejection_rate": 0.25,
+    }

@@ -59,6 +59,7 @@ from verbatim.evaluation import (
 )
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
+from verbatim.runs import record_run, recent_runs, render_runs
 from verbatim.sampling import export_sample
 from verbatim.research import research
 from verbatim.reranking import CrossEncoderReranker, rerank
@@ -197,6 +198,20 @@ def run() -> None:
     references_parser.add_argument(
         "--reading-list", type=int, default=25,
         help="How many uncited-but-absent papers to name at the end",
+    )
+
+    runs_parser = subparsers.add_parser(
+        "runs", help="What each command did, and whether it finished"
+    )
+    runs_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    runs_parser.add_argument(
+        "--command", dest="command_filter", help="Only runs of this command"
+    )
+    runs_parser.add_argument("--limit", type=int, default=20)
+    runs_parser.add_argument(
+        "--json", action="store_true",
+        help="Emit the ledger as JSON, for a daily driver to check rather than "
+             "a person to read",
     )
 
     graph_parser = subparsers.add_parser(
@@ -454,7 +469,7 @@ def run() -> None:
         print(f"Saved {len(papers)} papers to {args.output}")
 
     if args.command == "sync":
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "sync", limit=args.limit, categories=args.category, full=args.full) as run:
             for position, category in enumerate(args.category):
                 if position:
                     time.sleep(args.delay)
@@ -485,7 +500,7 @@ def run() -> None:
             )
             downloads = _merge_downloads(existing_downloads, report.downloaded)
         else:
-            with CorpusStore(args.state) as corpus:
+            with CorpusStore(args.state) as corpus, record_run(corpus, "download", limit=args.limit, license_classes=args.license_classes) as run:
                 papers = corpus.pending_downloads(
                     args.limit,
                     require_license=args.require_license,
@@ -519,6 +534,8 @@ def run() -> None:
                 if settled:
                     corpus.record_permanent_download_failures(settled)
                 downloads = corpus.all_downloads()
+                run.record(downloaded=len(report.downloaded),
+                           failed=len(report.failed), held=len(downloads))
         save_download_manifest(downloads, manifest_path)
         print(
             f"Downloaded {len(report.downloaded)} new PDFs; "
@@ -545,7 +562,7 @@ def run() -> None:
     if args.command == "eval":
         cases = load_cases(args.cases)
         embedder = FastEmbedEmbedder(model_name=args.model)
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "eval", cases=str(args.cases), model=args.model, limit=args.limit) as run:
             expanding = args.rewrites or args.hyde or args.decompose
             options = dict(
                 limit=args.limit, max_per_paper=args.max_per_paper,
@@ -560,6 +577,9 @@ def run() -> None:
                 if any(case.is_compound for case in cases)
                 else []
             )
+            best = max(scores, key=lambda score: score.mrr)
+            run.record(cases=len(cases), scored=best.cases,
+                       best_mode=best.mode, best_mrr=round(best.mrr, 4))
         print(f"{args.cases}")
         print(describe_case_mix(cases))
         print()
@@ -587,18 +607,24 @@ def run() -> None:
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "index", model=args.model, rebuild=args.rebuild) as run:
             model = embedder.model
             index = SqliteVecIndex(corpus.connection, model.dimensions)
             papers = SqlitePaperIndex(corpus.connection, model.dimensions)
             if args.rebuild:
+                rebuilt = index.rebuild(model.model_id)
+                rebuilt_papers = papers.rebuild(model.model_id)
+                run.record(rebuilt=rebuilt, rebuilt_papers=rebuilt_papers,
+                           model=model.model_id)
                 print(
-                    f"Rebuilt the index with {index.rebuild(model.model_id)} passage "
-                    f"vectors and {papers.rebuild(model.model_id)} paper vectors."
+                    f"Rebuilt the index with {rebuilt} passage "
+                    f"vectors and {rebuilt_papers} paper vectors."
                 )
             else:
                 change = index.sync(model.model_id)
                 paper_change = papers.sync(model.model_id)
+                run.record(added=change.added, removed=change.removed,
+                           vectors=index.count(), model=model.model_id)
                 print(f"Index synced: {change.added} added, {change.removed} removed; "
                       f"{index.count()} passage vectors, {papers.count()} paper vectors.")
 
@@ -625,7 +651,7 @@ def run() -> None:
     if args.command == "html":
         args.output_dir.mkdir(parents=True, exist_ok=True)
         fetched = missing = truncated = deferred = 0
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "html", limit=args.limit) as run:
             pending = corpus.papers_without_html(args.limit)
             for position, arxiv_id in enumerate(pending):
                 if position:
@@ -677,7 +703,7 @@ def run() -> None:
         )
 
     if args.command == "references":
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "references", limit=args.limit) as run:
             pending = corpus.papers_without_references(args.limit)
             read = entries = 0
             for arxiv_id in pending:
@@ -752,6 +778,19 @@ def run() -> None:
 
         serve(state=args.state, embedding_model=args.model)
 
+    if args.command == "runs":
+        with CorpusStore(args.state) as corpus:
+            listed = recent_runs(corpus, command=args.command_filter, limit=args.limit)
+        if args.json:
+            import json as _json
+
+            print(_json.dumps(listed, indent=1))
+        else:
+            print(render_runs(listed))
+        # A driver can stop on this rather than parsing prose.
+        if any(run["ok"] is False for run in listed):
+            raise SystemExit("error: the ledger contains a failed run")
+
     if args.command == "graph":
         from verbatim.tools import get_citations
 
@@ -795,7 +834,7 @@ def run() -> None:
         )
 
     if args.command == "grow":
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "grow", limit=args.limit, min_citations=args.min_citations) as run:
             wanted = [
                 (cited, citations)
                 for cited, citations in corpus.most_cited_absent_papers(limit=args.limit)
@@ -834,7 +873,7 @@ def run() -> None:
         embedder = FastEmbedEmbedder(
             model_name=args.model, with_context=args.with_context
         )
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "embed", model=args.model, batch_size=args.batch_size, limit=args.limit) as run:
             embedded = embed_pending(
                 corpus,
                 embedder,
@@ -863,6 +902,8 @@ def run() -> None:
             model = embedder.model
             stored = corpus.embedding_count(model.model_id)
             stored_papers = corpus.paper_embedding_count(model.model_id)
+            run.record(chunks_embedded=embedded, abstracts_embedded=papers,
+                       vectors=stored, model=model.model_id)
         print(
             f"Embedded {embedded} new chunks and {papers} new abstracts with "
             f"{model.model_id} ({model.dimensions}d); corpus holds {stored} "
@@ -911,7 +952,7 @@ def run() -> None:
         for rank, match in enumerate(matches, start=1):
             print(format_match(rank, match, full=args.full))
     if args.command == "ask":
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "ask", model=args.model, llm=args.llm, passages=args.passages) as run:
             if args.tools:
                 embedder = FastEmbedEmbedder(model_name=args.model)
                 completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
@@ -960,6 +1001,11 @@ def run() -> None:
                 for part in plan:
                     print(f"  - {part}")
                 print()
+            run.record(passages=len(matches),
+                       papers=len({m.chunk.arxiv_id for m in matches}),
+                       citations=len(answer.citations),
+                       rejected=len(answer.rejected),
+                       declined=answer.declined)
             subject = None
             closeness = None
             if matches and not args.no_subject_check:
@@ -1008,7 +1054,7 @@ def run() -> None:
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
         progress = lambda heading, done, total: print(f"  [{done}/{total}] {heading}", flush=True)
         ledger = None
-        with CorpusStore(args.state) as corpus:
+        with CorpusStore(args.state) as corpus, record_run(corpus, "report", model=args.model, llm=args.llm, sections=args.sections, agents=args.agents) as run:
             if args.agents:
                 from verbatim.orchestrator import orchestrate
 
@@ -1041,6 +1087,13 @@ def run() -> None:
                     check_subject=not args.no_subject_check,
                     on_section=progress,
                 )
+            run.record(
+                sections=len(built.sections),
+                citations=sum(len(s.answer.citations) for s in built.sections),
+                rejected=sum(len(s.answer.rejected) for s in built.sections),
+                declined=sum(1 for s in built.sections if s.answer.declined),
+                escalations=ledger.escalations if ledger else 0,
+            )
         # The agent rung's routing turns are the calls the orchestrator's own
         # cost argument is about, so they are counted with the rest.
         billed = (completion, caller) if args.agents else (completion,)
@@ -1065,7 +1118,7 @@ def run() -> None:
             print(f"Saved {len(chunks)} page-aware chunks to {args.output}")
         else:
             fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
-            with CorpusStore(args.state) as corpus:
+            with CorpusStore(args.state) as corpus, record_run(corpus, "chunk", limit=args.limit, batch_size=args.batch_size) as run:
                 # HTML first: it keeps maths as LaTeX and carries the author's
                 # own sectioning, so a paper with a rendering is chunked from
                 # that and never from its PDF.

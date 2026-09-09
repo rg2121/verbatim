@@ -34,6 +34,7 @@ from verbatim.conversation import Turn, standalone_question
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.retrieval import hybrid_search
+from verbatim.runs import last_run_per_command, recent_runs
 
 MAX_LIMIT = 50
 # A review is minutes of generation per section, so the ceiling is low on
@@ -288,6 +289,56 @@ def create_app(
             "query": q,
             "mode": mode,
             "results": [match_to_dict(match) for match in matches],
+        }
+
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        """Whether this corpus is usable, and what its recent runs did.
+
+        Deliberately more than a 200: an empty corpus and a corpus whose last
+        ingest failed both serve pages perfectly well, and both are the thing
+        a check is asking about. The rates come from the run ledger rather
+        than being recomputed, so they describe what actually happened.
+        """
+        store = corpus()
+        counts = store.pipeline_stats(_fingerprint(), embedder().model_id)
+        last = last_run_per_command(store)
+        answered = [
+            run for run in recent_runs(store, limit=200)
+            if run["command"] in ("ask", "report") and run["ok"]
+        ]
+        cited = sum(run["outputs"].get("citations", 0) for run in answered)
+        refused = sum(run["outputs"].get("rejected", 0) for run in answered)
+        failing = sorted(name for name, run in last.items() if run["ok"] is False)
+        return {
+            "ok": bool(counts["chunks"]) and not failing,
+            "corpus": {
+                "papers": counts["papers"],
+                "passages": counts["chunks"],
+                "vectors": counts["vectors"],
+                "pending": {
+                    "downloads": counts["downloads_pending"],
+                    "chunking": counts["chunking_pending"],
+                    "embedding": counts["embedding_pending"],
+                },
+            },
+            "last_run": {
+                name: {
+                    "at": run["started_at"], "ok": run["ok"],
+                    "seconds": run["seconds"], "error": run["error"],
+                }
+                for name, run in sorted(last.items())
+            },
+            "failing": failing,
+            "answers": {
+                "runs": len(answered),
+                "citations_verified": cited,
+                "citations_rejected": refused,
+                # The share of citations a model produced that did not survive
+                # checking. It is a property of the model, not a fault: the
+                # check exists because models paraphrase.
+                "rejection_rate": round(refused / (cited + refused), 3) if cited + refused else None,
+            },
         }
 
     @app.get("/api/report")
