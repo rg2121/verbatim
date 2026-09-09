@@ -299,3 +299,88 @@ def test_the_plain_report_is_the_orchestrator_with_one_rung(tmp_path: Path) -> N
     assert plain.sections[0].evidence_lines == laddered.sections[0].evidence_lines
     # One rung means no escalation was even possible.
     assert len(ledger.sections[0].attempts) == 1
+
+
+def test_a_finished_section_is_handed_over_before_the_next_one_starts(
+    tmp_path: Path,
+) -> None:
+    """What makes a review streamable rather than something to wait for.
+
+    The HTTP route pushes each on_section_done into a queue the SSE generator
+    drains, so this is the property that decides whether a reader sees section
+    one while section two is still being written. Section two is held shut
+    until section one has been handed over, and refuses to proceed if it never
+    was - so an orchestrator that assembled everything first would deadlock
+    here rather than pass quietly.
+    """
+    import threading
+
+    handed_over = threading.Event()
+
+    class Gated(ScriptedAnswers):
+        def complete(self, system, user, schema):
+            if "charge" in user and not handed_over.wait(timeout=10):
+                raise AssertionError("section one was never handed over")
+            return super().complete(system, user, schema)
+
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        completion = Gated({
+            "What is flux?": cite(
+                chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
+            ),
+            "How does charge move?": cite(
+                chunk_of["2608.22222v1"].chunk_id, "Charge moves along the wire."
+            ),
+        })
+        delivered: list[str] = []
+        report, _ledger = orchestrate(
+            corpus, StubEmbedder(), completion,
+            lambda system, user: "What is flux?\nHow does charge move?",
+            "electromagnetism",
+            on_section_done=lambda section, entry: (
+                delivered.append(section.heading), handed_over.set()
+            ),
+        )
+
+    assert delivered == ["What is flux?", "How does charge move?"]
+    assert [s.heading for s in report.sections] == delivered
+    assert not report.sections[1].answer.declined
+
+
+def test_sections_are_handed_over_from_parallel_workers_too(tmp_path: Path) -> None:
+    """The callback fires from a worker thread, so it must be safe to use."""
+    import threading
+
+    seen: list[str] = []
+    guard = threading.Lock()
+
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        completion = ScriptedAnswers({
+            "What is flux?": cite(
+                chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
+            ),
+            "How does charge move?": cite(
+                chunk_of["2608.22222v1"].chunk_id, "Charge moves along the wire."
+            ),
+        })
+
+        def record(section, entry) -> None:
+            with guard:
+                seen.append(section.heading)
+
+        report, ledger = orchestrate(
+            corpus, StubEmbedder(), completion,
+            lambda system, user: "What is flux?\nHow does charge move?",
+            "electromagnetism",
+            workers=2,
+            on_section_done=record,
+        )
+
+    assert sorted(seen) == ["How does charge move?", "What is flux?"]
+    # Delivered in whatever order they finished; assembled in the planned one.
+    assert [s.heading for s in report.sections] == [
+        "What is flux?", "How does charge move?"
+    ]
+    assert all(entry.outcome == "accepted" for entry in ledger.sections)

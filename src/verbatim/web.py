@@ -82,10 +82,40 @@ def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
     }
 
 
-def _usage_of(model: Any) -> str:
-    """What the run cost, when the backend counted it."""
-    usage = getattr(model, "usage", None)
-    return usage.render() if usage is not None else "cost not reported"
+def _usage_totals(*models: Any) -> tuple[int, int, int, float] | None:
+    """A snapshot of what these clients have counted so far.
+
+    None when nothing counts, which is every scripted stand-in in the tests.
+    """
+    counted = [getattr(model, "usage", None) for model in models]
+    present = [usage for usage in counted if usage is not None]
+    if not present:
+        return None
+    return (
+        sum(u.calls for u in present),
+        sum(u.prompt_tokens for u in present),
+        sum(u.output_tokens for u in present),
+        sum(u.seconds for u in present),
+    )
+
+
+def _cost_since(
+    before: tuple[int, int, int, float] | None, *models: Any
+) -> str:
+    """What this run cost, as the difference from a snapshot.
+
+    A served client lives as long as the process, so its totals are the
+    server's lifetime rather than this review's - which is what the footer
+    was reporting.
+    """
+    after = _usage_totals(*models)
+    if before is None or after is None:
+        return "cost not reported"
+    calls, prompt, output, seconds = (a - b for a, b in zip(after, before))
+    return (
+        f"{calls} model call{'s' if calls != 1 else ''}, "
+        f"{prompt:,} tokens in, {output:,} out, {seconds:.1f}s in the model"
+    )
 
 
 def _turns(history: str | None) -> list[Turn]:
@@ -137,6 +167,7 @@ def create_app(
     embedding_model: str | None = None,
     completion: Any = None,
     encoder: Any = None,
+    tool_caller: Any = None,
 ) -> Any:
     """Build the application. Kept a factory so tests can point it at a fixture.
 
@@ -151,6 +182,10 @@ def create_app(
     database = state or config.STATE_PATH
     model_name = embedding_model or config.EMBEDDING_MODEL
     resources: dict[str, Any] = {}
+    # The lazily built model and embedder are shared by every request thread
+    # and by the review worker, and building one takes seconds; without this
+    # two first callers can build two and race inside the ONNX loader.
+    building = threading.Lock()
     # A SQLite connection may only be used by the thread that opened it, and
     # FastAPI serves synchronous endpoints from a pool, so consecutive requests
     # arrive on different threads. One shared connection therefore fails as
@@ -185,19 +220,45 @@ def create_app(
         return store
 
     def embedder() -> Any:
-        if "embedder" not in resources:
-            resources["embedder"] = encoder or FastEmbedEmbedder(model_name=model_name)
-        return resources["embedder"]
+        with building:
+            if "embedder" not in resources:
+                resources["embedder"] = encoder or FastEmbedEmbedder(model_name=model_name)
+            return resources["embedder"]
 
     def answering() -> Any:
-        if "completion" not in resources:
-            if completion is not None:
-                resources["completion"] = completion
-            else:
-                from verbatim.answers import OllamaCompletion
+        with building:
+            if "completion" not in resources:
+                if completion is not None:
+                    resources["completion"] = completion
+                else:
+                    from verbatim.answers import OllamaCompletion
 
-                resources["completion"] = OllamaCompletion(config.OLLAMA_MODEL)
-        return resources["completion"]
+                    resources["completion"] = OllamaCompletion(config.OLLAMA_MODEL)
+            return resources["completion"]
+
+    def routing() -> Any:
+        """The tool-choosing model the orchestrator's last rung needs.
+
+        Without one that rung retrieves nothing and the ladder's escalation
+        stops a step early, which is how it shipped: the route built an
+        orchestrator with no caller, so every streamed review had a dead rung.
+        """
+        with building:
+            if "caller" not in resources:
+                if tool_caller is not None:
+                    resources["caller"] = tool_caller
+                elif completion is not None:
+                    # An injected model is the whole backend for this app, so
+                    # a caller is not built behind its back: the suite must
+                    # not reach Ollama, and it may itself choose tools.
+                    resources["caller"] = (
+                        completion if hasattr(completion, "choose_tool") else None
+                    )
+                else:
+                    from verbatim.answers import OllamaToolCaller
+
+                    resources["caller"] = OllamaToolCaller(config.OLLAMA_MODEL)
+            return resources["caller"]
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index() -> str:
@@ -261,6 +322,10 @@ def create_app(
         events: queue.Queue = queue.Queue()
         model = answering()
         encoder_for_run = embedder()
+        caller = routing()
+        # This review's cost, not the server's since it started: usage
+        # accumulates on a client that lives as long as the process.
+        before = _usage_totals(model, caller)
 
         def run() -> None:
             # Its own store: this runs on a thread that has none, and a
@@ -273,6 +338,7 @@ def create_app(
                         model,
                         lambda system, user: model.complete_text(system, user),
                         topic,
+                        caller=caller if agents else None,
                         max_sections=sections,
                         per_section=passages,
                         ladder=None if agents else ("hybrid",),
@@ -290,10 +356,19 @@ def create_app(
                             "markdown": render_markdown(built, ledger=ledger),
                             "ledger_markdown": ledger.render_markdown(),
                             "escalations": ledger.escalations,
+                            # What each section actually came to. The count of
+                            # escalations alone cannot say this: a section can
+                            # be a gap on its first rung, having escalated
+                            # nowhere.
+                            "outcomes": [entry.outcome for entry in ledger.sections],
                         },
                     ))
-            except (RuntimeError, OSError, ValueError) as error:
-                events.put(("failed", {"message": str(error)}))
+            # Deliberately broad: the sentinel below ends the stream whatever
+            # happens, so an exception this did not name would close the
+            # stream with a `done` event and present a half-written review as
+            # a finished one.
+            except Exception as error:  # noqa: BLE001 - see above
+                events.put(("failed", {"message": f"{type(error).__name__}: {error}"}))
             finally:
                 events.put(None)
 
@@ -306,7 +381,7 @@ def create_app(
                     break
                 name, payload = item
                 yield _event(name, payload)
-            yield _event("done", {"cost": _usage_of(model)})
+            yield _event("done", {"cost": _cost_since(before, model, caller)})
 
         return StreamingResponse(
             stream(),
@@ -861,9 +936,14 @@ function runReport(event) {
   });
   reviewing.addEventListener("report", (e) => {
     const done = JSON.parse(e.data);
-    $("reportstatus").textContent = done.escalations
-      ? "Review complete. " + done.escalations + " section(s) needed another strategy."
-      : "Review complete. Every section was accepted on its first strategy.";
+    const outcomes = done.outcomes || [];
+    const accepted = outcomes.filter((o) => o.indexOf("accepted") === 0).length;
+    let note = "Review complete. " + accepted + " of " + outcomes.length
+      + " sections accepted";
+    note += done.escalations
+      ? ", " + done.escalations + " needed another strategy."
+      : ", none needed a second strategy.";
+    $("reportstatus").textContent = note;
     $("reportout").insertAdjacentHTML("beforeend",
       "<details><summary>The whole review as markdown</summary>"
       + '<pre class="md">' + escapeHtml(done.markdown) + "</pre></details>");

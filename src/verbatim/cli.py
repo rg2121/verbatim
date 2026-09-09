@@ -889,9 +889,9 @@ def run() -> None:
             if args.tools:
                 embedder = FastEmbedEmbedder(model_name=args.model)
                 completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+                tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
                 answer, trace = answer_question(
-                    corpus, embedder, OllamaToolCaller(args.llm or config.OLLAMA_MODEL),
-                    completion, args.question,
+                    corpus, embedder, tool_caller, completion, args.question,
                 )
                 print(f"[route: {trace.describe()}]\n")
                 print(answer.text)
@@ -900,6 +900,9 @@ def run() -> None:
                     print(render_bibliography(answer.citations))
                 for item in answer.rejected:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+                # The routing turns are model calls too, so this path reports
+                # both clients rather than skipping the footer entirely.
+                print(f"\n  {_usage_footer(completion, tool_caller)}")
                 return
             embedder = FastEmbedEmbedder(model_name=args.model)
             completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
@@ -983,13 +986,14 @@ def run() -> None:
             if args.agents:
                 from verbatim.orchestrator import orchestrate
 
+                caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
                 built, ledger = orchestrate(
                     corpus,
                     embedder,
                     completion,
                     lambda system, user: completion.complete_text(system, user),
                     args.topic,
-                    caller=OllamaToolCaller(args.llm or config.OLLAMA_MODEL),
+                    caller=caller,
                     max_sections=args.sections,
                     per_section=args.passages,
                     max_per_paper=args.max_per_paper,
@@ -1011,6 +1015,9 @@ def run() -> None:
                     check_subject=not args.no_subject_check,
                     on_section=progress,
                 )
+        # The agent rung's routing turns are the calls the orchestrator's own
+        # cost argument is about, so they are counted with the rest.
+        billed = (completion, caller) if args.agents else (completion,)
         markdown = render_markdown(built, ledger=ledger)
         if args.out is not None:
             args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -1019,7 +1026,7 @@ def run() -> None:
         else:
             print()
             print(markdown)
-        print(f"\n  {_usage_footer(completion)}")
+        print(f"\n  {_usage_footer(*billed)}")
 
     if args.command == "chunk":
         if args.manifest is not None:
@@ -1083,14 +1090,26 @@ def run() -> None:
             )
 
 
-def _usage_footer(completion: object) -> str:
-    """What the run cost, when the backend counted it.
+def _usage_footer(*clients: object) -> str:
+    """What the run cost, across every client that was asked to do work.
 
     Read defensively: the Completion protocol does not require usage, and a
-    scripted stand-in in the tests has none.
+    scripted stand-in in the tests has none. More than one client is passed
+    where a run uses more than one - answering and tool routing are separate
+    clients, and counting only the first under-reports the path whose cost
+    matters most.
     """
-    usage = getattr(completion, "usage", None)
-    return usage.render() if usage is not None else "cost not reported"
+    counted = [getattr(client, "usage", None) for client in clients]
+    present = [usage for usage in counted if usage is not None]
+    if not present:
+        return "cost not reported"
+    calls = sum(u.calls for u in present)
+    return (
+        f"{calls} model call{'s' if calls != 1 else ''}, "
+        f"{sum(u.prompt_tokens for u in present):,} tokens in, "
+        f"{sum(u.output_tokens for u in present):,} out, "
+        f"{sum(u.seconds for u in present):.1f}s in the model"
+    )
 
 
 def _line_completion(model: str | None) -> "Callable[[str, str], str]":

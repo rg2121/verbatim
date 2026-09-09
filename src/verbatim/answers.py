@@ -225,6 +225,16 @@ class OllamaToolCaller:
     def model(self) -> str:
         return self._client.model
 
+    @property
+    def usage(self) -> "Usage":
+        """This caller's own counters.
+
+        Routing turns are model calls too, and they were counted nowhere:
+        `report --agents` climbs to a rung that calls this, so the path whose
+        cost most needs reporting was the one under-reporting it.
+        """
+        return self._client.usage
+
     def choose_tool(self, system, messages, tools):
         body = self._client._post(
             "/api/chat",
@@ -235,6 +245,10 @@ class OllamaToolCaller:
                 "messages": [{"role": "system", "content": system}, *messages],
             },
         )
+        # Counted here rather than in _post, which also serves calls that are
+        # not generations: a routing turn is a model call and was reporting as
+        # none at all.
+        self._client.usage.record(body)
         for call in body.get("message", {}).get("tool_calls") or []:
             function = call.get("function", {})
             arguments = function.get("arguments")

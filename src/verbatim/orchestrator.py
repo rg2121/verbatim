@@ -44,6 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import re
+import sqlite3
 import threading
 from typing import Any
 
@@ -256,7 +257,10 @@ def work_section(
             if matches and check_subject:
                 subject = describe_subject(completion, matches)
                 closeness = subject_similarity(embedder, heading, subject)
-        except (RuntimeError, OSError) as error:
+        # sqlite3.Error is neither of the other two, and the corpus is read
+        # under a busy timeout while ingest stages may be writing: a locked
+        # database is exactly the "corpus error" this promises to contain.
+        except (RuntimeError, OSError, sqlite3.Error) as error:
             candidates.append(
                 (
                     Attempt(
@@ -297,7 +301,15 @@ def work_section(
     best_attempt, best_section = max(
         candidates,
         key=lambda pair: (
-            pair[0].verdict == ACCEPTED, pair[0].verified, pair[0].closeness or 0.0
+            pair[0].verdict == ACCEPTED,
+            pair[0].verified,
+            pair[0].closeness or 0.0,
+            # Passages break the remaining ties, so a rung that retrieved and
+            # was declined beats one that errored before retrieving anything.
+            # Without it, max() keeps the earliest candidate and a section
+            # that really was written from six passages could be replaced by
+            # "could not be written" whenever the subject check was off.
+            pair[0].passages,
         ),
     )
     errored = [attempt for attempt, _ in candidates if attempt.error]

@@ -7,6 +7,7 @@ from verbatim.embedding import embed_pending
 from verbatim.graph import anchor_papers, anchored_matches, definitional_subject
 from verbatim.references import Reference
 from verbatim.retrieval import hybrid_search
+from verbatim.tools import search_chunks
 
 from helpers import corpus_with
 
@@ -253,3 +254,25 @@ def test_use_graph_leaves_every_other_question_untouched(tmp_path: Path) -> None
     assert [(m.chunk.chunk_id, m.score) for m in plain] == [
         (m.chunk.chunk_id, m.score) for m in graphed
     ]
+
+
+def test_the_tool_every_other_front_end_calls_uses_the_graph_gate(tmp_path: Path) -> None:
+    """MCP clients, `ask --tools` and the orchestrator's agent rung go here.
+
+    They were all searching without the leg the README calls default-on, so a
+    definitional question reached them drowned in usage while the CLI's own
+    `ask` answered it. The gate still gates: a question that is not
+    definition-shaped is unaffected.
+    """
+    with graph_corpus(tmp_path) as corpus:
+        embed_pending(corpus, TermEmbedder())
+
+        defining = search_chunks(
+            corpus, TermEmbedder(), "what is the adam optimizer?", limit=2
+        )
+        ordinary = search_chunks(
+            corpus, TermEmbedder(), "how is the adam optimizer configured", limit=2
+        )
+
+    assert "1412.6980v1" in {hit["arxiv_id"] for hit in defining}
+    assert "1412.6980v1" not in {hit["arxiv_id"] for hit in ordinary}

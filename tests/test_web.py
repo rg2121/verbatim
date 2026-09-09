@@ -423,3 +423,58 @@ def test_the_review_endpoint_refuses_an_unbounded_request(tmp_path: Path) -> Non
     assert client_app.get(
         "/api/report", params={"topic": "x", "sections": 50}
     ).status_code == 422
+
+
+def test_an_injected_model_is_never_supplemented_by_a_real_one(tmp_path: Path) -> None:
+    """The suite must not reach Ollama, and the route needs a tool caller.
+
+    Building one behind an injected model's back made the suite take a minute
+    and would have made it need a running Ollama.
+    """
+    with chunked_corpus(
+        tmp_path, {"2608.22222v1": ["Superconducting qubits decohere quickly."]}
+    ) as store:
+        chunk_id = store.all_chunks()[0].chunk_id
+    app = create_app(
+        tmp_path / "corpus.db",
+        completion=ReportScript(chunk_id),
+        encoder=StubEncoder(),
+    )
+
+    # Reaching a real Ollama would make this take a minute instead of a
+    # second; the suite's speed is the assertion.
+    from time import perf_counter
+
+    started = perf_counter()
+    with TestClient(app) as client_app:
+        events = sse_events(
+            client_app.get("/api/report", params={"topic": "x", "sections": 1}).text
+        )
+
+    assert perf_counter() - started < 5
+    # The scripted model cannot choose tools, so the agent rung stays unarmed
+    # rather than an Ollama client being built behind it.
+    section = next(payload for name, payload in events if name == "section")
+    agent_rungs = [a for a in section["attempts"] if a["strategy"] == "agent"]
+    assert all(a["route"] == "no tool-choosing model available" for a in agent_rungs)
+
+
+def test_the_review_cost_is_this_review_not_the_servers_lifetime() -> None:
+    from verbatim.answers import Usage
+    from verbatim.web import _cost_since, _usage_totals
+
+    class Counted:
+        def __init__(self) -> None:
+            self.usage = Usage()
+
+    model, caller = Counted(), Counted()
+    model.usage.record({"prompt_eval_count": 900, "eval_count": 100, "total_duration": 9_000_000_000})
+    before = _usage_totals(model, caller)
+    # This review: one answering call and one routing call.
+    model.usage.record({"prompt_eval_count": 10, "eval_count": 4, "total_duration": 1_000_000_000})
+    caller.usage.record({"prompt_eval_count": 5, "eval_count": 1, "total_duration": 500_000_000})
+
+    assert _cost_since(before, model, caller) == (
+        "2 model calls, 15 tokens in, 5 out, 1.5s in the model"
+    )
+    assert _cost_since(None, model) == "cost not reported"
