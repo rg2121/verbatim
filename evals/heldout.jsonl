@@ -60,3 +60,61 @@
 {"question": "what is the usual surgical treatment for hip dysplasia in dogs?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; veterinary medicine is outside every synced category"}
 {"question": "how are slate roof tiles repaired after storm damage?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; building trades are outside every synced category"}
 {"question": "what is the offside rule in association football?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; sport is outside every synced category"}
+# --- Second batch, authored 2026-09-09 under the identical rule, from a
+# disjoint slice of the same candidate pool (every 3rd paper the first pass did
+# not take). The rule was deliberately NOT relaxed: the instruction to avoid
+# the title's distinctive phrasing works against the title-matching leg rather
+# than for it, so keeping it constant means the title leg's result across both
+# batches is a lower bound rather than something this authoring manufactured.
+{"question": "is there a relativistic gravity theory that reproduces the galactic acceleration scale and still matches the CMB?", "expect_papers": ["2007.00082v3"], "note": "source=heldout2; shape=plain"}
+{"question": "how can the temperature-redshift relation be tested without assuming a cosmological model?", "expect_papers": ["2607.23535v1"], "note": "source=heldout2; shape=plain"}
+{"question": "can self-interacting dark matter collapse into massive black hole seeds early enough to explain high-redshift observations?", "expect_papers": ["2504.00075v2"], "note": "source=heldout2; shape=plain"}
+{"question": "which Boltzmann solver offers controllable accuracy for cosmological perturbations?", "expect_papers": ["1104.2932v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how do graphene-based materials hold up structurally and electrically under heavy ion irradiation?", "expect_papers": ["2605.26311v1"], "note": "source=heldout2; shape=plain"}
+{"question": "what is the exact spectrum of a dissipative variant of the Sachdev-Ye-Kitaev model?", "expect_papers": ["2606.08079v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how do specialist clinicians compare with retrieval-augmented models at summarising medical literature?", "expect_papers": ["2606.05436v1"], "note": "source=heldout2; shape=comparison"}
+{"question": "how can language model agents be trained to identify and coordinate reusable procedural skills?", "expect_papers": ["2608.02287v1"], "note": "source=heldout2; shape=plain"}
+{"question": "can an agent automate designing and analysing recommendation experiments from past results?", "expect_papers": ["2608.04625v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how does predictive advice change the competitive ratio for online weighted vertex cover?", "expect_papers": ["2606.22831v2"], "note": "source=heldout2; shape=plain"}
+{"question": "why do some model capabilities appear only above a certain scale rather than improving smoothly?", "expect_papers": ["2206.07682v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a world model capture human affective dynamics rather than only physical state transitions?", "expect_papers": ["2512.24149v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can summaries of scientific papers stay factually faithful while remaining fluent?", "expect_papers": ["2606.18850v1"], "note": "source=heldout2; shape=plain"}
+{"question": "does repeating generate and test cycles actually make automated code repair more reliable?", "expect_papers": ["2607.24604v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can the duality between answering and generating questions be exploited for multi-hop questions?", "expect_papers": ["2608.00712v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a pretrained speech encoder be adapted to classify speaker gender across Southeast Asian languages?", "expect_papers": ["2608.04433v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a tutoring model be stopped from revealing the answer before it is authorized to?", "expect_papers": ["2608.00515v1"], "note": "source=heldout2; shape=plain"}
+{"question": "can a language model design data augmentations guided by measured downstream performance?", "expect_papers": ["2601.03808v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can brief spontaneous human behaviours be annotated and evaluated in a standardized way?", "expect_papers": ["2607.16284v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can the layouts of several connected rooms be estimated jointly from multi-view images?", "expect_papers": ["2608.03323v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can object-level changes be detected between repeated LiDAR surveys of a city?", "expect_papers": ["2608.05356v1"], "note": "source=heldout2; shape=plain"}
+{"question": "which benchmark measures a model's knowledge across dozens of academic subjects at once?", "expect_papers": ["2009.03300v3"], "note": "source=heldout2; shape=plain"}
+{"question": "how should a retailer choose which products to stock when sponsored placements compete for the same slots?", "expect_papers": ["2402.06158v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a single advertising campaign bid well when channels use different auction and pricing rules?", "expect_papers": ["2510.15238v2"], "note": "source=heldout2; shape=plain"}
+{"question": "when is it worth spending extra reasoning computation on a ranking decision?", "expect_papers": ["2601.18146v2"], "note": "source=heldout2; shape=plain"}
+{"question": "what challenges do researchers identify for generative AI in academic search?", "expect_papers": ["2606.08936v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a recommendation model be scaled as a whole instead of one component at a time?", "expect_papers": ["2606.27058v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can biased satisfaction labels be corrected when ranking short videos?", "expect_papers": ["2607.17092v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how do graph-based item embeddings compare with identifier-based ones for sequential recommendation?", "expect_papers": ["2607.26365v1"], "note": "source=heldout2; shape=comparison"}
+{"question": "how can gradients be propagated through stochastic or hard-threshold neurons?", "expect_papers": ["1308.3432v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can causal attention be made sparse without breaking information flow during prefill?", "expect_papers": ["2603.06274v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how does offline evaluation compare with online experimentation for choosing between algorithms?", "expect_papers": ["2607.01958v2"], "note": "source=heldout2; shape=comparison"}
+{"question": "how can a search over program space avoid being held back by its weakest component?", "expect_papers": ["2607.28947v1"], "note": "source=heldout2; shape=plain"}
+{"question": "which library provides molecular fingerprints that work with scikit-learn?", "expect_papers": ["2608.02027v1"], "note": "source=heldout2; shape=plain"}
+{"question": "which platform assembles end-to-end high-throughput cheminformatics workflows?", "expect_papers": ["2608.04942v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can poisoned training images be separated from clean ones using a vision-language model?", "expect_papers": ["2507.05113v3"], "note": "source=heldout2; shape=plain"}
+{"question": "can a learned eviction policy be run inside the operating system page cache?", "expect_papers": ["2605.26168v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how should acoustic wildlife detectors be validated for noisy low signal-to-noise deployments?", "expect_papers": ["2509.04682v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can a slow inference request be traced across the engine, GPU kernels and communication layers?", "expect_papers": ["2608.01975v1"], "note": "source=heldout2; shape=plain"}
+{"question": "can decision-theoretic axioms be used to evaluate model behaviour without labels?", "expect_papers": ["2608.05015v1"], "note": "source=heldout2; shape=plain"}
+{"question": "which edges should be targeted to steer a network towards synchronization?", "expect_papers": ["2606.11091v1"], "note": "source=heldout2; shape=plain"}
+{"question": "what sets the resonance structure of echoes from a reflecting surface near a horizon?", "expect_papers": ["2606.03256v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how can neutrons be included in event-by-event neutrino energy reconstruction?", "expect_papers": ["2509.17123v2"], "note": "source=heldout2; shape=plain"}
+{"question": "can inflation produce a gravitational wave spike at frequencies terrestrial detectors could reach?", "expect_papers": ["2601.09834v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how does the gluon condensate affect the thermal melting of charmonium and bottomonium?", "expect_papers": ["2608.01801v1"], "note": "source=heldout2; shape=plain"}
+{"question": "can black hole entropy be identified with a divergence between two statistical ensembles?", "expect_papers": ["2608.05801v1"], "note": "source=heldout2; shape=plain"}
+{"question": "under what curvature conditions has the Penrose inequality been proven for initial data sets?", "expect_papers": ["2607.20741v2"], "note": "source=heldout2; shape=plain"}
+{"question": "what is the image of a quantized Coulomb branch under the abelianization map?", "expect_papers": ["2608.01379v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how do external electric fields affect chimera states in rings of coupled neurons?", "expect_papers": ["2509.14910v2"], "note": "source=heldout2; shape=plain"}
+{"question": "how is the shear viscosity of the quark-gluon plasma extracted from collective flow measurements?", "expect_papers": ["1301.2826v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can bottomonium suppression in heavy-ion collisions be modelled as an open quantum system?", "expect_papers": ["2607.06191v1"], "note": "source=heldout2; shape=plain"}
+{"question": "how can nuclear level densities be computed microscopically from a relativistic mean field?", "expect_papers": ["2608.03663v1"], "note": "source=heldout2; shape=plain"}
