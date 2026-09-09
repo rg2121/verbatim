@@ -186,4 +186,42 @@ def test_a_failing_page_keeps_the_papers_already_ingested(tmp_path: Path) -> Non
     assert stored == 200
     assert "failed after" in report.stopped_because
     assert not report.caught_up
-    assert watermark is not None  # so the next run resumes rather than restarting
+    # The watermark stays where it was. This assertion used to read
+    # `is not None`, on the reasoning that a recorded mark lets the next run
+    # resume - but the mark is the *newest* paper seen, and papers arrive
+    # newest-first, so advancing it does not resume anything: it puts every
+    # page the failure prevented this run from reaching permanently behind the
+    # mark. See the test below, which walks that through.
+    assert watermark is None
+
+
+def test_a_failed_run_does_not_strand_the_pages_it_never_reached(tmp_path: Path) -> None:
+    """The papers a failure prevented must still arrive on the next run.
+
+    Papers are fetched newest-first and the watermark only moves forward, so a
+    failed run that advanced it would make the following run stop at the first
+    paper it saw and skip the rest of the category for good.
+    """
+    feed = FakeArxiv(300)
+    calls = {"n": 0}
+
+    def flaky(category, *, start=0, page_size=100, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("503 Service Unavailable")
+        return feed(category, start=start, page_size=page_size)
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        first = sync_category(
+            corpus, "cs.CL", limit=300, page_size=100, fetch_page=flaky, sleep=no_sleep
+        )
+        second = sync_category(
+            corpus, "cs.CL", limit=300, page_size=100, fetch_page=feed, sleep=no_sleep
+        )
+        stored = corpus.pipeline_stats("f", "m")["papers"]
+
+    assert first.fetched == 200 and "failed after" in first.stopped_because
+    # The retry re-walks the two committed pages, which refresh rather than
+    # duplicate, and goes on to the hundred the failure cost.
+    assert second.fetched == 300
+    assert stored == 300

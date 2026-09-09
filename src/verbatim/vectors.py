@@ -15,6 +15,36 @@ PAPER_VECTOR_TABLE = "vec_papers"
 # passing chunk ids into the query: SQLite caps a statement at 32766 variables,
 # which a body-only filter would exceed at roughly 500 papers.
 VECTOR_COLUMNS = ("chunk_id", "arxiv_id", "kind", "embedding")
+# Which model's vectors each index currently holds. A vec0 table stores no
+# such thing, and without it an index is only comparable to `embeddings` by
+# counting rows - which cannot tell one model's vectors from another's of the
+# same width.
+INDEX_STATE_TABLE = "vector_index_state"
+
+
+def remember_model(connection: sqlite3.Connection, index_name: str, model_id: str) -> None:
+    """Record whose vectors an index now holds."""
+    connection.execute(
+        f"""CREATE TABLE IF NOT EXISTS {INDEX_STATE_TABLE} (
+            index_name TEXT PRIMARY KEY, model_id TEXT NOT NULL)"""
+    )
+    with connection:
+        connection.execute(
+            f"""INSERT INTO {INDEX_STATE_TABLE} (index_name, model_id) VALUES (?, ?)
+                ON CONFLICT(index_name) DO UPDATE SET model_id = excluded.model_id""",
+            (index_name, model_id),
+        )
+
+
+def remembered_model(connection: sqlite3.Connection, index_name: str) -> str | None:
+    """Whose vectors an index holds, or None when it has never said."""
+    try:
+        row = connection.execute(
+            f"SELECT model_id FROM {INDEX_STATE_TABLE} WHERE index_name = ?", (index_name,)
+        ).fetchone()
+    except sqlite3.OperationalError:  # the table predates this record
+        return None
+    return None if row is None else str(row[0])
 
 
 @dataclass(frozen=True)
@@ -34,6 +64,8 @@ class VectorIndex(Protocol):
 
     def count(self) -> int: ...
 
+    def indexed_model(self) -> str | None: ...
+
     def sync(self, model_id: str) -> IndexSync: ...
 
     def rebuild(self, model_id: str) -> int: ...
@@ -51,13 +83,27 @@ class VectorIndex(Protocol):
 def ensure_current(index: VectorIndex, corpus_vectors: int, model_id: str) -> bool:
     """Bring the index in line with the stored embeddings, cheaply.
 
-    A count comparison is the fast path, so a search over an up-to-date index
-    costs one COUNT rather than two set-difference queries.  On a mismatch the
-    index is synced incrementally, not rebuilt, so the cost tracks what changed.
+    Identity is checked before size. `embeddings` is keyed by
+    (chunk_id, model_id) so two models' vectors coexist there, while the index
+    holds one set with no record of whose - and a count comparison cannot tell
+    them apart when the widths match, which they do for the variants this
+    project actually uses: `bge-small` and `bge-small+context` differ only in
+    what was embedded. Searching one model's index with another's query vector
+    returns confident nonsense and raises nothing, so a mismatch rebuilds.
 
-    The count check cannot see a change that adds and removes equal numbers of
-    vectors; `verbatim index --rebuild` forces a full reload for that case.
+    An index that has never recorded a model is rebuilt once for the same
+    reason: it cannot be trusted to hold what the caller is about to ask for.
+
+    Past that, a count comparison is the fast path, so a search over an
+    up-to-date index costs one COUNT rather than two set-difference queries. On
+    a mismatch the index is synced incrementally, not rebuilt, so the cost
+    tracks what changed. The count check still cannot see a change that adds
+    and removes equal numbers of vectors within one model;
+    `verbatim index --rebuild` forces a full reload for that case.
     """
+    if index.indexed_model() != model_id:
+        index.rebuild(model_id)
+        return True
     if index.count() == corpus_vectors:
         return False
     index.sync(model_id)
@@ -81,6 +127,9 @@ class SqliteVecIndex:
 
     def count(self) -> int:
         return int(self.connection.execute(f"SELECT COUNT(*) FROM {VECTOR_TABLE}").fetchone()[0])
+
+    def indexed_model(self) -> str | None:
+        return remembered_model(self.connection, VECTOR_TABLE)
 
     def sync(self, model_id: str) -> IndexSync:
         """Add vectors the index is missing and drop ones it should not hold.
@@ -111,6 +160,7 @@ class SqliteVecIndex:
                 """,
                 (model_id,),
             ).rowcount
+        remember_model(self.connection, VECTOR_TABLE, model_id)
         return IndexSync(added=max(added, 0), removed=max(removed, 0))
 
     def rebuild(self, model_id: str) -> int:
@@ -208,6 +258,9 @@ class SqlitePaperIndex:
             self.connection.execute(f"SELECT COUNT(*) FROM {PAPER_VECTOR_TABLE}").fetchone()[0]
         )
 
+    def indexed_model(self) -> str | None:
+        return remembered_model(self.connection, PAPER_VECTOR_TABLE)
+
     def sync(self, model_id: str) -> IndexSync:
         """Reconcile the index with the stored paper vectors."""
         with self.connection:
@@ -229,6 +282,7 @@ class SqlitePaperIndex:
                 """,
                 (model_id,),
             ).rowcount
+        remember_model(self.connection, PAPER_VECTOR_TABLE, model_id)
         return IndexSync(added=max(added, 0), removed=max(removed, 0))
 
     def rebuild(self, model_id: str) -> int:

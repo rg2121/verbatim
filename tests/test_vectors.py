@@ -334,3 +334,72 @@ def test_the_paper_index_drops_vectors_the_corpus_no_longer_has(tmp_path: Path) 
         remaining = index.count()
 
     assert (change.removed, remaining) == (1, 0)
+
+
+class ConstantEmbedder:
+    """Two of these differ in model id and in the vector they write."""
+
+    def __init__(self, model_id: str, value: float) -> None:
+        self.model = EmbeddingModel(
+            model_id=model_id, dimensions=3, normalized=True, revision="v0"
+        )
+        self.value = value
+
+    def embed_passages(self, texts):
+        return [[self.value, 0.0, 0.0] for _ in texts]
+
+    def embed_query(self, text):
+        return [self.value, 0.0, 0.0]
+
+
+def test_changing_the_embedding_model_does_not_leave_the_old_vectors_searchable(
+    tmp_path: Path,
+) -> None:
+    """The count check cannot tell one model's vectors from another's.
+
+    `embeddings` is keyed (chunk_id, model_id) so both sets coexist, and the
+    variants this project uses - `bge-small` and `bge-small+context` - have
+    identical widths. Before the index recorded whose vectors it held, the
+    counts matched, no sync ran, and every search answered from the previous
+    model's vectors without raising anything.
+    """
+    from verbatim.embedding import embed_pending
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["One."], "2608.22222v1": ["Two."]}) as corpus:
+        first, second = ConstantEmbedder("model-a", 1.0), ConstantEmbedder("model-b", -1.0)
+        embed_pending(corpus, first)
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.rebuild("model-a")
+        assert index.indexed_model() == "model-a"
+
+        embed_pending(corpus, second)
+        stored = corpus.embedding_count("model-b")
+        assert index.count() == stored  # the counts agree, and mean nothing
+
+        assert ensure_current(index, stored, "model-b") is True
+        assert index.indexed_model() == "model-b"
+
+        held = corpus.connection.execute(
+            "SELECT vec_to_json(embedding) FROM vec_chunks LIMIT 1"
+        ).fetchone()[0]
+
+    assert held.startswith("[-1")  # the model asked for, not the one before
+
+
+def test_an_index_that_never_said_which_model_it_holds_is_rebuilt_once(
+    tmp_path: Path,
+) -> None:
+    """A database from before this record cannot be trusted by count alone."""
+    from verbatim.embedding import embed_pending
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["One."]}) as corpus:
+        embed_pending(corpus, ConstantEmbedder("model-a", 1.0))
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.sync("model-a")
+        corpus.connection.execute("DROP TABLE vector_index_state")  # an older corpus
+        stored = corpus.embedding_count("model-a")
+
+        assert index.indexed_model() is None
+        assert ensure_current(index, stored, "model-a") is True   # rebuilt to be sure
+        assert index.indexed_model() == "model-a"
+        assert ensure_current(index, stored, "model-a") is False  # and cheap thereafter

@@ -317,3 +317,43 @@ def test_a_paper_whose_html_is_unchecked_can_be_held_back_from_chunking(
     assert [d.arxiv_id for d in everything] == ["2608.11111v1", "2608.22222v1"]
     # Only the paper whose HTML question has been answered, and answered "none".
     assert [d.arxiv_id for d in settled] == ["2608.22222v1"]
+
+
+def test_a_re_chunk_that_yields_nothing_clears_the_papers_stale_passages(
+    tmp_path: Path,
+) -> None:
+    """A paper that stops extracting must not keep serving its old text.
+
+    The chunk stage marks a paper chunked even when extraction produced
+    nothing - a PDF that now fails, or one past the layout timeout - so
+    without this the old passages stayed searchable and citable under a
+    checksum the file no longer has, while the database recorded a successful
+    re-chunk.
+    """
+    from helpers import chunked_corpus
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Original text about qubits."]}) as corpus:
+        assert corpus.chunks_for_paper("2608.11111v1")
+
+        # What the stage does when this paper's extraction returned nothing.
+        corpus.record_chunks([], for_papers=["2608.11111v1"])
+
+        assert corpus.chunks_for_paper("2608.11111v1") == []
+        assert corpus.search_chunks("qubits") == []
+
+
+def test_a_batch_clears_only_the_papers_it_covered(tmp_path: Path) -> None:
+    """One paper failing to extract must not disturb the rest of the batch."""
+    from helpers import chunked_corpus
+
+    with chunked_corpus(
+        tmp_path,
+        {"2608.11111v1": ["Text about qubits."], "2608.22222v1": ["Text about lensing."]},
+    ) as corpus:
+        surviving = corpus.chunks_for_paper("2608.22222v1")
+        corpus.record_chunks([], for_papers=["2608.11111v1"])
+
+        assert corpus.chunks_for_paper("2608.11111v1") == []
+        assert [c.chunk_id for c in corpus.chunks_for_paper("2608.22222v1")] == [
+            c.chunk_id for c in surviving
+        ]

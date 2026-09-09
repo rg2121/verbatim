@@ -1051,7 +1051,9 @@ def run() -> None:
                     produced = extract_html_chunks(
                         batch, chunk_size=args.chunk_size, overlap=args.overlap
                     )
-                    corpus.record_chunks(produced)
+                    corpus.record_chunks(
+                        produced, for_papers=[source.arxiv_id for source in batch]
+                    )
                     corpus.mark_html_chunked(batch, fingerprint)
                     print(f"  chunked {min(start + len(batch), len(html_pending))}"
                           f"/{len(html_pending)} HTML", end="\r", flush=True)
@@ -1074,7 +1076,9 @@ def run() -> None:
                     produced = extract_pdf_chunks(
                         batch, chunk_size=args.chunk_size, overlap=args.overlap
                     )
-                    corpus.record_chunks(produced)
+                    corpus.record_chunks(
+                        produced, for_papers=[download.arxiv_id for download in batch]
+                    )
                     corpus.mark_chunked(batch, fingerprint)
                     written += len(produced)
                     print(

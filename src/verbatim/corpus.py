@@ -459,17 +459,28 @@ class CorpusStore:
                 [(now, fingerprint, download.sha256, download.arxiv_id) for download in downloads],
             )
 
-    def record_chunks(self, chunks: list[Chunk]) -> None:
-        """Replace the stored chunks for every paper represented in `chunks`.
+    def record_chunks(
+        self, chunks: list[Chunk], for_papers: Sequence[str] | None = None
+    ) -> None:
+        """Replace the stored chunks for every paper this pass covered.
 
         A paper is held as exactly one chunking, from one source. Deleting only
         the chunks sharing a checksum would leave a paper's PDF chunks behind
         when it was re-read from its HTML, so the same passages would sit in
         the index twice, under two sources, and be retrieved twice.
+
+        `for_papers` is the papers that were *attempted*, which is not the same
+        as the papers that produced something. Derived from the chunks alone, a
+        re-chunk that yielded nothing deleted nothing: a paper whose PDF now
+        fails to extract - or exceeds the layout timeout, which is recorded as
+        chunked so it is not retried for ever - kept its old passages and their
+        vectors, still searchable and still citable, under a checksum the file
+        no longer has. Callers that know what they attempted should say so.
         """
         now = _timestamp()
+        covered = set(for_papers or ()) | {chunk.arxiv_id for chunk in chunks}
         with self.connection:
-            for arxiv_id in {chunk.arxiv_id for chunk in chunks}:
+            for arxiv_id in covered:
                 self.connection.execute(
                     "DELETE FROM chunks WHERE arxiv_id = ?", (arxiv_id,)
                 )

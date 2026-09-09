@@ -61,6 +61,7 @@ def sync_category(
     fetched = inserted = updated = requests = 0
     total_available = 0
     newest_seen: str | None = None
+    failed = False
     stopped = "reached the limit"
     start = 0
 
@@ -75,9 +76,12 @@ def sync_category(
             )
         except (OSError, RuntimeError, ValueError) as error:
             # Stop cleanly rather than raising: papers from earlier pages are
-            # already committed, and recording the watermark below means the
-            # next run resumes instead of walking the category again.
+            # already committed. The watermark is deliberately *not* advanced
+            # below - see the note there - because pages this run never
+            # reached hold older papers, and moving the mark past them would
+            # put them permanently behind it.
             stopped = f"failed after {requests} request(s): {error}"
+            failed = True
             break
         requests += 1
         total_available = page.total_results or total_available
@@ -108,7 +112,16 @@ def sync_category(
             stopped = "exhausted the category"
             break
 
-    corpus.record_sync(category, newest_seen, fetched)
+    # A run that failed part-way records what it fetched and leaves the
+    # watermark where it was. Papers arrive newest-first, so a run that stopped
+    # early has the newest pages and not the older ones; advancing the mark to
+    # the newest paper seen would make the next run stop immediately and skip
+    # everything the failure prevented it from reaching - permanently, since
+    # the mark only moves forward. Passing None preserves the stored value,
+    # because record_sync takes the greater of the two. Re-walking the pages
+    # that did succeed costs one request each and refreshes rather than
+    # duplicates them.
+    corpus.record_sync(category, None if failed else newest_seen, fetched)
     return SyncReport(
         category=category,
         fetched=fetched,
