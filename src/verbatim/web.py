@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+import queue
 import threading
 from pathlib import Path
 from typing import Any
@@ -35,11 +36,56 @@ from verbatim.embedding import FastEmbedEmbedder
 from verbatim.retrieval import hybrid_search
 
 MAX_LIMIT = 50
+# A review is minutes of generation per section, so the ceiling is low on
+# purpose: this endpoint is the most expensive thing the server can be asked
+# to do, and the planner is told to write three to five sections anyway.
+MAX_SECTIONS = 6
 
 
 def _event(name: str, payload: dict[str, Any]) -> str:
     """One server-sent event. The name routes it to the page's handler."""
     return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
+    """One finished section, with the trace of how it was arrived at."""
+    return {
+        "heading": section.heading,
+        "text": section.answer.text,
+        "declined": section.answer.declined,
+        "evidence": list(section.evidence_lines),
+        "citations": [
+            {
+                "arxiv_id": citation.arxiv_id,
+                "title": citation.title,
+                "locator": render_locator(
+                    citation.source_kind, citation.page_number, citation.section_path
+                ),
+                "source_url": citation.source_url,
+            }
+            for citation in section.answer.citations
+        ],
+        "rejected": len(section.answer.rejected),
+        "shape": entry.shape,
+        "outcome": entry.outcome,
+        "attempts": [
+            {
+                "strategy": attempt.strategy,
+                "verified": attempt.verified,
+                "rejected": attempt.rejected,
+                "verdict": attempt.verdict,
+                "route": attempt.route,
+                "error": attempt.error,
+            }
+            for attempt in entry.attempts
+        ],
+    }
+
+
+def _usage_of(model: Any) -> str:
+    """What the run cost, when the backend counted it."""
+    usage = getattr(model, "usage", None)
+    return usage.render() if usage is not None else "cost not reported"
 
 
 def _turns(history: str | None) -> list[Turn]:
@@ -182,6 +228,91 @@ def create_app(
             "mode": mode,
             "results": [match_to_dict(match) for match in matches],
         }
+
+    @app.get("/api/report")
+    def report(
+        topic: str = Query(min_length=1, description="What the review is about"),
+        sections: int = Query(4, ge=1, le=MAX_SECTIONS),
+        passages: int = Query(6, ge=1, le=MAX_LIMIT),
+        agents: bool = Query(
+            True,
+            description=(
+                "Route each section by shape and escalate through strategies "
+                "when the verifier rejects one. False runs a single rung."
+            ),
+        ),
+    ) -> Any:
+        """Write a sectioned review, streaming each section as it lands.
+
+        A review is minutes of generation, so it streams for the same reason
+        an answer does. The events are the ask route's vocabulary extended by
+        one: `working` when a section starts, `section` when it is written and
+        checked, then `report` carrying the assembled markdown and the ledger,
+        then `done`.
+
+        The orchestration runs on a thread of its own with its own corpus
+        connection, and reaches this generator through a queue. It cannot run
+        inline: the work is a blocking loop and the events have to leave the
+        generator while it is still going.
+        """
+        from verbatim.orchestrator import orchestrate
+        from verbatim.report import render_markdown
+
+        events: queue.Queue = queue.Queue()
+        model = answering()
+        encoder_for_run = embedder()
+
+        def run() -> None:
+            # Its own store: this runs on a thread that has none, and a
+            # connection may only be used where it was opened.
+            try:
+                with CorpusStore(database) as own:
+                    built, ledger = orchestrate(
+                        own,
+                        encoder_for_run,
+                        model,
+                        lambda system, user: model.complete_text(system, user),
+                        topic,
+                        max_sections=sections,
+                        per_section=passages,
+                        ladder=None if agents else ("hybrid",),
+                        on_section=lambda heading, done, total: events.put(
+                            ("working", {"heading": heading, "done": done, "total": total})
+                        ),
+                        on_section_done=lambda section, entry: events.put(
+                            ("section", _section_payload(section, entry))
+                        ),
+                    )
+                    events.put((
+                        "report",
+                        {
+                            "topic": built.topic,
+                            "markdown": render_markdown(built, ledger=ledger),
+                            "ledger_markdown": ledger.render_markdown(),
+                            "escalations": ledger.escalations,
+                        },
+                    ))
+            except (RuntimeError, OSError, ValueError) as error:
+                events.put(("failed", {"message": str(error)}))
+            finally:
+                events.put(None)
+
+        def stream() -> Any:
+            worker = threading.Thread(target=run, name="report", daemon=True)
+            worker.start()
+            while True:
+                item = events.get()
+                if item is None:
+                    break
+                name, payload = item
+                yield _event(name, payload)
+            yield _event("done", {"cost": _usage_of(model)})
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/papers/{arxiv_id}")
     def paper(arxiv_id: str) -> dict[str, Any]:
@@ -369,6 +500,16 @@ PAGE = """<!doctype html>
   .refs p { margin: .25rem 0; }
   .refs a { color: var(--accent); text-decoration: none; }
   .rejected { color: #b45309; }
+  .sec { border-left: 2px solid var(--line); padding: 0 0 0 .85rem; margin: 1.1rem 0; }
+  .sec h3 { font-size: .98rem; margin: 0 0 .4rem; line-height: 1.35; }
+  .trace { color: var(--muted); font-size: .78rem; margin: .45rem 0 0;
+           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .pending { opacity: .55; }
+  details { margin-top: 1rem; }
+  summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+  pre.md { white-space: pre-wrap; font-size: .8rem; background: var(--card);
+           border: 1px solid var(--line); border-radius: 6px; padding: .8rem;
+           overflow-x: auto; }
   article {
     background: var(--card); border: 1px solid var(--line); border-radius: 8px;
     padding: .9rem 1rem; margin-bottom: .75rem;
@@ -439,6 +580,15 @@ PAGE = """<!doctype html>
     </form>
     <p class="note" id="askstatus"></p>
   </div>
+
+  <form id="reportform">
+    <input type="search" id="rt" placeholder="Or write a review on a topic"
+           aria-label="Topic to review">
+    <label class="meta"><input type="checkbox" id="ragents" checked> orchestrate</label>
+    <button type="submit" id="reportgo">Review</button>
+  </form>
+  <p class="note" id="reportstatus"></p>
+  <div id="reportout"></div>
 
   <footer id="stats"></footer>
 </main>
@@ -662,8 +812,84 @@ function runAsk(event) {
   };
 }
 
+function renderSectionCard(payload) {
+  const cited = payload.citations.map((c, i) =>
+    '<p>[' + (i + 1) + '] <a href="' + escapeHtml(c.source_url) + '">'
+    + escapeHtml(c.title) + '</a><span class="meta"> — arXiv:'
+    + escapeHtml(c.arxiv_id) + ", " + escapeHtml(c.locator) + "</span></p>").join("");
+  const trace = payload.attempts.map((a) => {
+    if (a.error) return "* " + a.strategy + ": failed — " + escapeHtml(a.error);
+    const route = a.route ? " via " + escapeHtml(a.route) : "";
+    return "* " + escapeHtml(a.strategy) + route + ": " + a.verified + " verified, "
+      + a.rejected + " rejected \u2192 " + escapeHtml(a.verdict);
+  }).join("<br>");
+  return [
+    '<div class="sec">',
+    "  <h3>", escapeHtml(payload.heading), "</h3>",
+    '  <p class="text">', escapeHtml(payload.text), "</p>",
+    payload.evidence.length
+      ? '<p class="meta">' + escapeHtml(payload.evidence.join(" ")) + "</p>" : "",
+    cited ? '<div class="refs">' + cited + "</div>" : "",
+    '  <p class="trace">', escapeHtml(payload.shape), " \u2014 ",
+    escapeHtml(payload.outcome), "<br>", trace, "</p>",
+    "</div>",
+  ].join("");
+}
+
+let reviewing = null;
+
+function runReport(event) {
+  event.preventDefault();
+  const topic = $("rt").value.trim();
+  if (!topic) return;
+  if (reviewing) reviewing.close();
+  $("reportgo").disabled = true;
+  $("reportout").innerHTML = "";
+  $("reportstatus").textContent = "Planning the sections\u2026";
+
+  const url = "/api/report?topic=" + encodeURIComponent(topic)
+    + "&agents=" + ($("ragents").checked ? "true" : "false");
+  reviewing = new EventSource(url);
+
+  reviewing.addEventListener("working", (e) => {
+    const at = JSON.parse(e.data);
+    $("reportstatus").textContent =
+      "Section " + at.done + " of " + at.total + ": " + at.heading;
+  });
+  reviewing.addEventListener("section", (e) => {
+    $("reportout").insertAdjacentHTML("beforeend", renderSectionCard(JSON.parse(e.data)));
+  });
+  reviewing.addEventListener("report", (e) => {
+    const done = JSON.parse(e.data);
+    $("reportstatus").textContent = done.escalations
+      ? "Review complete. " + done.escalations + " section(s) needed another strategy."
+      : "Review complete. Every section was accepted on its first strategy.";
+    $("reportout").insertAdjacentHTML("beforeend",
+      "<details><summary>The whole review as markdown</summary>"
+      + '<pre class="md">' + escapeHtml(done.markdown) + "</pre></details>");
+  });
+  reviewing.addEventListener("failed", (e) => {
+    $("reportstatus").textContent = "Review failed: " + JSON.parse(e.data).message;
+  });
+  reviewing.addEventListener("done", (e) => {
+    const cost = JSON.parse(e.data).cost;
+    if (cost) $("reportstatus").textContent += "  (" + cost + ")";
+    reviewing.close();
+    reviewing = null;
+    $("reportgo").disabled = false;
+  });
+  reviewing.onerror = () => {
+    if (!reviewing) return;
+    reviewing.close();
+    reviewing = null;
+    $("reportstatus").textContent = "Connection lost while writing the review.";
+    $("reportgo").disabled = false;
+  };
+}
+
 $("askform").addEventListener("submit", runAsk);
 $("askreset").addEventListener("click", resetThread);
+$("reportform").addEventListener("submit", runReport);
 loadStats();
 </script>
 </body>

@@ -827,7 +827,8 @@ verbatim serve --port 8000
 | route | returns |
 |---|---|
 | `GET /api/search?q=&mode=&limit=&arxiv_id=` | passages, each with its locator, licence and source URL |
-| `GET /api/ask?q=&arxiv_id=` | an answer as server-sent events, drafted live and then verified |
+| `GET /api/ask?q=&arxiv_id=&history=` | an answer as server-sent events, drafted live and then verified |
+| `GET /api/report?topic=&sections=&passages=&agents=` | a sectioned review as server-sent events, each section streamed as it lands |
 | `GET /api/papers/{arxiv_id}` | one paper's metadata, or 404 |
 | `GET /api/stats` | the same pipeline counts `stats` prints |
 
@@ -841,6 +842,27 @@ else - the draft is what the model said, the answer is what survived checking
 fires. Streaming changes when text is shown, and nothing about what is
 accepted. The page's ask box renders all of this: live draft, then verified
 text, references, rejected-citation count, and the subject warning.
+
+The review route streams for the same reason the answer route does, and its
+events are the same vocabulary extended by one: `working` when a section
+starts, `section` when it has been written and checked - carrying its
+citations, its evidence account, and the ladder's attempts including which
+tools the agent rung called - then `report` with the assembled markdown and
+the ledger, then `done` with what the run cost. The orchestration runs on a
+thread of its own with its own corpus connection, because the work is a
+blocking loop and the events have to leave the generator while it is still
+going. `agents=false` runs the single-rung version. Measured live over HTTP:
+a two-section review arrived as `working, section, working, section, report,
+done` - sections landing as they were written rather than batched at the end.
+
+The page has a review panel over it, and sections appear one at a time with
+their strategy trace under each, which is the orchestrator's argument made
+visible: you can watch a section be retried with a different strategy.
+
+**`report` is deliberately not an MCP tool.** A review is minutes of
+generation, MCP calls are request/response with client timeouts, and a tool
+that blocks for ten minutes and cannot stream its progress would be a worse
+version of what the CLI and this route already do well.
 
 It binds to loopback unless `--host` says otherwise: the corpus is 26 GB of
 other people's papers under mixed licences, and putting that on a network is a

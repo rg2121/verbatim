@@ -363,6 +363,7 @@ def orchestrate(
     warn_below: float = config.SUBJECT_WARN_BELOW,
     ladder: tuple[str, ...] | None = None,
     on_section: Callable[[str, int, int], None] | None = None,
+    on_section_done: Callable[[ReportSection, SectionLedger], None] | None = None,
 ) -> tuple[Report, Ledger]:
     """Plan a review, then work its sections - in parallel when asked.
 
@@ -370,6 +371,9 @@ def orchestrate(
     the literature says parallel workers are for. Each worker thread opens
     its own connection to the corpus, because SQLite connections belong to
     the thread that made them, and shares one serialised embedder.
+
+    `on_section_done` receives each finished section and its ledger entry as
+    it lands, which is what lets a review be streamed rather than waited for.
     """
     if workers < 1:
         raise ValueError("workers must be at least 1")
@@ -384,9 +388,17 @@ def orchestrate(
             check_subject=check_subject, warn_below=warn_below, ladder=ladder,
         )
         if workers == 1:
-            return work_section(corpus, shared, completion, heading, **options)
-        with CorpusStore(corpus.path) as own:
-            return work_section(own, shared, completion, heading, **options)
+            worked = work_section(corpus, shared, completion, heading, **options)
+        else:
+            with CorpusStore(corpus.path) as own:
+                worked = work_section(own, shared, completion, heading, **options)
+        if on_section_done is not None:
+            # Fired as each section lands, so a caller streaming a review has
+            # something to show before the whole thing is finished. With
+            # several workers this arrives from a worker thread, so anything
+            # the caller does here must be safe to call from one.
+            on_section_done(*worked)
+        return worked
 
     if workers == 1:
         results = [run(position, heading) for position, heading in enumerate(headings, start=1)]

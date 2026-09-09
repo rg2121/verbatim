@@ -335,3 +335,91 @@ def test_every_element_the_script_addresses_exists_in_the_markup() -> None:
     markup = re.sub(r"<script>.*?</script>", "", PAGE, flags=re.S)
     for element in sorted(set(re.findall(r'\$\("([a-zA-Z0-9_-]+)"\)', script))):
         assert f'id="{element}"' in markup, f"script uses #{element}, markup has no such id"
+
+
+class ReportScript:
+    """A model that plans two sections and cites the one passage that exists."""
+
+    def __init__(self, chunk_id: str, fail_on: str | None = None) -> None:
+        self.chunk_id = chunk_id
+        self.fail_on = fail_on
+
+    def complete_text(self, system, user):
+        # The fixture corpus has no vectors, so only the keyword leg can
+        # retrieve: the headings have to share a word with the passage.
+        return "What are superconducting qubits?\nHow quickly do qubits decohere?"
+
+    def complete(self, system, user, schema):
+        if self.fail_on and self.fail_on in user:
+            raise RuntimeError("Cannot reach Ollama at http://localhost:11434")
+        return {
+            "relevant": True,
+            "answer": "They decohere quickly [1].",
+            "citations": [{
+                "marker": 1,
+                "chunk_id": self.chunk_id,
+                "quoted_text": "Superconducting qubits decohere quickly.",
+            }],
+        }
+
+    def judge(self, system, user):
+        return "superconducting qubit decoherence"
+
+
+def report_client(tmp_path: Path, fail_on: str | None = None) -> TestClient:
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
+    ) as store:
+        chunk_id = store.all_chunks()[0].chunk_id
+    return TestClient(create_app(
+        tmp_path / "corpus.db",
+        completion=ReportScript(chunk_id, fail_on),
+        encoder=StubEncoder(),
+    ))
+
+
+def test_a_review_streams_each_section_as_it_lands(tmp_path: Path) -> None:
+    events = sse_events(
+        report_client(tmp_path).get("/api/report", params={"topic": "decoherence"}).text
+    )
+
+    names = [name for name, _ in events]
+    assert names.count("working") == 2 and names.count("section") == 2
+    # Sections arrive before the assembled review, which is the whole point.
+    assert names.index("section") < names.index("report")
+    assert names[-1] == "done"
+
+    first = next(payload for name, payload in events if name == "section")
+    assert first["heading"] == "What are superconducting qubits?"
+    assert [c["arxiv_id"] for c in first["citations"]] == ["2608.11111v1"]
+    assert first["evidence"] and "Answered from" in first["evidence"][0]
+    # The trace the CLI ledger shows travels to the page too.
+    assert first["attempts"][0]["strategy"] == "hybrid"
+    assert first["shape"] == "definitional"
+
+    assembled = next(payload for name, payload in events if name == "report")
+    assert "## What are superconducting qubits?" in assembled["markdown"]
+    assert "How this review was made" in assembled["ledger_markdown"]
+
+
+def test_a_section_that_fails_does_not_abort_the_stream(tmp_path: Path) -> None:
+    events = sse_events(
+        report_client(tmp_path, fail_on="How quickly").get(
+            "/api/report", params={"topic": "decoherence"}
+        ).text
+    )
+
+    sections = [payload for name, payload in events if name == "section"]
+    assert len(sections) == 2
+    assert not sections[0]["declined"] and sections[1]["declined"]
+    assert sections[1]["outcome"].startswith("failed")
+    assert [name for name, _ in events][-1] == "done"
+
+
+def test_the_review_endpoint_refuses_an_unbounded_request(tmp_path: Path) -> None:
+    client_app = report_client(tmp_path)
+
+    assert client_app.get("/api/report", params={"topic": ""}).status_code == 422
+    assert client_app.get(
+        "/api/report", params={"topic": "x", "sections": 50}
+    ).status_code == 422
