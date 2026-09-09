@@ -706,6 +706,52 @@ So nothing was changed. `hybrid+graph` remains the default because it is the
 incumbent and no evidence distinguishes the alternatives, which is a weaker
 reason than this file used to give and a truer one.
 
+### What the misses actually are
+
+A mean says how often the right paper is found and never what happened the
+rest of the time. `evals/failure_taxonomy.py` labels every held-out case from
+three mechanical signals - where the expected paper ranked, how much of the
+question's vocabulary appears anywhere in that paper, and how similar the
+paper that took first place is to the expected one by abstract vector:
+
+| | share | |
+|---|---|---|
+| ranked first | 60 | 68% |
+| ranked 2-5 | 15 | 17% |
+| ranked 6-10 | 6 | 7% |
+| missed, a near neighbour took first place | 5 | 6% |
+| missed, unexplained | 2 | 2% |
+| **missed because the question's words are not in the paper** | **0** | **0%** |
+
+That last row was the expected answer and it is empty. The guess going in was
+that authoring questions without the title's phrasing had produced questions
+too abstract to match - and it is wrong. Vocabulary coverage across every
+failure runs from 0.67 to 1.00: the words the question uses are in the paper
+already. Nothing here is a lexical gap.
+
+What the failures are instead is competition. The paper that took first place
+is topically adjacent in almost every case - abstract similarity 0.62 to 0.95
+to the paper the question was written from - so the corpus holds several
+papers on the subject and the ranking cannot separate near-equals. For "how do
+graph-based item embeddings compare with identifier-based ones", several
+papers here are about item embeddings, and only one of them is the one the
+question was authored against.
+
+Which exposes a limit of the metric rather than of the retrieval. Each
+held-out question names exactly one acceptable paper, because each was written
+from one abstract, so a genuinely correct answer drawn from a neighbouring
+paper is scored as a miss. The 0.758 is therefore a floor on how often the
+system retrieves something that answers the question, and the gap between that
+floor and the truth is exactly the 6% of cases where a near neighbour won.
+Closing it needs a judgement about whether an answer is supported, not a
+comparison of arXiv ids - the answer-level evaluation this project does not
+have.
+
+The two unexplained misses are worth naming rather than rounding away:
+a cleaning-robot path-planning question and one about the analytic
+continuation of a power series, where the top result is unrelated by abstract
+similarity (0.67 and 0.72) and no signal here accounts for it.
+
 A twelve-question tripwire over the shipped sample corpus runs in CI on every
 push and fails the build below mrr 0.90 (`evals/gate.jsonl`). It is coarse by
 construction - twelve plainly distinct papers out of forty - and it exists to
