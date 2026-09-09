@@ -508,3 +508,58 @@ def test_both_cite_forms_can_appear_in_one_reply() -> None:
     ]
     # Markers stay distinct, so a numeric marker still resolves to its own entry.
     assert [c["marker"] for c in payload["citations"]] == [1, 2]
+
+
+def test_the_model_client_retries_a_transient_failure_but_not_a_refusal() -> None:
+    """A local model answers or is down; a served one drops calls occasionally.
+
+    A single 502 used to kill a ten-minute evaluation. A 4xx still must not be
+    retried: a rejected request stays rejected however often it is sent.
+    """
+    from urllib.error import HTTPError
+
+    from verbatim.answers import OllamaCompletion
+
+    client = OllamaCompletion.__new__(OllamaCompletion)
+    client.host = "http://localhost:11434"
+    client.timeout = 1.0
+    client.usage = None
+
+    calls = {"n": 0}
+    bodies = [
+        HTTPError("u", 502, "Bad Gateway", {}, None),
+        HTTPError("u", 503, "Unavailable", {}, None),
+        {"message": {"content": "recovered"}},
+    ]
+
+    def fake_urlopen(request, timeout=None):
+        outcome = bodies[calls["n"]]
+        calls["n"] += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): import json; return json.dumps(outcome).encode()
+
+        return Response()
+
+    import verbatim.answers as module
+
+    original, module.urlopen = module.urlopen, fake_urlopen
+    original_sleep, module.time = module.time, type("T", (), {"sleep": staticmethod(lambda s: None)})
+    try:
+        body = client._request(module.Request("http://localhost:11434/api/chat"))
+        assert body["message"]["content"] == "recovered"
+        assert calls["n"] == 3
+
+        calls["n"] = 0
+        bodies[0] = HTTPError("u", 400, "Bad Request", {}, None)
+        import pytest
+
+        with pytest.raises(RuntimeError, match="refused the request"):
+            client._request(module.Request("http://localhost:11434/api/chat"))
+        assert calls["n"] == 1     # not retried
+    finally:
+        module.urlopen, module.time = original, original_sleep

@@ -6,8 +6,9 @@ from dataclasses import asdict, dataclass, field
 import json
 import re
 import threading
+import time
 from typing import Any, Protocol
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from verbatim import config
@@ -297,8 +298,11 @@ class OllamaCompletion:
         *,
         host: str | None = None,
         timeout: float | None = None,
+        protocol: str | None = None,
     ) -> None:
         self.host = (host or config.OLLAMA_HOST).rstrip("/")
+        # Which structure the model is asked for. See `complete`.
+        self.protocol = protocol or config.ANSWER_PROTOCOL
         # What this client has been asked to do, for the cost footer.
         self.usage = Usage()
         # Set before model discovery, which makes a request.
@@ -336,6 +340,13 @@ class OllamaCompletion:
         parsed correctly on every attempt, so the backend elicits that and
         converts it to the shape the caller expects.
         """
+        if self.protocol == "tools":
+            payload = self._complete_with_tools(system, user, schema)
+            if payload is not None:
+                return payload
+            # The model ignored the tool, which is what the 4B one always did.
+            # Falling through rather than failing means the worst case is the
+            # protocol that already works.
         body = self._post(
             "/api/chat",
             {
@@ -356,6 +367,50 @@ class OllamaCompletion:
                 f"format. Response began: {content[:200]!r}"
             )
         return payload
+
+    def _complete_with_tools(
+        self, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Ask for the answer as a tool call, or return None if it is ignored.
+
+        Measured on gemma4:31b-cloud: `format: "json"` and a full JSON schema
+        are both ignored on a realistic five-passage prompt, exactly as on the
+        4B model, but tool calling is honoured and returns the schema's fields.
+        Whether it produces *better* citations than the line protocol is a
+        separate question and is measured rather than assumed.
+        """
+        body = self._post(
+            "/api/chat",
+            {
+                "model": self.model,
+                "stream": False,
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "answer",
+                        "description": "Answer the question with verified citations",
+                        "parameters": schema,
+                    },
+                }],
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        self.usage.record(body)
+        for call in body.get("message", {}).get("tool_calls") or []:
+            arguments = call.get("function", {}).get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except ValueError:
+                    continue
+            if isinstance(arguments, dict) and "answer" in arguments:
+                arguments.setdefault("relevant", True)
+                arguments.setdefault("citations", [])
+                return arguments
+        return None
 
     def judge(self, system: str, user: str) -> str:
         body = self._post(
@@ -437,17 +492,42 @@ class OllamaCompletion:
         return self._request(request)
 
     def _request(self, request: Request) -> dict[str, Any]:
-        try:
-            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local host
-                body = json.loads(response.read())
-        except URLError as error:
-            raise RuntimeError(
-                f"Cannot reach Ollama at {self.host} ({error.reason}). "
-                f"Is it running? Start it with 'ollama serve'."
-            ) from error
-        if "error" in body:
-            raise RuntimeError(f"Ollama error: {body['error']}")
-        return body
+        """One call to Ollama, retrying the failures that retrying can fix.
+
+        A local model either answers or is not running, so this used to try
+        once. A model served over the network does neither reliably: measured
+        here, a sustained run of a few hundred calls draws an occasional 502,
+        and a single one of those killed a ten-minute evaluation outright.
+        Server errors and dropped connections are retried with the same
+        backoff the arXiv client uses; a 4xx is not, because a rejected
+        request is rejected however many times it is sent.
+        """
+        attempts = config.HTTP_RETRIES
+        last: Exception | None = None
+        for attempt in range(attempts + 1):
+            if attempt:
+                time.sleep(config.HTTP_BACKOFF * (2 ** (attempt - 1)))
+            try:
+                with urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+                    body = json.loads(response.read())
+            except HTTPError as error:
+                if error.code < 500:
+                    raise RuntimeError(
+                        f"Ollama at {self.host} refused the request "
+                        f"({error.code} {error.reason})."
+                    ) from error
+                last = error
+                continue
+            except (URLError, TimeoutError, OSError) as error:
+                last = error
+                continue
+            if "error" in body:
+                raise RuntimeError(f"Ollama error: {body['error']}")
+            return body
+        raise RuntimeError(
+            f"Cannot reach Ollama at {self.host} after {attempts + 1} attempts "
+            f"({last}). Is it running? Start it with 'ollama serve'."
+        )
 
 
 def parse_line_protocol(content: str) -> dict[str, Any] | None:

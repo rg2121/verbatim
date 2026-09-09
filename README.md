@@ -957,6 +957,44 @@ reason. The exception proves the widening rule rather than breaking it: the
 cost of widening is paid where the ranking was already right, so a widener
 that can tell those questions apart keeps the gain without the bill.
 
+**Asking the model for structure a different way changes nothing, and asking
+it to cite harder makes things worse.** The flat `ANSWER:`/`CITE` protocol was
+adopted because a 4B local model ignored `format: "json"`, a full JSON schema
+and tool calling on every realistic prompt. Re-probed on `gemma4:31b`, the
+first two are still ignored - and tool calling now works. Whether it is
+*better* is a separate question, measured over 20 held-out questions with
+three runs per arm against identical retrieval:
+
+| out of 20 | line protocol | tool calling |
+|---|---|---|
+| answers with a verified citation | 17.0 | 16.0 |
+| every claim carries a marker | 15.0 | 13.7 |
+| cited the expected paper | 16.7 | 16.0 |
+
+Tool calling is no better and possibly slightly worse, with ranges that
+overlap - so the protocol chosen for a weak model turns out to be the right
+one for a strong model too. It ships behind `VERBATIM_ANSWER_PROTOCOL=tools`, off,
+with these numbers rather than a preference behind it.
+
+The second experiment targeted a measured defect: about a quarter of answers
+contain a sentence that states something and carries no marker. The prompt
+already asks for one on every claim, so the test was whether saying it more
+forcefully - and telling the model that an unmarked sentence is shown as
+unsupported - would help.
+
+| out of 20 | current prompt | stricter instruction |
+|---|---|---|
+| every claim carries a marker | 16.0 | 15.7 |
+| answers with a verified citation | 17.3 | 16.3 |
+| **citations rejected** | **1.3** | **2.7** |
+
+It made everything worse, and doubled the rejected citations. The mechanism is
+visible in that last row: pressed to attach a marker to every sentence, the
+model reaches for quotes it cannot reproduce exactly and paraphrases them, and
+verification throws them out. **Pressuring a model to cite more produces more
+unverifiable citations, not more verified ones.** The uncited-claim rate is
+not something asking harder will fix.
+
 **Cross-encoder reranking makes retrieval worse here**, on all three local
 models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
 set of the time). Reranking pays when the right passage sits at rank 8; at

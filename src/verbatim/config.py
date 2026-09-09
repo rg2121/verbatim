@@ -79,6 +79,12 @@ EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "fal
 # that should not follow from a default.
 # Stage events go to stderr so stdout stays parseable. "json" for a shipper,
 # "text" for a person.
+# How the answering model is asked for structure. "lines" is the flat
+# ANSWER/CITE protocol, which every model tested has followed; "tools" uses
+# Ollama tool calling, which the 4B model ignored on realistic prompts and the
+# 31B one honours. Default stays "lines" until the two are measured.
+ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
+
 LOG_FORMAT = _text("VERBATIM_LOG_FORMAT", "text")
 LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 
