@@ -2,6 +2,19 @@
 
 A local-first, citation-focused literature-review assistant for scientific papers.
 
+**[What it looks like](demo/transcript.md)** · **[Architecture](docs/architecture.md)**
+· **[Evaluation](docs/evaluation.md)** · **[Decisions](docs/decisions)**
+· **[Postmortems](docs/postmortems)**
+
+Every claim in an answer carries a quote, and every quote is checked against
+the passage it cites before the answer is shown. What the project has learned
+is mostly what did *not* work: reranking, query rewriting, HyDE, always-on
+title matching and question decomposition were each built, measured, and left
+off, and a held-out answer key later showed that the differences used to rank
+several of them were inside the noise. Those measurements are in
+[docs/evaluation.md](docs/evaluation.md) and
+[docs/postmortems](docs/postmortems).
+
 ## Architecture
 
 `data/corpus.db` is the cumulative source of truth. Everything else — the JSON
@@ -1189,6 +1202,20 @@ training policy.
 
 PyMuPDF is AGPL-3.0. That is fine for local personal use and is a decision to
 revisit before building any hosted product on top of it.
+
+## Running it in a container
+
+`docker compose run --rm verbatim search "how do transformers handle long context" --state sample/corpus.db`
+works without installing Python, uv or an ONNX runtime, and
+`docker compose up verbatim-web` serves the page on `127.0.0.1:8000`. Retrieval
+needs no model, so the default profile starts nothing that downloads weights;
+`--profile ollama` adds one for `ask` and `report`.
+
+The corpus is a mounted volume rather than part of the image - it is 26 GB of
+other people's papers - and the web port is bound to loopback for the same
+reason the CLI's `serve` is. The image is a reproducible environment for the
+tool, not a production deployment: this is a local-first assistant whose corpus
+lives on one machine.
 
 ## Configuration
 

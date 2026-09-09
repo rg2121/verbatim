@@ -27,6 +27,8 @@ import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from verbatim.logs import event
+
 RUNS_TABLE = "runs"
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
@@ -106,6 +108,7 @@ def record_run(corpus: Any, command: str, **inputs: Any):
         # otherwise succeeded, which is the opposite of what this is for.
         pass
 
+    event("run.start", command=command, run_id=run.run_id, **_plain(inputs))
     error: str | None = None
     try:
         yield run
@@ -114,6 +117,15 @@ def record_run(corpus: Any, command: str, **inputs: Any):
         raise
     finally:
         finished = datetime.now(UTC)
+        seconds = round((finished - started).total_seconds(), 3)
+        # The stream and the ledger are written from one place, so they cannot
+        # disagree about what happened.
+        event(
+            "run.failed" if error else "run.finish",
+            level=40 if error else 20,
+            command=command, run_id=run.run_id, ok=error is None,
+            seconds=seconds, error=error, **_plain(run.outputs),
+        )
         try:
             with connection:
                 connection.execute(
@@ -122,7 +134,7 @@ def record_run(corpus: Any, command: str, **inputs: Any):
                     f" WHERE run_id = ?",
                     (
                         finished.isoformat(),
-                        (finished - started).total_seconds(),
+                        seconds,
                         int(error is None),
                         error,
                         json.dumps(_plain(run.outputs)),

@@ -59,6 +59,7 @@ from verbatim.evaluation import (
 )
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
+from verbatim.logs import configure_logging
 from verbatim.runs import record_run, recent_runs, render_runs
 from verbatim.sampling import export_sample
 from verbatim.research import research
@@ -77,6 +78,7 @@ from verbatim.storage import (
 
 def main() -> None:
     """Entry point: report expected failures as messages, not tracebacks."""
+    configure_logging()
     try:
         run()
     except (RuntimeError, ValueError, OSError) as error:

@@ -1,0 +1,53 @@
+# Two services, and the second is optional on purpose.
+#
+#   docker compose run --rm verbatim search "how do transformers handle long context" \
+#     --state sample/corpus.db
+#   docker compose up verbatim-web          # the page on http://localhost:8000
+#   docker compose --profile ollama up # add a model, for `ask` and `report`
+#
+# Retrieval needs no model at all, so the default profile starts nothing that
+# downloads gigabytes of weights. `ask` and `report` do, and say so when the
+# host is unreachable.
+services:
+  verbatim:
+    build: .
+    volumes:
+      - corpus:/data
+    environment:
+      # Overridden here rather than in the image so a compose user can point
+      # at a local model without rebuilding.
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+    profiles: ["", "cli"]
+
+  verbatim-web:
+    build: .
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--state", "sample/corpus.db"]
+    ports:
+      # Bound to loopback on the host: the corpus is other people's papers
+      # under mixed licences, and exposing it is a decision, not a default.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - corpus:/data
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+    healthcheck:
+      # /api/health reports a failed last ingest and an empty corpus, both of
+      # which serve pages perfectly well.
+      test: ["CMD", "python", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8000/api/health'))['ok'] else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - models:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    profiles: ["ollama"]
+
+volumes:
+  corpus:
+  models:

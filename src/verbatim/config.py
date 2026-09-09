@@ -77,6 +77,11 @@ EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "fal
 # Answer generation. Every model runs locally through Ollama: the corpus is
 # 26 GB of other people's papers, and sending it to a third party is a decision
 # that should not follow from a default.
+# Stage events go to stderr so stdout stays parseable. "json" for a shipper,
+# "text" for a person.
+LOG_FORMAT = _text("VERBATIM_LOG_FORMAT", "text")
+LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
+
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
