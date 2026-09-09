@@ -645,52 +645,66 @@ Everything above was measured on an answer key written alongside the system.
 That is a real weakness and not a small one: a question that retrieved badly
 could be reworded until it did not, and no amount of care rules that out from
 the inside. So a second key was built to be uncontaminated -
-`evals/heldout.jsonl`, 41 cases authored from each paper's title and abstract
+`evals/heldout.jsonl`, 93 cases authored from each paper's title and abstract
 only, with no retrieval run against any question, committed before it was
 scored, and reported at whatever it scored. Papers were picked by a fixed rule
 before any question existed, excluding every paper already in the development
-key and every subject probed by hand while building the system.
+key and every subject probed by hand while building the system. 88 answerable
+cases over 88 distinct papers in 29 categories.
 
 | mode | r@1 | r@5 | r@10 | mrr | mrr on the development key |
 |---|---|---|---|---|---|
-| keyword-any | 0.64 | 0.72 | 0.83 | 0.685 | 0.705 |
-| vector | 0.64 | 0.75 | 0.83 | 0.683 | 0.818 |
-| hybrid | 0.58 | 0.81 | 0.89 | 0.675 | 0.866 |
-| hybrid+graph *(default)* | 0.58 | 0.81 | 0.89 | 0.675 | **0.869** |
-| hybrid+compare | 0.58 | 0.81 | 0.89 | 0.668 | 0.866 |
-| **hybrid+titles** | **0.64** | **0.83** | **0.92** | **0.727** | 0.822 |
+| keyword-any | 0.62 | 0.76 | 0.84 | 0.697 | 0.705 |
+| hybrid+titles | 0.65 | 0.85 | 0.92 | 0.737 | 0.822 |
+| hybrid+compare | 0.68 | 0.85 | 0.92 | 0.752 | 0.866 |
+| vector | 0.69 | 0.83 | 0.90 | 0.756 | 0.818 |
+| hybrid | 0.68 | 0.85 | 0.92 | 0.758 | 0.866 |
+| hybrid+graph *(default)* | 0.68 | 0.85 | 0.92 | 0.758 | 0.869 |
 
-Two things fall out, and the second is uncomfortable.
+**The development numbers are inflated by about an eighth.** The shipped
+default scores mrr 0.869 there and **0.758** here, on questions of the same
+kind over the same corpus. The difference is not the retrieval; it is that one
+set of questions was written while watching the retrieval and the other was
+not. Every figure in the section above should be read with that discount.
 
-**The development numbers are inflated by about a fifth.** The shipped default
-scores mrr 0.869 there and **0.675** here, on questions of the same kind over
-the same corpus. The difference is not the retrieval; it is that one set of
-questions was written while watching the retrieval and the other was not. Any
-figure in the section above should be read with that discount in mind.
+**And none of these modes can be told apart.** Reciprocal rank was recorded
+per case and the modes compared pairwise, with a 10,000-round paired bootstrap
+over the 88 cases:
 
-**The ranking reverses.** `hybrid+titles` is measured *worse* on the
-development key - 0.822 against 0.866 - and ships off by default because of
-it. On questions that were never tuned against, it is the best mode by every
-measure, and by a wider margin than it lost by. The leg this file spends
-several paragraphs explaining the cost of may in fact be the one to run.
+| comparison | difference | 95% interval | |
+|---|---|---|---|
+| graph − hybrid | +0.000 | [+0.000, +0.000] | the gate never fires here |
+| graph − compare | +0.006 | [−0.014, +0.028] | not distinguishable |
+| graph − titles | +0.021 | [−0.034, +0.075] | not distinguishable |
 
-That is not enough to flip the default, and it has not been flipped. Thirty-six
-answerable cases are few, they carry an authoring bias of their own - the
-instruction to avoid the title's phrasing can overshoot into questions no
-researcher would type, which is most of what the three total misses look like -
-and reversing a default on one small set would repeat the original mistake
-facing the other way. What it is enough for is to stop treating the
-development ranking as settled, and to say so here rather than in a footnote.
+Every interval straddles zero. At this sample size a difference of a few
+hundredths of mrr is indistinguishable from noise, and the differences this
+file has been reporting are smaller than that: `hybrid+graph` was made the
+default over `hybrid` on **0.003** mrr across 63 cases, which the interval
+above says is unmeasurable. That is a fair criticism of the reasoning, and it
+stands whatever the gate's other merits.
 
-Two smaller results. The graph gate contributes exactly nothing on this set
-(0.675 either way), which is correct: no case here is definition-shaped, and
-the gate is supposed to be inert on everything else - the first independent
-check that its scoping does what it claims. And the comparison gate finally
-has its missing price: on the four comparison-shaped questions with a single
-answering paper, it costs mrr 0.675 -> 0.668. Set against the gain it was
-measured to give on genuinely compound questions (all@10 0.36 -> 0.55), the
-trade is now a number in both directions rather than a benefit with an
-unmeasured cost.
+The gates are still defensible - just not on aggregate mrr. The graph gate
+exists to fix definitional questions, and it does: "what is the Adam
+optimizer" goes from nothing in the top ten to rank 3, which is visible in the
+case and invisible in a mean over 63. An aggregate cannot see three cases
+move. The honest statement is that a gate targeted at a question shape should
+be judged on that shape, and that the corpus-wide number was never evidence
+either way.
+
+Two things this set cannot decide. It is **silent on the graph gate** by
+construction - it contains no definition-shaped questions, so the leg is inert
+and the difference is exactly 0.000, which at least confirms the scoping does
+what it claims. And it cannot settle whether `hybrid+titles` should be the
+default: the first 36 cases had it winning by 0.052, the next 52 had it losing
+by 0.071, and the pooled interval contains zero. That swing between batches is
+itself the most useful number here, because it is far larger than any
+difference between modes. Deciding this needs several hundred cases, not
+another fifty.
+
+So nothing was changed. `hybrid+graph` remains the default because it is the
+incumbent and no evidence distinguishes the alternatives, which is a weaker
+reason than this file used to give and a truer one.
 
 A twelve-question tripwire over the shipped sample corpus runs in CI on every
 push and fails the build below mrr 0.90 (`evals/gate.jsonl`). It is coarse by
@@ -1018,11 +1032,12 @@ unanswerable for reasons no ranking can fix.
 87-case development key was written alongside the system - 63 answerable by
 one paper, 11 compound, 13 unanswerable - and twenty of the answerable cases
 are an auto-seeded floor of paper titles, which retrieve their own paper for
-reasons a real question does not. The 41-case held-out key was authored blind
-and frozen before scoring, and the default scores mrr 0.675 on it against
+reasons a real question does not. The 93-case held-out key was authored blind
+and frozen before scoring, and the default scores mrr 0.758 on it against
 0.869 on the development key. Neither set transfers to another corpus without
-re-measuring, and the held-out one is small enough that its own ranking is
-not yet decisive. See *What a held-out set measures*.
+re-measuring, and a paired bootstrap over the held-out cases cannot
+distinguish any of the retrieval modes from any other. See *What a held-out
+set measures*.
 
 **Vector search is brute force.** sqlite-vec scans every vector, which is
 measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at
