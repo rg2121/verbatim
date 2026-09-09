@@ -83,6 +83,75 @@ answer drawn from a neighbouring paper scores as a miss. **0.758 is a floor.**
 Closing the gap needs a judgement about whether an answer is supported — an
 answer-level evaluation this project does not yet have.
 
+## Scoring the answers, not the arXiv ids
+
+Everything above asks whether retrieval surfaced an expected paper. That
+understates the system by construction, and the failure taxonomy says by how
+much: each held-out question names one acceptable paper, so a correct answer
+drawn from an equally good neighbour is counted a miss.
+`verbatim eval-answers` scores what the system actually produced.
+
+Over 20 held-out questions on the full corpus:
+
+| | |
+|---|---|
+| declined outright | 0% |
+| at least one verified citation | 80–90% |
+| every claim-carrying sentence has a marker | 70–75% |
+| cited the paper the question was written from | 80–85% |
+
+Two ranges rather than two numbers, because generation is not deterministic:
+the same twenty questions on the same corpus gave 90% and 80% on consecutive
+runs. Answer-level metrics need repeats before a difference means anything.
+
+The third row is the one that settles a question left open above. Retrieval
+puts the expected paper first 68% of the time and somewhere in ten results 92%
+of the time; the *answer* cites it 80–85% of the time, because it can draw on
+any retrieved passage rather than only the top one. **0.758 was a floor, as
+suspected, and this is roughly where the ceiling sits.**
+
+## Whether a quote supports the claim it is attached to
+
+The remaining question cannot be counted: does a cited quote actually support
+the sentence it is attached to? Asking a model that is the move this project
+measured failing seven times, so the judge is never believed on its word.
+Every real (claim, quote) pair is scored beside two mismatched controls - an
+easy one borrowing a quote from a different question's answer, and a hard one
+borrowing from the *same* answer, where the quote is on the same subject, from
+the same paper, and still not what this claim rests on.
+
+| | supported |
+|---|---|
+| real pairs | 89% |
+| hard control — same answer, wrong claim | **62%** |
+| easy control — another question entirely | 0% |
+
+Against the easy control the judge looks excellent, separating by 89 points.
+That number is worthless: telling cosmology from recommender systems is a
+topic classifier's job. Against the hard control it separates by **26 points**,
+which is real but modest, and it calls **62% of known mismatches supported**.
+
+Two conclusions, and the second matters more.
+
+**The old finding is refined rather than overturned.** Asked whether retrieved
+passages are relevant to a question, models were useless - 0/6, and the
+largest model was worst. Asked whether a specific quote states a specific
+claim, the same kind of model separates real pairs from near-misses by 26
+points. Sufficiency and entailment are different questions, and only the
+second is one a model can partly answer.
+
+**And it must not gate anything.** A judge that accepts 62% of pairs known to
+be mismatched cannot be allowed to accept or reject a citation. That is
+precisely why verification stays a deterministic substring check and why the
+critic never judges - this measurement is the evidence for both, rather than a
+reason to relax either.
+
+One caveat against my own control: two quotes from the same paper on the same
+subject may *both* support a claim, so some of that 62% are probably correct
+rather than lenient. The hard control is a pessimistic adversary and the true
+separation is somewhere between 26 and 89 points. Narrowing that needs
+hand-labelled pairs, which is the honest next step and is not yet done.
+
 ## Compound questions
 
 11 development cases require *every* listed paper rather than any of them,
@@ -112,5 +181,6 @@ slipping. A measurement nothing enforces is a claim rather than a guarantee.
 uv run verbatim eval --cases evals/heldout.jsonl   # the honest number
 uv run python evals/paired_bootstrap.py                # the intervals
 uv run python evals/failure_taxonomy.py                # the failure labels
+uv run verbatim eval-answers --cases evals/heldout.jsonl --limit 20 --judge
 uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90
 ```

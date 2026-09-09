@@ -165,6 +165,26 @@ def run() -> None:
         help="Which mode --min-mrr applies to (default: the shipped default)",
     )
 
+    answers_parser = subparsers.add_parser(
+        "eval-answers",
+        help="Score the answers themselves, not whether retrieval named the "
+             "expected paper",
+    )
+    answers_parser.add_argument("--cases", type=Path, default=config.EVAL_PATH)
+    answers_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    answers_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    answers_parser.add_argument("--llm", help="Generation model")
+    answers_parser.add_argument(
+        "--limit", type=int, default=20, help="Questions to answer; each costs a generation"
+    )
+    answers_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES)
+    answers_parser.add_argument(
+        "--judge", action="store_true",
+        help="Also ask a model whether each cited quote supports its claim, "
+             "scored against mismatched control pairs so the judge itself is "
+             "measured rather than believed",
+    )
+
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     index_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
@@ -623,6 +643,48 @@ def run() -> None:
                     f"below the floor of {args.min_mrr:.3f}. Either a change made "
                     f"retrieval worse, or the floor needs re-measuring on purpose."
                 )
+
+    if args.command == "eval-answers":
+        from verbatim.answer_eval import (
+            AnsweredCase,
+            judge_with_control,
+            score_answers,
+        )
+
+        cases = [c for c in load_cases(args.cases) if not c.expect_none][: args.limit]
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        answered = []
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "eval-answers", cases=len(cases), llm=args.llm
+        ) as run:
+            for position, case in enumerate(cases, start=1):
+                matches = hybrid_search(
+                    corpus, embedder, case.question, limit=args.passages,
+                    max_per_paper=config.ASK_MAX_PER_PAPER, use_graph=True,
+                )
+                answered.append(AnsweredCase(
+                    question=case.question,
+                    answer=answer_from_matches(corpus, completion, case.question, matches),
+                    expected_papers=case.expect_papers,
+                ))
+                print(f"  answered {position}/{len(cases)}", end="\r", flush=True)
+            score = score_answers(answered)
+            run.record(
+                cases=score.cases, declined=score.declined,
+                verified=score.with_verified_citation, fully_cited=score.fully_cited,
+            )
+        print(f"{args.cases}\n")
+        print(score.render())
+        if args.judge:
+            print("\n  Does a cited quote support the claim it is attached to?")
+            print("  Real pairs are scored beside mismatched ones, because a")
+            print("  judge that cannot tell them apart is not measuring support.\n")
+            report = judge_with_control(
+                answered, lambda system, user: completion.complete_text(system, user)
+            )
+            print(report.render())
+        print(f"\n  {_usage_footer(completion)}")
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)
