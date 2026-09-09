@@ -1,0 +1,62 @@
+# Held-out answer key. Authored from each paper's TITLE AND ABSTRACT ONLY, with
+# no retrieval run against any question until this file was committed. That is
+# the whole point: the development key in retrieval.jsonl was written alongside
+# the system, so a question that retrieved badly could be reworded until it did
+# not, and its numbers cannot rule that out. These were frozen first and scored
+# once, and whatever they scored is what is reported.
+#
+# Papers were chosen before any question existed, by a fixed rule: current
+# papers with 25-90 body passages, excluding every paper already named in the
+# development key and every subject probed by hand while building the system,
+# grouped by primary category, every 37th taken, then every 6th of those.
+#
+# Shapes: mostly plain subject questions. Four are deliberately phrased as
+# comparisons ("differ", "versus", "compare") with a SINGLE answering paper -
+# the case the development key has none of, and the one needed to price what
+# the comparison-gated title leg costs when the question only looks compound.
+#
+# No definitional or covered-but-unanswered cases: deciding that a subject is
+# covered while the question goes unanswered requires inspecting the corpus,
+# which is exactly what authoring blind forbids. Those live in the development
+# key, where that inspection is honest.
+{"question": "do dark matter halos of different masses share the same equilibrium density shape?", "expect_papers": ["astro-ph/9611107v4"], "note": "source=heldout; shape=plain"}
+{"question": "how can the cross shot noise between pre- and post-reconstruction galaxy power spectra be estimated?", "expect_papers": ["2608.05504v1"], "note": "source=heldout; shape=plain"}
+{"question": "what effect does a crystalline crust have on the mass and radius of magnetized strange dwarfs?", "expect_papers": ["2607.25055v1"], "note": "source=heldout; shape=plain"}
+{"question": "what links chaotic activity in large random recurrent networks to their unstable fixed points?", "expect_papers": ["2508.04983v3"], "note": "source=heldout; shape=plain"}
+{"question": "how can language models be evaluated for susceptibility to state-backed influence campaigns?", "expect_papers": ["2607.28503v2"], "note": "source=heldout; shape=plain"}
+{"question": "when is relying on a generative model's output epistemically justified rather than merely habitual?", "expect_papers": ["2608.05602v1"], "note": "source=heldout; shape=plain"}
+{"question": "how can high quality word vectors be trained cheaply from billions of words?", "expect_papers": ["1301.3781v3"], "note": "source=heldout; shape=plain"}
+{"question": "how can clinicians inspect where a medical language model's diagnostic reasoning goes wrong?", "expect_papers": ["2604.23356v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can conflicting statements in financial filings be sorted by the type of conflict?", "expect_papers": ["2607.26368v1"], "note": "source=heldout; shape=plain"}
+{"question": "how does dense forward-looking supervision change what a weight-shared iterative transformer computes?", "expect_papers": ["2608.03624v1"], "note": "source=heldout; shape=plain"}
+{"question": "how does a deeper stack of small convolution filters differ from shallower prior architectures for image recognition?", "expect_papers": ["1409.1556v6"], "note": "source=heldout; shape=comparison"}
+{"question": "how can transfer learning help segment small or rarely exposed organs in surgical video?", "expect_papers": ["2607.29509v1"], "note": "source=heldout; shape=plain"}
+{"question": "how do adaptation strategies for vision-language models differ under non-IID federated remote sensing data?", "expect_papers": ["2608.04791v1"], "note": "source=heldout; shape=comparison"}
+{"question": "how can a retrieval index avoid returning near-duplicate adjacent chunks from overlapping splits?", "expect_papers": ["2606.01542v1"], "note": "source=heldout; shape=plain"}
+{"question": "what difficulties do people report when writing reviews of AI products?", "expect_papers": ["2511.13480v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can discrete item identifiers be learned with query supervision for search relevance?", "expect_papers": ["2606.04374v1"], "note": "source=heldout; shape=plain"}
+{"question": "why do language-model recommenders favour items that have longer textual descriptions?", "expect_papers": ["2607.04270v1"], "note": "source=heldout; shape=plain"}
+{"question": "how can exact lexical ranking be traded away to keep search within a latency budget at billion-document scale?", "expect_papers": ["2608.00229v1"], "note": "source=heldout; shape=plain"}
+{"question": "how can multi-modal posteriors be inferred when no samples from the posterior are available for training?", "expect_papers": ["2512.04954v3"], "note": "source=heldout; shape=plain"}
+{"question": "how can a model reconstruct brain recordings from arbitrary electrode layouts and durations?", "expect_papers": ["2607.27308v1"], "note": "source=heldout; shape=plain"}
+{"question": "how can a neural network correct coarse mesh solutions when pricing options on several assets?", "expect_papers": ["2608.02778v1"], "note": "source=heldout; shape=plain"}
+{"question": "how can noise exposure and separation safety be traded off for low-altitude urban air taxis?", "expect_papers": ["2508.16440v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can reinforcement learning plan a route that covers an entire floor rather than one segment?", "expect_papers": ["2208.08211v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can a diffusion model generate directional link topologies for mobile ad hoc networks?", "expect_papers": ["2410.08238v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can intracranial recordings be used to localise the region where seizures begin?", "expect_papers": ["2408.16347v6"], "note": "source=heldout; shape=plain"}
+{"question": "what happens to a massive scalar field near the superradiant threshold of a rotating black hole?", "expect_papers": ["2608.00305v1"], "note": "source=heldout; shape=plain"}
+{"question": "how are tensor-polarized parton distributions of a spin-1 hadron related at low momentum transfer?", "expect_papers": ["2605.00430v2"], "note": "source=heldout; shape=plain"}
+{"question": "can the conducting surface picture of a black hole horizon be derived from microscopic degrees of freedom?", "expect_papers": ["2607.28746v1"], "note": "source=heldout; shape=plain"}
+{"question": "how is the analytic continuation of a power series with square-root coefficients obtained outside the unit disc?", "expect_papers": ["2509.26297v3"], "note": "source=heldout; shape=plain"}
+{"question": "how does assuming an unpolarized quarkonium versus a polarized one change the measured suppression in heavy-ion collisions?", "expect_papers": ["2105.02644v7"], "note": "source=heldout; shape=comparison"}
+{"question": "what role does an initial longitudinal flow gradient play in hyperon spin polarization in symmetric collisions?", "expect_papers": ["2606.09093v1"], "note": "source=heldout; shape=plain"}
+{"question": "how does higher resolution satellite imagery compare with the previous generation for estimating surface solar irradiance?", "expect_papers": ["2607.28093v1"], "note": "source=heldout; shape=comparison"}
+{"question": "does the collapse of irrotational gas generate enough vorticity to drive a small-scale dynamo?", "expect_papers": ["2607.01207v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can the polarization state of a surface-emitting laser be locked more reliably by optical injection?", "expect_papers": ["2604.01857v2"], "note": "source=heldout; shape=plain"}
+{"question": "how can an agent refuse to act when the situation exceeds what it can currently represent?", "expect_papers": ["2605.24999v1"], "note": "source=heldout; shape=plain"}
+{"question": "can text published alongside announcements improve detection of shifts in market regimes?", "expect_papers": ["2605.30363v2"], "note": "source=heldout; shape=plain"}
+{"question": "what is the ideal fermentation temperature for a lager yeast strain?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; brewing is outside every synced category"}
+{"question": "how did the Peace of Westphalia settle the Thirty Years War?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; early modern history is outside every synced category"}
+{"question": "what is the usual surgical treatment for hip dysplasia in dogs?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; veterinary medicine is outside every synced category"}
+{"question": "how are slate roof tiles repaired after storm damage?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; building trades are outside every synced category"}
+{"question": "what is the offside rule in association football?", "expect_none": true, "unanswerable_kind": "no_coverage", "note": "source=heldout; sport is outside every synced category"}
