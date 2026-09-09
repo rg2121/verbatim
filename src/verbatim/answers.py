@@ -136,6 +136,20 @@ class Usage:
             f"{self.seconds:.1f}s in the model"
         )
 
+    def snapshot(self) -> tuple[int, int, int, float]:
+        """The counters as they stand, for measuring one step against."""
+        with self._lock:
+            return (self.calls, self.prompt_tokens, self.output_tokens, self.seconds)
+
+    def since(self, before: tuple[int, int, int, float]) -> "Usage":
+        """What has been spent since a snapshot. A run outlives a step, so a
+        step's cost is a difference rather than a total."""
+        calls, prompt, output, seconds = self.snapshot()
+        return Usage(
+            calls=calls - before[0], prompt_tokens=prompt - before[1],
+            output_tokens=output - before[2], seconds=round(seconds - before[3], 3),
+        )
+
 
 @dataclass(frozen=True)
 class RejectedCitation:

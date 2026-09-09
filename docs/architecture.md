@@ -76,9 +76,28 @@ turn cannot be checked against any paper.
 `report --agents` routes each review section by its shape to a ladder of
 retrieval strategies, has the section written by the model, judges it by
 numbers alone, and retries with the *next* strategy when the verifier rejects
-it. The supervisor is code, not a model. Every attempt is recorded in a ledger
-printed with the review. See
-[decisions/0007](decisions/0007-a-deterministic-supervisor.md).
+it. The supervisor is code, not a model.
+
+The roles are contracts (`contracts.py`), not just functions that fit
+together, so a role can be swapped or tested against its contract alone:
+
+| role | kind | contract |
+|---|---|---|
+| planner | model | `(topic, max_sections) -> Plan` |
+| router | code | `question -> shape -> ladder` |
+| retriever | code, and one tool-using agent on the last rung | `(question, strategy, limit) -> Gathered` |
+| writer | model | `(question, Gathered) -> Answer` |
+| verifier | code | `(Answer, closeness) -> Verdict` |
+| critic | code, model-assisted | `(question, Answer, Gathered) -> Critique` |
+| supervisor | code | ladder, budget, ledger, assembly |
+
+Every attempt is recorded in a ledger printed with the review: the strategy,
+the tools an agent rung called, **which papers it stood on**, what it cost in
+calls and tokens, the verdict, and what the critic found. A `Budget` caps a
+whole run by tokens, seconds or attempts; exhausting it stops further work
+without discarding work already done. See
+[decisions/0007](decisions/0007-a-deterministic-supervisor.md) and
+[decisions/0011](decisions/0011-a-critic-that-describes-rather-than-judges.md).
 
 ## Testing
 

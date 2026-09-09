@@ -448,6 +448,23 @@ def run() -> None:
         "--workers", type=int, default=1,
         help="With --agents: sections worked in parallel by this many threads",
     )
+    report_parser.add_argument(
+        "--critic", action="store_true",
+        help="With --agents: check each section for claims carrying no citation "
+             "and for subjects the question raises that no passage covers. Only "
+             "the second escalates, because only it is a retrieval problem",
+    )
+    report_parser.add_argument(
+        "--max-tokens", type=int,
+        help="Stop the run once this many tokens have been spent",
+    )
+    report_parser.add_argument(
+        "--max-seconds", type=float, help="Stop the run after this long"
+    )
+    report_parser.add_argument(
+        "--max-attempts", type=int,
+        help="Stop after this many retrieval attempts across all sections",
+    )
 
     chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
@@ -1060,7 +1077,13 @@ def run() -> None:
             if args.agents:
                 from verbatim.orchestrator import orchestrate
 
+                from verbatim.contracts import Budget
+
                 caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
+                ceiling = Budget(
+                    max_tokens=args.max_tokens, max_seconds=args.max_seconds,
+                    max_attempts=args.max_attempts,
+                )
                 built, ledger = orchestrate(
                     corpus,
                     embedder,
@@ -1073,6 +1096,10 @@ def run() -> None:
                     max_per_paper=args.max_per_paper,
                     workers=args.workers,
                     check_subject=not args.no_subject_check,
+                    budget=ceiling if any(
+                        (args.max_tokens, args.max_seconds, args.max_attempts)
+                    ) else None,
+                    critic=args.critic,
                     on_section=progress,
                 )
             else:

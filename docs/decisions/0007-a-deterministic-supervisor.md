@@ -26,8 +26,10 @@ and nothing else, which is the split parallel workers are for.
 
 ## Consequences
 
-No critique agent that judges evidence, for the reason in
-[0004](0004-report-evidence-rather-than-judging-it.md). Measured against the
+No critique agent that *judges* evidence, for the reason in
+[0004](0004-report-evidence-rather-than-judging-it.md) - but a critic that
+describes and is checked mechanically was later built, see
+[0011](0011-a-critic-that-describes-rather-than-judges.md). Measured against the
 deterministic baseline the orchestrator buys a ledger and little else on a
 well-covered topic; on an unevenly covered one it climbs all three rungs and
 declares a gap rather than answering the wrong question. Parallel workers buy

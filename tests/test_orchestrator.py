@@ -36,10 +36,16 @@ def test_verdicts_come_from_numbers_alone() -> None:
     cited = Answer(question="q", text="t [1]", citations=[object()], rejected=[])  # type: ignore[list-item]
     uncited = Answer(question="q", text="t", citations=[], rejected=[])
 
-    assert verdict_for(cited, 0.9, warn_below=0.65) == ACCEPTED
-    assert verdict_for(cited, None, warn_below=0.65) == ACCEPTED   # unchecked is not a failure
-    assert verdict_for(cited, 0.4, warn_below=0.65) == RETRY       # off-subject passages
-    assert verdict_for(uncited, 0.9, warn_below=0.65) == RETRY     # nothing verified
+    assert verdict_for(cited, 0.9, warn_below=0.65).accepted is True
+    # An unchecked subject is not a failure.
+    assert verdict_for(cited, None, warn_below=0.65).accepted is True
+    off_subject = verdict_for(cited, 0.4, warn_below=0.65)
+    nothing_verified = verdict_for(uncited, 0.9, warn_below=0.65)
+
+    assert off_subject.accepted is False and "off-subject" in off_subject.reason
+    assert nothing_verified.accepted is False
+    # The verdict says why, so the ledger can too.
+    assert "no citation survived" in nothing_verified.reason
 
 
 class StubEmbedder:
@@ -384,3 +390,107 @@ def test_sections_are_handed_over_from_parallel_workers_too(tmp_path: Path) -> N
         "What is flux?", "How does charge move?"
     ]
     assert all(entry.outcome == "accepted" for entry in ledger.sections)
+
+
+def test_the_critic_escalates_a_coverage_gap_but_not_an_uncited_sentence(
+    tmp_path: Path,
+) -> None:
+    """Only one of the critic's findings is a retrieval problem.
+
+    A different strategy can find a subject no passage covers. It cannot fix a
+    sentence the writer left uncited, so that is reported to the reader rather
+    than retried - otherwise every section with a loose sentence would climb
+    the whole ladder for nothing.
+    """
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
+        # The answer carries one properly cited sentence and one loose one.
+        payload["answer"] = "Flux threads the ring [1]. Charge behaves quite differently here."
+
+        completion = QueueCompletion([payload, payload, payload])
+        section, ledger = work_section(
+            corpus, StubEmbedder(), completion, "what is flux?",
+            caller=None, critic=True,
+            complete_text=lambda system, user: "flux",   # present in the passages
+        )
+
+    # One attempt only: an uncited sentence does not send it up the ladder.
+    assert len(ledger.attempts) == 1
+    assert ledger.outcome == "accepted"
+    found = ledger.attempts[0].critique
+    assert found.unsupported == ("Charge behaves quite differently here.",)
+    assert found.unaddressed == ()
+    assert "1 sentence(s) carry a claim with no citation" in Ledger(
+        sections=[ledger]
+    ).render_markdown()
+
+
+def test_a_subject_no_passage_covers_sends_the_section_up_the_ladder(
+    tmp_path: Path,
+) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
+        completion = QueueCompletion([payload, payload, payload])
+
+        section, ledger = work_section(
+            corpus, StubEmbedder(), completion, "what is flux?",
+            caller=None, critic=True,
+            # A subject that appears in no retrieved passage.
+            complete_text=lambda system, user: "superconductivity",
+        )
+
+    assert [a.strategy for a in ledger.attempts] == ["hybrid", "titles", "agent"]
+    assert ledger.attempts[0].critique.unaddressed == ("superconductivity",)
+    assert "no passage covers: superconductivity" in Ledger(
+        sections=[ledger]
+    ).render_markdown()
+
+
+def test_the_ledger_names_the_papers_an_attempt_stood_on(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        completion = QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")])
+        _section, ledger = work_section(
+            corpus, StubEmbedder(), completion, "what is flux?", caller=None,
+        )
+
+    attempt = ledger.attempts[0]
+    assert attempt.papers and all(p.startswith("2608.") for p in attempt.papers)
+    assert len(attempt.chunks) == attempt.passages
+    assert "stood on arXiv:" in Ledger(sections=[ledger]).render_markdown()
+
+
+def test_a_run_stops_when_its_budget_is_spent(tmp_path: Path) -> None:
+    """A ceiling for the whole run, not a step count per role."""
+    from verbatim.contracts import Budget
+
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        completion = ScriptedAnswers({
+            "What is flux?": cite(
+                chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
+            ),
+            "How does charge move?": {
+                "relevant": True, "answer": "Nothing verifiable.", "citations": [],
+            },
+        })
+        report, ledger = orchestrate(
+            corpus, StubEmbedder(), completion,
+            lambda system, user: "What is flux?\nHow does charge move?",
+            "electromagnetism",
+            budget=Budget(max_attempts=2),
+        )
+
+    # The first section is accepted on its first rung; the second gets one
+    # attempt and is then stopped rather than climbing its ladder.
+    spent = [len(entry.attempts) for entry in ledger.sections]
+    assert spent == [1, 2]
+    stopped = ledger.sections[1].attempts[-1]
+    assert "budget:" in stopped.error and "attempts reached the limit" in stopped.error
+    # The budget stops further work; it does not discard work already done, so
+    # the section the reader gets is the one that actually retrieved something
+    # rather than the placeholder that recorded the stop.
+    assert report.sections[1].answer.text == "Nothing verifiable."
+    assert report.sections[1].answer.declined is False

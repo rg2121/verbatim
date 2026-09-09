@@ -57,7 +57,9 @@ from verbatim.answers import (
     describe_subject,
     subject_similarity,
 )
+from verbatim.contracts import Budget, BudgetGuard, Cost, Critique, Gathered, Verdict
 from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.critique import critique as run_critique
 from verbatim.embedding import Embedder
 from verbatim.evidence import describe_evidence
 from verbatim.graph import definitional_subject
@@ -124,6 +126,12 @@ class Attempt:
     verdict: str
     route: str = ""
     error: str = ""
+    # Which passages this attempt actually stood on, so the ledger can be
+    # traced to sources rather than only to counts.
+    papers: tuple[str, ...] = ()
+    chunks: tuple[str, ...] = ()
+    cost: Cost = Cost()
+    critique: Critique | None = None
 
 
 @dataclass(frozen=True)
@@ -169,15 +177,38 @@ class Ledger:
                     )
                     continue
                 route = f" via {attempt.route}" if attempt.route else ""
+                cost = f", {attempt.cost.render()}" if attempt.cost.calls else ""
                 lines.append(
                     f"  - `{attempt.strategy}`{route}: {attempt.passages} passages, "
                     f"{attempt.verified} verified, {attempt.rejected} rejected, "
-                    f"{subject} -> {attempt.verdict}"
+                    f"{subject}{cost} -> {attempt.verdict}"
                 )
+                if attempt.papers:
+                    # Which sources, not only how many: a ledger that cannot be
+                    # traced back to passages records that something happened
+                    # rather than what it stood on.
+                    shown = ", ".join(f"arXiv:{paper}" for paper in attempt.papers[:4])
+                    more = "" if len(attempt.papers) <= 4 else f" (+{len(attempt.papers) - 4})"
+                    lines.append(f"    - stood on {shown}{more}")
+                if attempt.critique is not None:
+                    found = attempt.critique
+                    if found.unaddressed:
+                        lines.append(
+                            "    - no passage covers: " + ", ".join(found.unaddressed)
+                        )
+                    if found.unsupported:
+                        lines.append(
+                            f"    - {len(found.unsupported)} sentence(s) carry a claim "
+                            "with no citation"
+                        )
+                    if found.conflicts:
+                        lines.append(
+                            f"    - {len(found.conflicts)} pair(s) of cited passages disagree"
+                        )
         return "\n".join(lines)
 
 
-def verdict_for(answer: Answer, closeness: float | None, warn_below: float) -> str:
+def verdict_for(answer: Answer, closeness: float | None, warn_below: float) -> Verdict:
     """Accept or retry, from numbers only.
 
     A section is accepted when at least one citation survived verification
@@ -185,10 +216,10 @@ def verdict_for(answer: Answer, closeness: float | None, warn_below: float) -> s
     whether the answer is good: asked that, every model tested says yes.
     """
     if not answer.citations:
-        return RETRY
+        return Verdict(False, "no citation survived verification")
     if closeness is not None and closeness < warn_below:
-        return RETRY
-    return ACCEPTED
+        return Verdict(False, f"passages are off-subject ({closeness:.2f})")
+    return Verdict(True, "a citation verified and the passages are on-subject")
 
 
 def retrieve(
@@ -200,7 +231,7 @@ def retrieve(
     limit: int,
     max_per_paper: int | None,
     caller: ToolCaller | None,
-) -> tuple[list[ChunkMatch], str]:
+) -> Gathered:
     """Run one strategy, returning its passages and how it got them.
 
     The route is empty for the deterministic strategies, whose name already
@@ -209,13 +240,14 @@ def retrieve(
     """
     if strategy == "agent":
         if caller is None:
-            return [], "no tool-choosing model available"
+            return Gathered(question, (), strategy, "no tool-choosing model available")
         matches, trace = gather(corpus, embedder, caller, question)
-        return matches[:limit], trace.describe()
-    return hybrid_search(
+        return Gathered(question, tuple(matches[:limit]), strategy, trace.describe())
+    found = hybrid_search(
         corpus, embedder, question,
         limit=limit, max_per_paper=max_per_paper, **STRATEGY_FLAGS[strategy],
-    ), ""
+    )
+    return Gathered(question, tuple(found), strategy)
 
 
 def work_section(
@@ -230,6 +262,9 @@ def work_section(
     check_subject: bool = True,
     warn_below: float = config.SUBJECT_WARN_BELOW,
     ladder: tuple[str, ...] | None = None,
+    guard: BudgetGuard | None = None,
+    complete_text: Callable[[str, str], str] | None = None,
+    critic: bool = False,
 ) -> tuple[ReportSection, SectionLedger]:
     """Climb the ladder for one section until the verifier accepts.
 
@@ -240,63 +275,93 @@ def work_section(
     `ladder` overrides the router's choice, which is how the plain report runs
     this same loop with a single rung and no escalation.
 
-    A rung that raises - an unreachable model, a corpus error - is recorded as
+    A rung that raises - an unreachable model, a corpus fault - is recorded as
     a failed attempt and the ladder continues. One failure in one section must
     not discard a review that may have taken ten minutes to write.
+
+    With `critic`, each written section is also checked for claims carrying no
+    citation and for subjects the question raises that no passage covers. Only
+    the second escalates: a different retrieval can fix missing coverage and
+    cannot fix a sentence the writer left uncited, so the first is reported to
+    the reader instead of being retried.
     """
     shape = question_shape(heading)
+    usage = getattr(completion, "usage", None)
     candidates: list[tuple[Attempt, ReportSection]] = []
     for strategy in ladder or LADDERS[shape]:
+        if guard is not None:
+            stop = guard.exhausted()
+            if stop is not None:
+                candidates.append((
+                    Attempt(strategy=strategy, passages=0, verified=0, rejected=0,
+                            closeness=None, verdict=RETRY, error=f"budget: {stop}"),
+                    ReportSection(
+                        heading=heading,
+                        answer=Answer(
+                            question=heading,
+                            text=f"This section was not written: {stop}.",
+                            citations=[], rejected=[], declined=True,
+                        ),
+                    ),
+                ))
+                break
+            guard.take()
+        spent_before = usage.snapshot() if usage is not None else None
         try:
-            matches, route = retrieve(
+            gathered = retrieve(
                 strategy, corpus, embedder, heading,
                 limit=per_section, max_per_paper=max_per_paper, caller=caller,
             )
+            matches = list(gathered.matches)
             answer = answer_from_matches(corpus, completion, heading, matches)
             subject = closeness = None
             if matches and check_subject:
                 subject = describe_subject(completion, matches)
                 closeness = subject_similarity(embedder, heading, subject)
-        # sqlite3.Error is neither of the other two, and the corpus is read
-        # under a busy timeout while ingest stages may be writing: a locked
-        # database is exactly the "corpus error" this promises to contain.
-        except (RuntimeError, OSError, sqlite3.Error) as error:
-            candidates.append(
-                (
-                    Attempt(
-                        strategy=strategy, passages=0, verified=0, rejected=0,
-                        closeness=None, verdict=RETRY, error=str(error)[:200],
-                    ),
-                    ReportSection(
-                        heading=heading,
-                        answer=Answer(
-                            question=heading,
-                            text=f"This section could not be written: {error}",
-                            citations=[], rejected=[], declined=True,
-                        ),
-                    ),
-                )
+            found = (
+                run_critique(heading, answer, gathered, complete_text=complete_text)
+                if critic else None
             )
+        except (RuntimeError, OSError, sqlite3.Error) as error:
+            candidates.append((
+                Attempt(strategy=strategy, passages=0, verified=0, rejected=0,
+                        closeness=None, verdict=RETRY, error=str(error)[:200]),
+                ReportSection(
+                    heading=heading,
+                    answer=Answer(
+                        question=heading,
+                        text=f"This section could not be written: {error}",
+                        citations=[], rejected=[], declined=True,
+                    ),
+                ),
+            ))
             continue
         verdict = verdict_for(answer, closeness, warn_below)
+        # A critique escalates only where a different retrieval could help.
+        accepted = verdict.accepted and not (found.unaddressed if found else ())
         evidence = describe_evidence(
             corpus, heading, matches, subject=subject, closeness=closeness
         )
-        candidates.append(
-            (
-                Attempt(
-                    strategy=strategy, passages=len(matches),
-                    verified=len(answer.citations), rejected=len(answer.rejected),
-                    closeness=closeness, verdict=verdict, route=route,
-                ),
-                ReportSection(
-                    heading=heading, answer=answer,
-                    subject=subject, subject_closeness=closeness,
-                    evidence_lines=tuple(evidence.lines()),
-                ),
-            )
-        )
-        if verdict == ACCEPTED:
+        spent = Cost()
+        if usage is not None and spent_before is not None:
+            delta = usage.since(spent_before)
+            spent = Cost(delta.calls, delta.prompt_tokens, delta.output_tokens,
+                         delta.seconds)
+        candidates.append((
+            Attempt(
+                strategy=strategy, passages=len(matches),
+                verified=len(answer.citations), rejected=len(answer.rejected),
+                closeness=closeness, verdict=ACCEPTED if accepted else RETRY,
+                route=gathered.route, papers=gathered.paper_ids,
+                chunks=gathered.chunk_ids, cost=spent, critique=found,
+            ),
+            ReportSection(
+                heading=heading, answer=answer,
+                subject=subject, subject_closeness=closeness,
+                evidence_lines=tuple(evidence.lines()),
+            ),
+        ))
+        if accepted:
             break
     best_attempt, best_section = max(
         candidates,
@@ -304,11 +369,6 @@ def work_section(
             pair[0].verdict == ACCEPTED,
             pair[0].verified,
             pair[0].closeness or 0.0,
-            # Passages break the remaining ties, so a rung that retrieved and
-            # was declined beats one that errored before retrieving anything.
-            # Without it, max() keeps the earliest candidate and a section
-            # that really was written from six passages could be replaced by
-            # "could not be written" whenever the subject check was off.
             pair[0].passages,
         ),
     )
@@ -318,9 +378,6 @@ def work_section(
     elif best_attempt.verified:
         outcome = "accepted with a subject warning"
     elif errored:
-        # Nothing was written and something fell over: report the failure
-        # rather than the absence. A gap is a statement about the corpus, and
-        # an unreachable model says nothing about the corpus at all.
         outcome = (
             f"failed: {len(errored)} of {len(candidates)} strategies errored "
             f"({errored[0].error})"
@@ -374,6 +431,8 @@ def orchestrate(
     check_subject: bool = True,
     warn_below: float = config.SUBJECT_WARN_BELOW,
     ladder: tuple[str, ...] | None = None,
+    budget: Budget | None = None,
+    critic: bool = False,
     on_section: Callable[[str, int, int], None] | None = None,
     on_section_done: Callable[[ReportSection, SectionLedger], None] | None = None,
 ) -> tuple[Report, Ledger]:
@@ -391,6 +450,10 @@ def orchestrate(
         raise ValueError("workers must be at least 1")
     headings = plan_sections(complete_text, topic, max_sections=max_sections)
     shared = _Serialized(embedder) if workers > 1 else embedder
+    guard = (
+        BudgetGuard(budget, getattr(completion, "usage", None))
+        if budget is not None else None
+    )
 
     def run(position: int, heading: str) -> tuple[ReportSection, SectionLedger]:
         if on_section is not None:
@@ -398,6 +461,7 @@ def orchestrate(
         options = dict(
             caller=caller, per_section=per_section, max_per_paper=max_per_paper,
             check_subject=check_subject, warn_below=warn_below, ladder=ladder,
+            guard=guard, complete_text=complete_text, critic=critic,
         )
         if workers == 1:
             worked = work_section(corpus, shared, completion, heading, **options)

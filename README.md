@@ -442,6 +442,7 @@ So the roles here differ in kind, not in subject, and the supervisor is code:
 | retrievers | code, and the tool-choosing agent as the last rung | `hybrid` (graph gate inside), `compare`, `titles`, `agent` |
 | writer | model | the existing verified-citation path, unchanged |
 | verifier | code | the quote check, plus the describe-then-compare subject check |
+| critic | code, model-assisted | uncited claims by counting; uncovered subjects and conflicts proposed by a model and then checked |
 | discloser | code | what the section rests on: passages, papers, subject, named-after paper |
 | supervisor | code | ledger, retries, containment, parallel sections, assembly |
 
