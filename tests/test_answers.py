@@ -469,3 +469,42 @@ def test_a_long_subject_is_truncated_and_whitespace_collapsed(tmp_path: Path) ->
 
     assert len(subject) <= 120
     assert "\n" not in subject and "  " not in subject
+
+
+def test_a_cite_line_that_puts_the_chunk_id_in_the_brackets_is_read() -> None:
+    """gemma4:31b writes `CITE [<chunk_id>] :: quote` and never the numbered form.
+
+    Reading only the numbered form threw away every citation it made and
+    marked the whole answer [unverified], while the model had in fact quoted
+    the passages correctly. Verification is unchanged: the quote is still
+    checked character-for-character against the passage it names.
+    """
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol(
+        "ANSWER: Adam adapts to the geometry [dc83e9545a4cf0ce96d4].\n"
+        "CITE [dc83e9545a4cf0ce96d4] :: a preconditioner that adapts to the geometry\n"
+    )
+
+    assert payload is not None
+    assert [c["chunk_id"] for c in payload["citations"]] == ["dc83e9545a4cf0ce96d4"]
+    assert payload["citations"][0]["quoted_text"] == (
+        "a preconditioner that adapts to the geometry"
+    )
+
+
+def test_both_cite_forms_can_appear_in_one_reply() -> None:
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol(
+        "ANSWER: One [1] and two [dc83e9545a4cf0ce96d4].\n"
+        "CITE [1] 0acad6ec2131ba3031eb :: first quote\n"
+        "CITE [dc83e9545a4cf0ce96d4] :: second quote\n"
+    )
+
+    assert payload is not None
+    assert [c["chunk_id"] for c in payload["citations"]] == [
+        "0acad6ec2131ba3031eb", "dc83e9545a4cf0ce96d4"
+    ]
+    # Markers stay distinct, so a numeric marker still resolves to its own entry.
+    assert [c["marker"] for c in payload["citations"]] == [1, 2]

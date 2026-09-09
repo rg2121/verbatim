@@ -52,7 +52,7 @@ on a clone rather than printing zeros. It carries no PDFs or renderings, only
 the database, so `stats` correctly reports zero PDFs rather than claiming
 files it does not have. Every passage still carries its own arXiv id,
 section, offsets, checksum and licence, so citations are complete. `ask`
-needs a local model through Ollama; `search` and `graph` need nothing.
+needs a model through Ollama; `search` and `graph` need nothing.
 
 Regenerate it from a full corpus with `verbatim sample --papers 40`.
 
@@ -287,9 +287,14 @@ rejected.
 
 `ask` answers with a local model through **Ollama**, so the whole pipeline runs
 offline once the corpus is built. It picks `$OLLAMA_MODEL`, or the first pulled
-model; override with `--llm`. There is no hosted backend: the corpus is 26 GB
-of other people's papers, and sending it to a third party should not be
-something a default can decide.
+model; override with `--llm`. Ollama is the only backend - there is no second
+client, no API key and no hosted path around it - but which model it names is a
+decision with a boundary in it. A local model keeps the corpus on this machine.
+A model whose name ends `-cloud` is served by Ollama's own infrastructure, so
+the passages in each prompt leave the machine, and the corpus is 26 GB of other
+people's papers under mixed licences. Neither is wrong; the point is that the
+choice is the user's and is visible in `OLLAMA_MODEL` rather than buried in a
+default.
 
 Small local models paraphrase rather than quote, so expect rejected citations —
 that is the check working, not a bug. A claim whose quote could not be verified
@@ -297,6 +302,15 @@ is marked `[unverified]` in the prose rather than silently presented as sourced.
 Ollama's `format` parameter and tool calling were both unreliable on realistic
 multi-passage prompts, so the backend elicits a flat `ANSWER:` / `CITE` line
 format and parses that.
+
+Two shapes of that line are accepted, because models disagree about it:
+`CITE [1] <chunk_id> :: <quote>` as the prompt asks, and
+`CITE [<chunk_id>] :: <quote>`, which `gemma4:31b` writes every time. Reading
+only the first threw away every citation that model made and marked a
+correctly-quoted answer `[unverified]` throughout. Accepting both changes no
+verification: the quote is still checked character-for-character against the
+passage it names, and only the bookkeeping differs, since prose that cites by
+chunk id was already resolved to the bibliography's numbering.
 
 For a one-off metadata-only snapshot, use `fetch --category ...`. The legacy
 one-off forms `download --input` and `chunk --manifest` remain available and

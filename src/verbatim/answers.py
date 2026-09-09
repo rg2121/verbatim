@@ -33,6 +33,14 @@ a word is not being about a subject:
 
 Reply with exactly one word: yes or no."""
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
+# The same line with the chunk id inside the brackets and no number:
+# `CITE [dc83e954...] :: quoted words`. gemma4:31b writes it this way every
+# time, and reading only the numbered form threw away four genuine citations
+# per answer and marked the prose [unverified]. Accepting it verifies exactly
+# as strictly - the quote is still checked character-for-character against the
+# passage it names - and only the bookkeeping differs, because the inline
+# markers are chunk ids too and renumber_markers already resolves those.
+CITE_ID_LINE_PATTERN = re.compile(r"^CITE\s*\[([0-9a-f]{16,})\]\s*::\s*(.+)$", re.M)
 CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
 MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
 
@@ -441,6 +449,15 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
         {"marker": int(marker), "chunk_id": chunk_id, "quoted_text": quote.strip()}
         for marker, chunk_id, quote in CITE_LINE_PATTERN.findall(content)
     ]
+    citations.extend(
+        # Numbered from where the other form left off; the number is only a
+        # fallback for prose that cites numerically, and this form's prose
+        # cites by chunk id.
+        {"marker": position, "chunk_id": chunk_id, "quoted_text": quote.strip()}
+        for position, (chunk_id, quote) in enumerate(
+            CITE_ID_LINE_PATTERN.findall(content), start=len(citations) + 1
+        )
+    )
     verdict = RELEVANT_LINE_PATTERN.search(content)
     return {
         # Absent verdict is treated as relevant, so a model that ignores the
