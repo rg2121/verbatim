@@ -76,3 +76,34 @@ def test_deep_refuses_the_flags_it_would_otherwise_ignore(
     assert expected in str(raised.value)
     # Refused before anything expensive is built: no model, no corpus, no ONNX.
     assert "Drop one of the two." in str(raised.value)
+
+
+def test_eval_accepts_several_key_files(monkeypatch, tmp_path) -> None:
+    """The frozen key is two files now, and must be scorable as one.
+
+    Held-out cases live in two files because they were authored two ways, and
+    the split has to survive into every result. Scoring only one by default
+    would quietly halve the sample this exercise existed to enlarge.
+
+    Checked with a missing second file, so the assertion lands on the loader
+    and the command never reaches an ONNX embedder - this file stays offline.
+    """
+    import sys
+
+    from verbatim.cli import run as cli_run
+
+    present = tmp_path / "a.jsonl"
+    present.write_text('{"question": "q one", "expect_papers": ["a1v1"]}\n')
+    missing = tmp_path / "b.jsonl"
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["verbatim", "eval", "--cases", str(present), str(missing)],
+    )
+
+    with pytest.raises(FileNotFoundError) as raised:
+        cli_run()
+
+    # Both paths were parsed: it got past the first file and failed on the
+    # second, rather than rejecting the extra argument.
+    assert "b.jsonl" in str(raised.value)

@@ -155,7 +155,11 @@ def run() -> None:
     stats_parser.add_argument("--overlap", type=int, default=config.CHUNK_OVERLAP)
 
     eval_parser = subparsers.add_parser("eval", help="Score every retrieval mode on an answer key")
-    eval_parser.add_argument("--cases", type=Path, default=config.EVAL_PATH)
+    eval_parser.add_argument(
+        "--cases", type=Path, nargs="+", default=[config.EVAL_PATH],
+        help="One or more key files, scored as one set. Name both held-out "
+             "files to score the whole frozen key",
+    )
     eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     eval_parser.add_argument(
         "--rerank", action="store_true",
@@ -194,7 +198,10 @@ def run() -> None:
         help="Score the answers themselves, not whether retrieval named the "
              "expected paper",
     )
-    answers_parser.add_argument("--cases", type=Path, default=config.EVAL_PATH)
+    answers_parser.add_argument(
+        "--cases", type=Path, nargs="+", default=[config.EVAL_PATH],
+        help="One or more key files, scored as one set",
+    )
     answers_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     answers_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
     answers_parser.add_argument("--llm", help="Generation model")
@@ -669,9 +676,12 @@ def run() -> None:
                 print(f"    {category:<18} {seen:>7,} ingested   up to {mark}")
 
     if args.command == "eval":
-        cases = load_cases(args.cases)
+        from verbatim.evaluation import load_key
+
+        cases = load_key(args.cases)
         embedder = FastEmbedEmbedder(model_name=args.model)
-        with CorpusStore(args.state) as corpus, record_run(corpus, "eval", cases=str(args.cases), model=args.model, limit=args.limit) as run:
+        named = ",".join(str(path) for path in args.cases)
+        with CorpusStore(args.state) as corpus, record_run(corpus, "eval", cases=named, model=args.model, limit=args.limit) as run:
             expanding = args.rewrites or args.hyde or args.decompose
             options = dict(
                 limit=args.limit, max_per_paper=args.max_per_paper,
@@ -689,7 +699,7 @@ def run() -> None:
             best = max(scores, key=lambda score: score.mrr)
             run.record(cases=len(cases), scored=best.cases,
                        best_mode=best.mode, best_mrr=round(best.mrr, 4))
-        print(f"{args.cases}")
+        print(named)
         print(describe_case_mix(cases))
         print()
         print(render_report(scores))
@@ -854,7 +864,9 @@ def run() -> None:
             score_answers,
         )
 
-        cases = [c for c in load_cases(args.cases) if not c.expect_none][: args.limit]
+        from verbatim.evaluation import load_key
+
+        cases = [c for c in load_key(args.cases) if not c.expect_none][: args.limit]
         embedder = FastEmbedEmbedder(model_name=args.model)
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
         answered = []
@@ -877,7 +889,7 @@ def run() -> None:
                 cases=score.cases, declined=score.declined,
                 verified=score.with_verified_citation, fully_cited=score.fully_cited,
             )
-        print(f"{args.cases}\n")
+        print(",".join(str(path) for path in args.cases) + "\n")
         print(score.render())
         if args.judge:
             print("\n  Does a cited quote support the claim it is attached to?")
