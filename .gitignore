@@ -17,3 +17,4 @@ overnight.sh
 overnight.log
 # sample/corpus.db is committed: it is what makes a clone usable.
 *.log
+evals/results/
