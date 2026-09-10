@@ -107,17 +107,41 @@ def test_sync_stops_when_the_category_runs_out(tmp_path: Path) -> None:
     assert report.total_available == 30
 
 
-def test_limit_caps_the_run_and_the_next_run_resumes(tmp_path: Path) -> None:
+def test_a_limited_run_marks_what_it_took_and_leaves_the_rest_behind(
+    tmp_path: Path,
+) -> None:
+    """A deliberate limit is a slice of the newest papers, not a pause.
+
+    This test used to be called "the next run resumes" and never ran a second
+    sync. The name was also wrong: papers arrive newest-first and the mark only
+    moves forward, so everything older than a limited run is behind the mark
+    for good and a later, larger run fetches nothing. `--full` is what reaches
+    it. That is a real property of the design and is documented in the README;
+    it is asserted here so the name cannot drift from the behaviour again.
+    """
     feed = FakeArxiv(200)
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         first = sync_category(
             corpus, "cs.CL", limit=50, page_size=50, fetch_page=feed, sleep=no_sleep
         )
         watermark = corpus.sync_watermark("cs.CL")
+        # A later run asking for far more gets nothing: the newest paper it
+        # sees is already at the mark.
+        second = sync_category(
+            corpus, "cs.CL", limit=200, page_size=50, fetch_page=feed, sleep=no_sleep
+        )
+        # Only --full reaches the 150 papers the first run did not take.
+        third = sync_category(
+            corpus, "cs.CL", limit=200, page_size=50, fetch_page=feed,
+            sleep=no_sleep, full=True,
+        )
+        stored = corpus.pipeline_stats("f", "m")["papers"]
 
-    assert first.fetched == 50
-    assert first.stopped_because == "reached the limit"
+    assert first.fetched == 50 and first.stopped_because == "reached the limit"
     assert watermark is not None
+    assert second.fetched == 0 and second.stopped_because == "reached the watermark"
+    assert third.fetched == 200
+    assert stored == 200
 
 
 def test_the_watermark_never_moves_backwards(tmp_path: Path) -> None:

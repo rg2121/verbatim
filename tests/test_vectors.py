@@ -80,9 +80,12 @@ def test_vector_search_returns_nothing_before_anything_is_embedded(tmp_path: Pat
 def test_index_rebuilds_only_when_it_has_drifted(tmp_path: Path) -> None:
     with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux.", "Charge moves."]}) as corpus:
         index = SqliteVecIndex(corpus.connection, 3)
-        assert ensure_current(index, corpus.embedding_count("stub"), "stub") is True
+        assert ensure_current(index, corpus.embedding_count("stub"), "stub",
+                              corpus.chunk_generation()) is True
         assert index.count() == 2
-        assert ensure_current(index, corpus.embedding_count("stub"), "stub") is False
+        # Unchanged corpus, unchanged model: the cheap path, no work done.
+        assert ensure_current(index, corpus.embedding_count("stub"), "stub",
+                              corpus.chunk_generation()) is False
 
 
 def test_index_rejects_a_query_of_the_wrong_width(tmp_path: Path) -> None:
@@ -376,7 +379,7 @@ def test_changing_the_embedding_model_does_not_leave_the_old_vectors_searchable(
         stored = corpus.embedding_count("model-b")
         assert index.count() == stored  # the counts agree, and mean nothing
 
-        assert ensure_current(index, stored, "model-b") is True
+        assert ensure_current(index, stored, "model-b", corpus.chunk_generation()) is True
         assert index.indexed_model() == "model-b"
 
         held = corpus.connection.execute(
@@ -399,7 +402,73 @@ def test_an_index_that_never_said_which_model_it_holds_is_rebuilt_once(
         corpus.connection.execute("DROP TABLE vector_index_state")  # an older corpus
         stored = corpus.embedding_count("model-a")
 
+        generation = corpus.chunk_generation()
         assert index.indexed_model() is None
-        assert ensure_current(index, stored, "model-a") is True   # rebuilt to be sure
+        # Rebuilt to be sure: an index that never said what it holds cannot be
+        # trusted to hold what is being asked for.
+        assert ensure_current(index, stored, "model-a", generation) is True
         assert index.indexed_model() == "model-a"
-        assert ensure_current(index, stored, "model-a") is False  # and cheap thereafter
+        assert ensure_current(index, stored, "model-a", generation) is False
+
+
+def test_a_replaced_source_does_not_silently_drop_out_of_vector_search(
+    tmp_path: Path,
+) -> None:
+    """The count check cannot see ids change underneath it.
+
+    A chunk id is a hash of the paper, its source checksum, the page and the
+    chunker version. Replacing a paper's source therefore gives every one of
+    its passages a new id while leaving the count alone - and the index went
+    on holding the old ids, which resolve to nothing. Measured before the fix:
+    a search returned 0 passages out of 1 embedded, and raised nothing.
+    """
+    from verbatim.downloads import DownloadedPaper, file_sha256
+    from verbatim.embedding import embed_pending
+    from verbatim.retrieval import vector_search
+
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.rebuild("stub", corpus.chunk_generation())
+        first = [row[0] for row in corpus.connection.execute("SELECT chunk_id FROM vec_chunks")]
+
+        # arXiv replaces the paper's PDF: same paper, new bytes, one passage
+        # before and one after, so nothing about the count changes.
+        pdf = tmp_path / "replaced.pdf"
+        pdf.write_bytes(b"%PDF-1.7 DIFFERENT BYTES ENTIRELY\n%%EOF\n")
+        replaced = DownloadedPaper(
+            arxiv_id="2608.11111v1", source_url="u", pdf_url="p", license_url=None,
+            local_path=str(pdf), sha256=file_sha256(pdf), byte_count=pdf.stat().st_size,
+        )
+        corpus.record_downloads([replaced])
+        corpus.record_chunks(
+            extract_pdf_chunks([replaced], extract_pages=lambda _: ["Magnetic flux threads the ring."]),
+            for_papers=["2608.11111v1"],
+        )
+        embed_pending(corpus, WordCountEmbedder())
+
+        live = [c.chunk_id for c in corpus.chunks_for_paper("2608.11111v1")]
+        assert live != first                      # the ids really did change
+        assert corpus.embedding_count("stub") == len(first)   # and the count did not
+
+        found = vector_search(corpus, WordCountEmbedder(), "flux", limit=5)
+
+    assert [m.chunk.chunk_id for m in found] == live
+
+
+def test_reopening_an_index_at_a_different_width_rebuilds_it(tmp_path: Path) -> None:
+    """A vec0 table declares its dimension, and CREATE IF NOT EXISTS keeps it.
+
+    Opening a 3-wide index at 5 used to succeed and then fail deep inside an
+    insert with a dimension mismatch the caller could do nothing about.
+    """
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        SqliteVecIndex(corpus.connection, 3).rebuild("stub", corpus.chunk_generation())
+
+        wider = SqliteVecIndex(corpus.connection, 5)
+        declared = corpus.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'vec_chunks'"
+        ).fetchone()[0]
+        emptied = wider.count()
+
+    assert "float[5]" in declared and "float[3]" not in declared
+    assert emptied == 0          # rebuilt empty, ready for the new vectors

@@ -480,6 +480,16 @@ class CorpusStore:
         now = _timestamp()
         covered = set(for_papers or ()) | {chunk.arxiv_id for chunk in chunks}
         with self.connection:
+            # Every chunk write moves the corpus on. Chunk ids are derived from
+            # the source checksum, so replacing a paper's source changes all of
+            # its ids while leaving the count alone - and a vector index that
+            # decides freshness by counting cannot see that. The counter can.
+            self.connection.execute(
+                """
+                INSERT INTO schema_metadata (key, value) VALUES ('chunk_generation', '1')
+                ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+                """
+            )
             for arxiv_id in covered:
                 self.connection.execute(
                     "DELETE FROM chunks WHERE arxiv_id = ?", (arxiv_id,)
@@ -512,6 +522,13 @@ class CorpusStore:
                     for chunk in chunks
                 ],
             )
+
+    def chunk_generation(self) -> int:
+        """How many times chunks have been written. See record_chunks."""
+        row = self.connection.execute(
+            "SELECT value FROM schema_metadata WHERE key = 'chunk_generation'"
+        ).fetchone()
+        return 0 if row is None else int(row["value"])
 
     def all_chunks(self) -> list[Chunk]:
         """Return every stored chunk in a stable, citable order."""

@@ -22,29 +22,55 @@ VECTOR_COLUMNS = ("chunk_id", "arxiv_id", "kind", "embedding")
 INDEX_STATE_TABLE = "vector_index_state"
 
 
-def remember_model(connection: sqlite3.Connection, index_name: str, model_id: str) -> None:
-    """Record whose vectors an index now holds."""
+def _ensure_state_table(connection: sqlite3.Connection) -> None:
     connection.execute(
         f"""CREATE TABLE IF NOT EXISTS {INDEX_STATE_TABLE} (
-            index_name TEXT PRIMARY KEY, model_id TEXT NOT NULL)"""
+            index_name TEXT PRIMARY KEY, model_id TEXT NOT NULL,
+            generation INTEGER NOT NULL DEFAULT 0)"""
     )
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({INDEX_STATE_TABLE})")}
+    if "generation" not in columns:  # a state table written before this existed
+        connection.execute(
+            f"ALTER TABLE {INDEX_STATE_TABLE} ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def remember_model(
+    connection: sqlite3.Connection, index_name: str, model_id: str, generation: int = 0
+) -> None:
+    """Record whose vectors an index holds, and which corpus they came from."""
+    _ensure_state_table(connection)
     with connection:
         connection.execute(
-            f"""INSERT INTO {INDEX_STATE_TABLE} (index_name, model_id) VALUES (?, ?)
-                ON CONFLICT(index_name) DO UPDATE SET model_id = excluded.model_id""",
-            (index_name, model_id),
+            f"""INSERT INTO {INDEX_STATE_TABLE} (index_name, model_id, generation)
+                VALUES (?, ?, ?)
+                ON CONFLICT(index_name) DO UPDATE SET
+                    model_id = excluded.model_id, generation = excluded.generation""",
+            (index_name, model_id, generation),
         )
 
 
 def remembered_model(connection: sqlite3.Connection, index_name: str) -> str | None:
     """Whose vectors an index holds, or None when it has never said."""
+    return _remembered(connection, index_name)[0]
+
+
+def remembered_generation(connection: sqlite3.Connection, index_name: str) -> int | None:
+    """Which corpus generation those vectors were taken from."""
+    return _remembered(connection, index_name)[1]
+
+
+def _remembered(
+    connection: sqlite3.Connection, index_name: str
+) -> tuple[str | None, int | None]:
     try:
         row = connection.execute(
-            f"SELECT model_id FROM {INDEX_STATE_TABLE} WHERE index_name = ?", (index_name,)
+            f"SELECT model_id, generation FROM {INDEX_STATE_TABLE} WHERE index_name = ?",
+            (index_name,),
         ).fetchone()
     except sqlite3.OperationalError:  # the table predates this record
-        return None
-    return None if row is None else str(row[0])
+        return None, None
+    return (None, None) if row is None else (str(row[0]), int(row[1]))
 
 
 @dataclass(frozen=True)
@@ -66,9 +92,11 @@ class VectorIndex(Protocol):
 
     def indexed_model(self) -> str | None: ...
 
-    def sync(self, model_id: str) -> IndexSync: ...
+    def indexed_generation(self) -> int | None: ...
 
-    def rebuild(self, model_id: str) -> int: ...
+    def sync(self, model_id: str, generation: int | None = None) -> IndexSync: ...
+
+    def rebuild(self, model_id: str, generation: int | None = None) -> int: ...
 
     def search(
         self,
@@ -80,7 +108,12 @@ class VectorIndex(Protocol):
     ) -> list[tuple[str, float]]: ...
 
 
-def ensure_current(index: VectorIndex, corpus_vectors: int, model_id: str) -> bool:
+def ensure_current(
+    index: VectorIndex,
+    corpus_vectors: int,
+    model_id: str,
+    generation: int,
+) -> bool:
     """Bring the index in line with the stored embeddings, cheaply.
 
     Identity is checked before size. `embeddings` is keyed by
@@ -102,11 +135,19 @@ def ensure_current(index: VectorIndex, corpus_vectors: int, model_id: str) -> bo
     `verbatim index --rebuild` forces a full reload for that case.
     """
     if index.indexed_model() != model_id:
-        index.rebuild(model_id)
+        index.rebuild(model_id, generation)
+        return True
+    if index.indexed_generation() != generation:
+        # Chunks were rewritten since this index was built. Ids are derived
+        # from the source checksum, so a paper whose source was replaced has
+        # entirely new ids and the same count - which the comparison below
+        # reads as up to date while every one of those passages has silently
+        # dropped out of vector search. Measured: a search returned 0 of 1.
+        index.sync(model_id, generation)
         return True
     if index.count() == corpus_vectors:
         return False
-    index.sync(model_id)
+    index.sync(model_id, generation)
     return True
 
 
@@ -131,7 +172,10 @@ class SqliteVecIndex:
     def indexed_model(self) -> str | None:
         return remembered_model(self.connection, VECTOR_TABLE)
 
-    def sync(self, model_id: str) -> IndexSync:
+    def indexed_generation(self) -> int | None:
+        return remembered_generation(self.connection, VECTOR_TABLE)
+
+    def sync(self, model_id: str, generation: int | None = None) -> IndexSync:
         """Add vectors the index is missing and drop ones it should not hold.
 
         Work scales with what changed rather than with corpus size, which is
@@ -160,10 +204,10 @@ class SqliteVecIndex:
                 """,
                 (model_id,),
             ).rowcount
-        remember_model(self.connection, VECTOR_TABLE, model_id)
+        remember_model(self.connection, VECTOR_TABLE, model_id, generation or 0)
         return IndexSync(added=max(added, 0), removed=max(removed, 0))
 
-    def rebuild(self, model_id: str) -> int:
+    def rebuild(self, model_id: str, generation: int | None = None) -> int:
         """Discard the index and rebuild it from scratch.
 
         Only needed when the index may disagree with `embeddings` in a way the
@@ -172,7 +216,7 @@ class SqliteVecIndex:
         """
         with self.connection:
             self.connection.execute(f"DELETE FROM {VECTOR_TABLE}")
-        return self.sync(model_id).added
+        return self.sync(model_id, generation).added
 
     def search(
         self,
@@ -211,10 +255,18 @@ class SqliteVecIndex:
     def _create_table(self) -> None:
         # A table built before the metadata columns existed cannot be filtered,
         # so replace it; the index is derived and rebuilds from `embeddings`.
+        # The same applies to its width: a vec0 table declares its dimension in
+        # its schema and CREATE IF NOT EXISTS silently keeps the old one, so
+        # opening a 384-wide index at 768 used to succeed and then fail deep
+        # inside an insert with a dimension mismatch nobody could act on.
         existing = self.connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (VECTOR_TABLE,)
         ).fetchone()
-        if existing is not None and not all(column in existing[0] for column in VECTOR_COLUMNS):
+        stale = existing is not None and (
+            not all(column in existing[0] for column in VECTOR_COLUMNS)
+            or f"float[{self.dimensions}]" not in existing[0]
+        )
+        if stale:
             self.connection.execute(f"DROP TABLE {VECTOR_TABLE}")
         self.connection.execute(
             f"""
@@ -244,6 +296,14 @@ class SqlitePaperIndex:
         self.connection = connection
         self.dimensions = dimensions
         load_sqlite_vec(self.connection)
+        existing = self.connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (PAPER_VECTOR_TABLE,),
+        ).fetchone()
+        if existing is not None and f"float[{dimensions}]" not in existing[0]:
+            # Same reasoning as the passage index: the width is part of the
+            # schema, and a mismatch is a rebuild rather than an error later.
+            self.connection.execute(f"DROP TABLE {PAPER_VECTOR_TABLE}")
         self.connection.execute(
             f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS {PAPER_VECTOR_TABLE} USING vec0(
@@ -261,7 +321,10 @@ class SqlitePaperIndex:
     def indexed_model(self) -> str | None:
         return remembered_model(self.connection, PAPER_VECTOR_TABLE)
 
-    def sync(self, model_id: str) -> IndexSync:
+    def indexed_generation(self) -> int | None:
+        return remembered_generation(self.connection, PAPER_VECTOR_TABLE)
+
+    def sync(self, model_id: str, generation: int | None = None) -> IndexSync:
         """Reconcile the index with the stored paper vectors."""
         with self.connection:
             added = self.connection.execute(
@@ -282,13 +345,13 @@ class SqlitePaperIndex:
                 """,
                 (model_id,),
             ).rowcount
-        remember_model(self.connection, PAPER_VECTOR_TABLE, model_id)
+        remember_model(self.connection, PAPER_VECTOR_TABLE, model_id, generation or 0)
         return IndexSync(added=max(added, 0), removed=max(removed, 0))
 
-    def rebuild(self, model_id: str) -> int:
+    def rebuild(self, model_id: str, generation: int | None = None) -> int:
         with self.connection:
             self.connection.execute(f"DELETE FROM {PAPER_VECTOR_TABLE}")
-        return self.sync(model_id).added
+        return self.sync(model_id, generation).added
 
     def search(self, query: Sequence[float], *, limit: int) -> list[tuple[str, float]]:
         """Return (arxiv_id, distance) nearest first; smaller distance is closer."""

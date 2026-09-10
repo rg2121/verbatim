@@ -79,7 +79,7 @@ def vector_search(
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
     # Over-fetch when filtering, since matches are discarded after ranking.
     fetch = limit * FILTER_OVERFETCH if papers else limit
-    ensure_current(index, stored, model.model_id)
+    ensure_current(index, stored, model.model_id, corpus.chunk_generation())
 
     # Filters are pushed into the index rather than applied to a list of chunk
     # ids: SQLite caps a statement at 32766 variables, so passing every body
