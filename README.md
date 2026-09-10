@@ -55,9 +55,20 @@ nothing to fetch and nothing to embed:
 
 ```bash
 uv run verbatim search "how do transformers handle long context" --state sample/corpus.db
-uv run verbatim ask "what is a neural turing machine?" --state sample/corpus.db
+uv run verbatim ask "what problem does QLoRA solve?" --state sample/corpus.db
 uv run verbatim graph --state sample/corpus.db
 ```
+
+Then ask it something the sample does *not* cover, which is the more
+interesting demonstration:
+
+```bash
+uv run verbatim ask "what is a neural turing machine?" --state sample/corpus.db
+```
+
+Forty papers do not include that one, and the answer says so rather than
+assembling something plausible out of the nearest passages. That is the
+behaviour the whole design is for.
 
 Forty papers, 3,139 passages and their vectors, 2,230 bibliography entries,
 about 23 MB. A share of the papers is picked as a citation neighborhood - a
@@ -67,6 +78,19 @@ the database, so `stats` correctly reports zero PDFs rather than claiming
 files it does not have. Every passage still carries its own arXiv id,
 section, offsets, checksum and licence, so citations are complete. `ask`
 needs a model through Ollama; `search` and `graph` need nothing.
+
+**Any Ollama model works.** Nothing is pinned: leave `OLLAMA_MODEL` unset and
+the first pulled model is used, or name one per command.
+
+```bash
+OLLAMA_MODEL=llama3.1 uv run verbatim ask "what problem does QLoRA solve?" --state sample/corpus.db
+```
+
+Answer quality varies with the model and the project says where — the ladder
+recovers sections on a strong model that it can only report as gaps on a weak
+one — but the citation verification is arithmetic and does not vary at all. A
+quote either appears in the passage it names or it is thrown out, whichever
+model wrote it.
 
 Regenerate it from a full corpus with `verbatim sample --papers 40`.
 

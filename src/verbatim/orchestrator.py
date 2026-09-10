@@ -54,8 +54,7 @@ from verbatim.answers import (
     Answer,
     Completion,
     answer_from_matches,
-    describe_subject,
-    subject_similarity,
+    subject_check,
 )
 from verbatim.contracts import Budget, BudgetGuard, Cost, Critique, Gathered, Verdict
 from verbatim.corpus import ChunkMatch, CorpusStore
@@ -316,8 +315,9 @@ def work_section(
             answer = answer_from_matches(corpus, completion, heading, matches)
             subject = closeness = None
             if matches and check_subject:
-                subject = describe_subject(completion, matches)
-                closeness = subject_similarity(embedder, heading, subject)
+                subject, closeness = subject_check(
+                    completion, embedder, heading, matches
+                )
             found = (
                 run_critique(heading, answer, gathered, complete_text=complete_text)
                 if critic else None

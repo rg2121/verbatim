@@ -25,9 +25,8 @@ from verbatim.answers import (
     Answer,
     answer_from_payload,
     build_prompt,
-    describe_subject,
     parse_line_protocol,
-    subject_similarity,
+    subject_check,
 )
 from verbatim.citations import render_locator
 from verbatim.conversation import Turn, standalone_question
@@ -534,14 +533,18 @@ def create_app(
                 # After the answer, not before: the check costs a model call,
                 # and the reader should not wait on a warning that usually
                 # does not fire.
-                subject = describe_subject(answering(), matches)
-                closeness = subject_similarity(embedder(), q, subject)
+                subject, closeness = subject_check(answering(), embedder(), q, matches)
+                # A model that named no subject leaves nothing to report. The
+                # event is still sent, so the page can stop waiting for it,
+                # but it never carries a warning built on a measurement that
+                # was not taken.
                 yield _event(
                     "subject",
                     {
                         "subject": subject,
-                        "closeness": round(closeness, 3),
-                        "warn": closeness < config.SUBJECT_WARN_BELOW,
+                        "closeness": None if closeness is None else round(closeness, 3),
+                        "warn": closeness is not None
+                        and closeness < config.SUBJECT_WARN_BELOW,
                     },
                 )
             # Named "failed" because EventSource fires its own "error" event

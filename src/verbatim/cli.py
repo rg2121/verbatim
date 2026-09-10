@@ -9,8 +9,7 @@ import time
 
 from verbatim.agent import answer_question
 from verbatim.answers import (
-    describe_subject,
-    subject_similarity,
+    subject_check,
     OllamaCompletion,
     OllamaToolCaller,
     answer_from_matches,
@@ -1196,8 +1195,9 @@ def run() -> None:
             if matches and not args.no_subject_check:
                 # Asked what the passages discuss rather than whether they are
                 # relevant: every model tested says yes to the latter.
-                subject = describe_subject(completion, matches)
-                closeness = subject_similarity(embedder, args.question, subject)
+                subject, closeness = subject_check(
+                    completion, embedder, args.question, matches
+                )
             # Computed here, while the corpus is open; printed below with the
             # answer.
             evidence = describe_evidence(
@@ -1213,7 +1213,7 @@ def run() -> None:
         # and judges it themselves.
         for line in evidence.lines():
             print(f"  {line}")
-        if subject is not None and closeness < config.SUBJECT_WARN_BELOW:
+        if subject and closeness is not None and closeness < config.SUBJECT_WARN_BELOW:
             # A warning, never a suppression: the ranges for answerable and
             # unanswerable questions overlap, so this cannot decide, only show.
             print(f"\n  ! these passages are about: {subject}")

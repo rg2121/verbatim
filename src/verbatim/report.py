@@ -29,8 +29,6 @@ from verbatim.answers import (
     Answer,
     Completion,
     answer_from_matches,
-    describe_subject,
-    subject_similarity,
 )
 from verbatim.citations import render_bibliography
 from verbatim.corpus import CorpusStore

@@ -651,6 +651,32 @@ def subject_similarity(embedder: Any, question: str, subject: str) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
+def subject_check(
+    completion: Completion,
+    embedder: Any,
+    question: str,
+    matches: list[ChunkMatch],
+    *,
+    sample: int = 5,
+) -> tuple[str | None, float | None]:
+    """What the passages are about, and how far that is from the question.
+
+    Returns `(None, None)` when the model names no subject, because **a check
+    that did not run must be silent rather than warn**. Embedding an empty
+    subject against the question yields an arbitrary similarity, and on a
+    model that returned nothing here that printed a warning with a blank
+    subject and a threshold complaint beneath it - a report of a measurement
+    that was never made.
+
+    The two steps live together because four call sites were performing them
+    in sequence, which is three chances to guard the result differently.
+    """
+    subject = describe_subject(completion, matches, sample=sample)
+    if not subject:
+        return None, None
+    return subject, subject_similarity(embedder, question, subject)
+
+
 def judge_relevance(
     completion: Completion, question: str, matches: list[ChunkMatch]
 ) -> bool | None:
