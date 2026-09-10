@@ -33,23 +33,74 @@ before it was scored, so the order is on the record rather than asserted.
 **Development figures are inflated by about an eighth.** Same corpus, same
 kind of question; the difference is contamination, not retrieval.
 
-## None of these modes is distinguishable from another
+## Growing the key from 88 cases to 488
 
-Reciprocal rank was recorded per case and the modes compared with a
-10,000-round paired bootstrap over the 88 answerable held-out cases
-(`evals/paired_bootstrap.py`):
+At 88 cases nothing was distinguishable from anything: every interval
+contained zero, and the differences this project had used to rank modes were
+smaller than the noise. `verbatim author-cases` added **400 more**,
+written by a model from titles and abstracts only, frozen and committed before
+being scored. The authoring rule is structural — `authoring.py` imports
+nothing that can search, and a test fails if that changes.
 
-| comparison | difference | 95% interval |
+**A quarter of what a model writes from an abstract borrows its wording.** Of
+536 candidates, 134 were rejected for sharing a five-or-more-word run with the
+abstract they were written from. Abstracts are passages in this corpus, so
+those questions would have been retrieved for that reason alone. The threshold
+came from the existing set rather than from taste: the 88 hand-authored cases
+share a median run of 2 words and at most 6, with 4 of 88 at five or more.
+
+### The batches are not equally hard, and that is the first result
+
+| batch | cases | hybrid mrr |
 |---|---|---|
-| graph − hybrid | +0.000 | [+0.000, +0.000] |
-| graph − compare | +0.006 | [−0.014, +0.028] |
-| graph − titles | +0.021 | [−0.034, +0.075] |
+| hand-authored, first | 36 | 0.675 |
+| hand-authored, second | 52 | 0.816 |
+| generated | 400 | 0.918 |
 
-Every interval contains zero. At this sample size a few hundredths of mrr is
-noise — and the differences this project used to rank modes are smaller than
-that. `hybrid+graph` was made the default over plain `hybrid` on **0.003**,
-which is unmeasurable. See
+The generated cases are much easier — but so is the second hand-authored batch
+compared with the first, by 0.141. **How a batch was written moves the score
+more than any retrieval mode does.** The practical rule: an absolute mrr is
+meaningless without naming the batch, and figures from different batches must
+never be compared.
+
+### What survives the batching: the comparisons
+
+Mode *rankings* replicate across batches even though the absolute scores do
+not. Default against the always-on title leg:
+
+| batch | cases | difference | 95% interval | won–lost | sign test |
+|---|---|---|---|---|---|
+| hand, first | 36 | −0.052 | [−0.161, +0.056] | 6–7 | p = 1.00 |
+| hand, second | 52 | +0.071 | [+0.029, +0.122] | 13–0 | p = 0.0002 |
+| generated | 400 | +0.019 | [−0.002, +0.040] | 38–19 | p = 0.016 |
+| **all 488** | 488 | **+0.019** | [−0.000, +0.038] | **57–26** | **p = 0.0009** |
+
+**This is the first mode comparison in the project that says anything.** The
+default beats the title leg on direction with high confidence — it wins twice
+as often as it loses, replicated in the two batches that have any signal at
+all, and the small first batch that disagrees shows none (6–7).
+
+It is reported as *direction*, not as a magnitude. The mean difference is
+0.019 with an interval that still touches zero, and the driver's two-test rule
+— bootstrap share at or below zero **and** an exact sign test — therefore still
+prints NOT distinguishable. Both halves of that are true and both are worth
+saying: the title leg is reliably worse, and by an amount too small for the
+mean to pin down. Keeping the stricter verdict matters more than claiming this
+one, because the rule exists to stop a percentile bound being read as a result.
+
+### The graph gate fires on none of the 488
+
+`hybrid+graph` and plain `hybrid` return *identical* rankings on every case in
+the key. The default is not beating the alternative here; it is the same
+computation. The key contains no definitional questions, because deciding that
+a subject is definitional requires inspecting the corpus, which authoring blind
+forbids. So the shipped default remains justified by the question shape it
+targets — "what is the Adam optimizer": nothing in the top ten, then rank 3 —
+and by nothing in this table. See
 [postmortems/0002](postmortems/0002-measuring-against-a-contaminated-key.md).
+
+The comparison gate is in the same position for the opposite reason: it fires
+on 6 of 488 cases, wins 5 of them, and 5–1 is p = 0.22.
 
 The consequence is not that the gates are wrong. It is that a gate aimed at a
 question shape has to be judged on that shape's cases — where "what is the
