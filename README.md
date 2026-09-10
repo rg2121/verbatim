@@ -1282,11 +1282,14 @@ signal that the generator is working: a run that keeps everything has stopped
 checking.
 
 ```
-  kept 178 of 243 candidate example(s)
-    rejected, a quote failed verification   41
-    rejected, no citation                   19
-    rejected, writer declined                5
+  kept N of M candidate example(s)
+    rejected, a quote failed verification   ...
+    rejected, no citation                   ...
+    rejected, writer declined               ...
 ```
+
+(Shape only — every other number in this README is measured, and this command
+has not yet been run at size. The real mix goes here when it has been.)
 
 An `ATTRIBUTIONS` file is written beside the dataset, listing every source
 paper with its authors, versioned id and licence. The policy requires it of

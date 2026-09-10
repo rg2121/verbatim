@@ -259,6 +259,7 @@ def main() -> int:
         # `todo` is ordered run, then arm, then question, so each arm's work is
         # one contiguous block and its cost is the usage across that block. A
         # single snapshot taken up front would charge every arm for all of them.
+        stopped: str | None = None
         with CorpusStore(config.STATE_PATH) as corpus, args.out.open("a") as sink:
             block: tuple[int, str] | None = None
             started = completion.usage.snapshot()
@@ -268,9 +269,18 @@ def main() -> int:
                         costs[block[1]].append(completion.usage.since(started))
                     block = (key.run, key.arm)
                     started = completion.usage.snapshot()
-                answer = answer_one(
-                    key.arm, corpus, embedder, completion, complete_text, key.question
-                )
+                try:
+                    answer = answer_one(
+                        key.arm, corpus, embedder, completion, complete_text,
+                        key.question,
+                    )
+                except (RuntimeError, OSError) as error:
+                    # The model server went away. Everything answered so far is
+                    # already flushed, so the run stops cleanly and the same
+                    # command resumes it - rather than raising a traceback that
+                    # says nothing about what survived.
+                    stopped = f"{type(error).__name__}: {error}"
+                    break
                 case = AnsweredCase(
                     question=key.question,
                     answer=answer,
@@ -286,11 +296,16 @@ def main() -> int:
         # A resumed run generates only part of an arm, so what it spent is not
         # that arm's cost. An arm's cost is reportable only when every one of
         # its answers was generated here rather than read from the checkpoint.
-        generated = set(todo)
+        generated = {key for key in todo if key in answered}
         for arm in arms:
             if any(Key(run, arm, question) not in generated
                    for run in range(args.runs) for question in questions):
                 costs.pop(arm, None)
+        if stopped is not None:
+            print(f"\nSTOPPED after {len(answered)} answer(s): {stopped}")
+            print(f"Re-run the same command to resume from {args.out}.")
+            report(answered, arms, questions, args.runs, costs)
+            return 1
 
     report(answered, arms, questions, args.runs, costs)
     return 0
