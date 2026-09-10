@@ -249,3 +249,44 @@ def test_a_failed_run_does_not_strand_the_pages_it_never_reached(tmp_path: Path)
     # duplicate, and goes on to the hundred the failure cost.
     assert second.fetched == 300
     assert stored == 300
+
+
+def test_a_failed_deep_walk_starts_from_the_newest_paper_again(
+    tmp_path: Path,
+) -> None:
+    """`--full` is not resumable, and this is the shape of that.
+
+    A deep backfill is the run most likely to need resuming - arXiv returns
+    503 under load - and it is the one that cannot. Nothing records how deep a
+    walk reached, so the next one pages from the newest paper again and
+    re-requests what is already held before it reaches anything new.
+
+    Asserted rather than fixed: decision 12 specifies the backfill cursor that
+    would fix it and says why it is not built yet. If that changes, this test
+    is where the old behaviour is written down.
+    """
+    feed = FakeArxiv(300)
+    calls = {"n": 0}
+
+    def flaky(category, *, start=0, page_size=100, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("503 Service Unavailable")
+        return feed(category, start=start, page_size=page_size)
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        first = sync_category(
+            corpus, "cs.CL", limit=300, page_size=100, fetch_page=flaky,
+            sleep=no_sleep, full=True,
+        )
+        feed.requests.clear()
+        second = sync_category(
+            corpus, "cs.CL", limit=300, page_size=100, fetch_page=feed,
+            sleep=no_sleep, full=True,
+        )
+
+    assert first.fetched == 200  # the two newest pages, then the failure
+    # The retry does not pick up at page three. It asks for the newest papers
+    # first, which it already has, and pays for them again.
+    assert feed.requests[0] == (0, 100)
+    assert second.fetched == 300

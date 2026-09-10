@@ -103,7 +103,11 @@ uv run verbatim sync --category cs.LG --limit 5000 --full
 ```
 
 Already-known papers are refreshed rather than duplicated, so the only cost is
-re-requesting their metadata. arXiv's API is variable — the
+re-requesting their metadata — and a `--full` run is **not resumable**: it
+records nothing about how deep it reached, so one that fails part-way starts
+from the newest paper again. Deepen a large category in stages of increasing
+`--limit`, each of which commits what it fetched. Why there is no backfill
+cursor is recorded in [decision 12](docs/decisions/0012-one-sync-cursor-and-what-it-costs.md). arXiv's API is variable — the
 same query has taken 2s and 61s, and returns 503 under load — so requests are
 retried with backoff, and a page that still fails stops the run cleanly with
 everything already fetched committed and the watermark recorded.
