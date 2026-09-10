@@ -332,3 +332,39 @@ def test_generate_does_not_remake_an_example_a_previous_run_wrote(
     assert first and again
     assert again[0].example_id != first[0].example_id
     assert tally.rejected.get("already generated") == 1
+
+
+def test_the_seed_draw_is_not_sized_to_an_assumed_keep_rate(tmp_path: Path) -> None:
+    """A strict acceptance rule needs more seeds than the arithmetic suggests.
+
+    Sizing the draw to an assumed keep rate makes a run quietly return fewer
+    examples than it was asked for. Seeds cost one query; generations cost
+    minutes. This asserts the generator keeps looking rather than giving up
+    once its first few passages are rejected.
+    """
+    from verbatim.distill import generate
+
+    classes = {f"2608.0000{n}v1": "open" for n in range(1, 7)}
+    with seeded(tmp_path, classes) as corpus:
+        completion = QuotingCompletion(corpus)
+        refusals = {"left": 3}
+
+        answering = completion.complete
+
+        def sometimes(system, user, schema):
+            if refusals["left"]:
+                refusals["left"] -= 1
+                return {"answer": "I cannot answer this.", "citations": []}
+            return answering(system, user, schema)
+
+        completion.complete = sometimes  # type: ignore[method-assign]
+        tally = Tally()
+        made = list(generate(
+            corpus, StubEmbedder(), completion,
+            complete_text=completion.complete_text,
+            generator_model="stub", examples=2, questions_per_passage=1,
+            tally=tally,
+        ))
+
+    assert len(made) == 2  # reached the target despite three rejections
+    assert tally.rejected.get("no citation") == 3

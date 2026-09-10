@@ -61,6 +61,11 @@ ELIGIBLE_CLASSES: tuple[str, ...] = ("open",)
 MIN_SEED_WORDS = 60
 MAX_SEED_WORDS = 400
 
+# Seed passages drawn per example asked for. Generous on purpose; see
+# `generate`, where the reason is that seeds are free and generations
+# are not.
+SEED_OVERDRAW = 4
+
 QUESTION_SYSTEM = """You are given a passage from a research paper. Write questions that this passage answers.
 
 Rules:
@@ -364,10 +369,15 @@ def generate(
         raise ValueError("examples must be at least 1")
     tally = tally if tally is not None else Tally()
     already = set(skip)
-    # Each seed passage yields at most `questions_per_passage` examples, and
-    # most yield fewer, so ask for enough passages to reach the target even if
-    # most are rejected.
-    wanted = max(examples * 2 // max(questions_per_passage, 1), examples)
+    # Draw far more seed passages than the arithmetic needs. A passage yields
+    # at most `questions_per_passage` candidates and most yield fewer - the
+    # writer declines, or a quote fails verification, and the whole example
+    # goes - so sizing the draw to an assumed keep rate makes the run quietly
+    # return fewer examples than asked for. Seeds are one SQL query against
+    # 3,806 eligible papers and cost nothing; generations are what cost. The
+    # loop stops as soon as the target is met, so an over-draw is never paid
+    # for.
+    wanted = examples * SEED_OVERDRAW
     for chunk in seed_passages(corpus, limit=wanted, seed=seed, classes=classes):
         for question in questions_for(
             complete_text, chunk, count=questions_per_passage
@@ -380,6 +390,9 @@ def generate(
             if example is None:
                 continue
             if example.example_id in already:
+                # `keep` counted it before this could be known - the id needs
+                # the passages, which only retrieval can supply. Move it from
+                # kept to rejected rather than letting the tally overcount.
                 tally.kept -= 1
                 tally.reject("already generated")
                 continue

@@ -690,10 +690,11 @@ def run() -> None:
             print(f"resuming: {len(existing)} example(s) already in {args.out}")
         tally = Tally()
         kept = list(existing)
+        stopped: str | None = None
         with CorpusStore(args.state) as corpus, record_run(
             corpus, "distill", examples=args.examples, llm=args.llm, seed=args.seed
         ) as run, args.out.open("a") as sink:
-            for example in generate(
+            examples_made = generate(
                 corpus, embedder, completion,
                 complete_text=completion.complete_text,
                 generator_model=args.llm or config.OLLAMA_MODEL,
@@ -703,12 +704,20 @@ def run() -> None:
                 passages=args.passages,
                 tally=tally,
                 skip=[row["example_id"] for row in existing],
-            ):
-                record = example.to_dict()
-                sink.write(json.dumps(record) + "\n")
-                sink.flush()
-                kept.append(record)
-                print(f"  kept {tally.kept}/{args.examples}", end="\r", flush=True)
+            )
+            # A generation is minutes of work per example and the model server
+            # is not always there. Every kept example is already on disk, so a
+            # failure stops the run and the same command resumes it, rather
+            # than discarding an hour to a 502.
+            try:
+                for example in examples_made:
+                    record = example.to_dict()
+                    sink.write(json.dumps(record) + "\n")
+                    sink.flush()
+                    kept.append(record)
+                    print(f"  kept {tally.kept}/{args.examples}", end="\r", flush=True)
+            except (RuntimeError, OSError) as error:
+                stopped = f"{type(error).__name__}: {error}"
             run.record(
                 kept=tally.kept,
                 considered=tally.considered,
@@ -716,6 +725,9 @@ def run() -> None:
             )
         print(f"{args.out}\n")
         print(tally.render())
+        if stopped is not None:
+            print(f"\n  STOPPED: {stopped}")
+            print("  Re-run the same command with the same --seed to resume.")
         if tally.faults:
             print("\n  A fault means an ineligible paper reached an answer's"
                   " passages.\n  The licence gate is not holding; do not train"
@@ -728,6 +740,8 @@ def run() -> None:
         credits = args.out.with_name("ATTRIBUTIONS")
         credits.write_text(attributions(papers))
         print(f"\n  {len(papers)} source paper(s) credited in {credits}")
+        if stopped is not None:
+            raise SystemExit(1)
         return
 
     if args.command == "eval-answers":
