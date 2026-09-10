@@ -511,6 +511,12 @@ class OllamaCompletion:
                 with urlopen(request, timeout=self.timeout) as response:  # noqa: S310
                     body = json.loads(response.read())
             except HTTPError as error:
+                if error.code == 404:
+                    # Ollama answers 404 when the model is not pulled, which
+                    # is the one 4xx a user can act on - and "refused the
+                    # request (404 Not Found)" does not tell them the model is
+                    # the problem, let alone which models they do have.
+                    raise RuntimeError(self._missing_model_message()) from error
                 if error.code < 500:
                     raise RuntimeError(
                         f"Ollama at {self.host} refused the request "
@@ -528,6 +534,27 @@ class OllamaCompletion:
             f"Cannot reach Ollama at {self.host} after {attempts + 1} attempts "
             f"({last}). Is it running? Start it with 'ollama serve'."
         )
+
+    def _missing_model_message(self) -> str:
+        """Say which model is missing, and what is actually pulled.
+
+        Asking which models exist can itself fail, so it never turns one bad
+        error into another: the useful half of the message is written first
+        and the listing is added only if it arrives.
+        """
+        message = (
+            f"Ollama at {self.host} has no model named {self.model!r}. "
+            f"Pull it with 'ollama pull {self.model}'"
+        )
+        try:
+            available = [
+                item["name"] for item in self._get("/api/tags").get("models", [])
+            ]
+        except Exception:  # noqa: BLE001 - a listing failure must not mask this
+            return message + "."
+        if not available:
+            return message + ", or pull any model - none are installed."
+        return message + f", or use one of: {', '.join(sorted(available))}."
 
 
 def parse_line_protocol(content: str) -> dict[str, Any] | None:

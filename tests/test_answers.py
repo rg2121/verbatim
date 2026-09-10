@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from verbatim.answers import (
     Answer,
     answer_from_matches,
@@ -613,3 +615,58 @@ def test_prose_in_brackets_is_not_mistaken_for_a_grouped_marker() -> None:
     text = renumber_markers("Flux threads it [see also, page 3].", [_cite(kept)])
 
     assert text == "Flux threads it [see also, page 3]."
+
+
+def test_a_missing_model_says_which_one_and_what_is_pulled() -> None:
+    """Ollama answers 404 when a model is not pulled.
+
+    It is the one 4xx a user can act on, and "refused the request (404 Not
+    Found)" tells them nothing - not that the model is the problem, and not
+    which models they have. This matters most on a fresh clone, where naming
+    a model you do not have is the likeliest first mistake.
+    """
+    from urllib.error import HTTPError
+
+    from verbatim.answers import OllamaCompletion
+
+    completion = OllamaCompletion("nonesuch:70b")
+
+    def refuse(request, timeout=None):
+        raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    def tags(path):
+        return {"models": [{"name": "llama3.1"}, {"name": "phi4"}]}
+
+    completion._get = tags  # type: ignore[method-assign]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.answers.urlopen", refuse)
+        with pytest.raises(RuntimeError) as raised:
+            completion.complete_text("system", "user")
+
+    message = str(raised.value)
+    assert "no model named 'nonesuch:70b'" in message
+    assert "ollama pull nonesuch:70b" in message
+    assert "llama3.1, phi4" in message
+
+
+def test_listing_the_models_failing_does_not_mask_the_missing_model() -> None:
+    """The useful half of the message survives a second failure."""
+    from urllib.error import HTTPError
+
+    from verbatim.answers import OllamaCompletion
+
+    completion = OllamaCompletion("nonesuch:70b")
+
+    def refuse(request, timeout=None):
+        raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    def broken(path):
+        raise OSError("connection reset")
+
+    completion._get = broken  # type: ignore[method-assign]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.answers.urlopen", refuse)
+        with pytest.raises(RuntimeError) as raised:
+            completion.complete_text("system", "user")
+
+    assert "no model named 'nonesuch:70b'" in str(raised.value)
