@@ -368,3 +368,98 @@ def test_the_seed_draw_is_not_sized_to_an_assumed_keep_rate(tmp_path: Path) -> N
 
     assert len(made) == 2  # reached the target despite three rejections
     assert tally.rejected.get("no citation") == 3
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is the affiliation of Hakan Inan?",
+        "What is the email address of Jinchuan Tian?",
+        "Which institution is the Language Technologies Institute affiliated with?",
+        "Who wrote the sparse attention analysis?",
+    ],
+)
+def test_questions_about_the_papers_cover_are_dropped(question: str) -> None:
+    """Front matter is a passage like any other, and it is a trap.
+
+    A paper's first chunk carries its title, authors and affiliations, and a
+    question generator handed one asks who works where. On the first 300
+    examples, 83 came out bibliographic. The check is on the question because
+    the passage has no clean signal: front matter shares chunk_index 0 with
+    half the corpus and with most of the good seeds.
+    """
+    from verbatim.distill import bibliographic, usable
+
+    assert bibliographic(question)
+    assert not usable(question)
+
+
+def test_a_research_question_is_kept() -> None:
+    from verbatim.distill import usable
+
+    assert usable("how does contrastive pretraining affect retrieval quality")
+    assert usable("what sample complexity does projected subgradient descent reach")
+
+
+def test_an_unverified_marker_rejects_the_example_even_with_nothing_rejected(
+    tmp_path: Path,
+) -> None:
+    """An empty `rejected` list is not proof the text is clean.
+
+    A model that writes an inline marker for a passage it never cited leaves a
+    dangling reference, which is rewritten to [unverified] with nothing in
+    `rejected` to show for it. Checking the list alone let two of the first
+    300 examples through carrying the marker.
+    """
+    with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
+        citation, match = cited(corpus, "2608.00001v1")
+        answer = answer_with([citation])
+        answer = Answer(
+            question=answer.question,
+            text="Dielectric loss dominates [1], and so does something else [unverified].",
+            citations=answer.citations, rejected=[], declined=False,
+        )
+        tally = Tally()
+        example = keep(answer, [match], corpus, generator_model="m", tally=tally)
+
+    assert example is None
+    assert tally.rejected == {"an unverified marker in the text": 1}
+
+
+def test_an_answer_that_disowns_its_evidence_while_citing_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Abstain-and-cite is not a behaviour worth teaching."""
+    with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
+        citation, match = cited(corpus, "2608.00001v1")
+        answer = Answer(
+            question="q",
+            text=(
+                "The provided passages do not mention Katherine Freese; "
+                "however, dielectric loss dominates [1]."
+            ),
+            citations=[citation], rejected=[], declined=False,
+        )
+        tally = Tally()
+        example = keep(answer, [match], corpus, generator_model="m", tally=tally)
+
+    assert example is None
+    assert tally.rejected == {"abstains while citing": 1}
+
+
+def test_a_claim_about_the_paper_is_not_mistaken_for_an_abstention(
+    tmp_path: Path,
+) -> None:
+    """"The authors do not provide a proof" is a finding, not a refusal."""
+    with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
+        citation, match = cited(corpus, "2608.00001v1")
+        answer = Answer(
+            question="q",
+            text="The authors do not provide a proof of convergence [1].",
+            citations=[citation], rejected=[], declined=False,
+        )
+        tally = Tally()
+        example = keep(answer, [match], corpus, generator_model="m", tally=tally)
+
+    assert example is not None
+    assert tally.kept == 1

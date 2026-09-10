@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from verbatim.answers import Answer, answer_from_matches, build_prompt
+from verbatim.answers import (
+    Answer,
+    answer_from_matches,
+    build_prompt,
+    renumber_markers,
+)
+from verbatim.citations import Citation
 from verbatim.corpus import ChunkMatch
 
 from helpers import chunked_corpus
@@ -563,3 +569,47 @@ def test_the_model_client_retries_a_transient_failure_but_not_a_refusal() -> Non
         assert calls["n"] == 1     # not retried
     finally:
         module.urlopen, module.time = original, original_sleep
+
+
+def _cite(chunk_id: str) -> Citation:
+    return Citation(
+        arxiv_id="2608.11111v1", base_arxiv_id="2608.11111", version=1,
+        title="T", authors=["A"], page_number=1, char_start=0, char_end=1,
+        quoted_text="q", chunk_id=chunk_id, source_sha256="s",
+        source_url="u", license_url=None, retrieved_at="2026-01-01T00:00:00Z",
+    )
+
+
+def test_grouped_chunk_id_markers_are_renumbered_like_single_ones() -> None:
+    """A pair of hashes is not something a reader can follow.
+
+    Models that cite by chunk id group their markers the same way models that
+    cite by number do. A single id was renumbered and a group was not, so
+    "[a826c26dad1a785511b3, 180d5845e4ce3b24a60a]" reached the reader - in
+    `ask`, in `report`, and into generated training data, where it teaches a
+    student to emit twenty hex characters as a citation.
+    """
+    first, second = "a826c26dad1a785511b3", "180d5845e4ce3b24a60a"
+    citations = [_cite(first), _cite(second)]
+
+    text = renumber_markers(f"Flux threads it [{first}, {second}].", citations)
+
+    assert text == "Flux threads it [1][2]."
+
+
+def test_a_grouped_marker_whose_member_failed_says_so() -> None:
+    missing = "ffffffffffffffffffff"
+    kept = "a826c26dad1a785511b3"
+
+    text = renumber_markers(f"Flux threads it [{kept}, {missing}].", [_cite(kept)])
+
+    assert text == "Flux threads it [1][unverified]."
+
+
+def test_prose_in_brackets_is_not_mistaken_for_a_grouped_marker() -> None:
+    """The group is markers only if every member is one."""
+    kept = "a826c26dad1a785511b3"
+
+    text = renumber_markers("Flux threads it [see also, page 3].", [_cite(kept)])
+
+    assert text == "Flux threads it [see also, page 3]."

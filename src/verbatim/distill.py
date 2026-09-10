@@ -76,6 +76,9 @@ Rules:
   never "what does the proposed method do".
 - Do not refer to the passage, the paper, the authors, the study, the figure or
   the table.
+- Ask about the research, never about the paper's cover. No questions about who
+  wrote it, where they work, their email addresses, funding or acknowledgements,
+  even when the passage lists them.
 
 Write one question per line, in this exact form, and write nothing else:
 
@@ -95,6 +98,42 @@ DEICTIC = re.compile(
     re.IGNORECASE,
 )
 MIN_QUESTION_WORDS = 5
+
+# A passage from a paper's front matter carries its title, authors and their
+# affiliations, and a question generator handed one dutifully asks who works
+# where. Measured on the first 300 examples: 83 of them - 28% - were
+# bibliographic trivia ("what is the email address of ...").
+#
+# The check is on the question rather than on the passage because the passage
+# has no clean signal: front matter shares `chunk_index` 0 with 48% of the
+# corpus and with most of the *good* seeds, since an HTML paper's first chunk
+# usually holds the abstract too. What is wrong here is what was asked, not
+# what it was asked about.
+BIBLIOGRAPHIC = re.compile(
+    r"\b(?:affiliation|affiliated|e-?mail|who\s+wrote|corresponding\s+author|"
+    r"acknowledge(?:s|d|ment)?|funding|grant\s+number|which\s+institution|"
+    r"authors?\s+of|listed\s+as)\b",
+    re.IGNORECASE,
+)
+
+# An answer that says the evidence is missing while carrying citations teaches
+# a student to abstain and cite at the same time. Deliberately anchored on
+# references to the *supplied* evidence: "the authors do not provide a proof"
+# is a claim about a paper and is fine.
+DISOWNS_ITS_EVIDENCE = re.compile(
+    r"\b(?:provided|given|these|the|supplied)\s+"
+    r"(?:passages?|excerpts?|context|text|documents?)\s+"
+    r"(?:do(?:es)?\s+not|contain\s+no|lack|make\s+no)"
+    r"|\bno\s+information\s+(?:about|on|regarding)\b"
+    r"|\bnot\s+(?:mentioned|discussed|present|found)\s+in\s+the\s+"
+    r"(?:provided\s+)?(?:passages?|excerpts?|context)\b",
+    re.IGNORECASE,
+)
+
+# The marker `renumber_markers` leaves where a citation did not survive - or
+# where the model pointed at a passage it never cited at all, which produces
+# the marker with an empty `rejected` list. Checking the text catches both.
+UNVERIFIED_MARKER = "[unverified]"
 
 
 @dataclass(frozen=True)
@@ -230,7 +269,12 @@ def questions_for(
         QUESTION_SYSTEM, f"Write {count} question(s).\n\nPASSAGE:\n{chunk.text}"
     )
     found = [match.group(1) for match in QUESTION_LINE.finditer(reply or "")]
-    return [q for q in dict.fromkeys(found) if standalone(q)][:count]
+    return [q for q in dict.fromkeys(found) if usable(q)][:count]
+
+
+def usable(question: str) -> bool:
+    """Whether a question is worth spending a retrieval and an answer on."""
+    return standalone(question) and not bibliographic(question)
 
 
 def standalone(question: str) -> bool:
@@ -238,6 +282,15 @@ def standalone(question: str) -> bool:
     if len(question.split()) < MIN_QUESTION_WORDS:
         return False
     return DEICTIC.search(question) is None
+
+
+def bibliographic(question: str) -> bool:
+    """Whether a question asks about the paper's cover rather than its content.
+
+    Who wrote it, where they work and who funded it are all answerable from
+    the corpus and none of them are what this pipeline is for.
+    """
+    return BIBLIOGRAPHIC.search(question) is not None
 
 
 def build_example(
@@ -287,8 +340,20 @@ def keep(
         # Training data may not: the example would teach the marker.
         tally.reject("a quote failed verification")
         return None
+    if UNVERIFIED_MARKER in answer.text:
+        # An empty `rejected` list is not enough. A model that writes an
+        # inline marker for a passage it never cited leaves a dangling
+        # reference, which is rewritten to [unverified] with nothing rejected.
+        tally.reject("an unverified marker in the text")
+        return None
     if not answer.citations:
         tally.reject("no citation")
+        return None
+    if DISOWNS_ITS_EVIDENCE.search(answer.text):
+        # "The provided passages do not mention X" carrying citations teaches
+        # a student to abstain and cite at once. A real abstention has no
+        # citations and is rejected above; this is the half-abstention.
+        tally.reject("abstains while citing")
         return None
 
     cited = sorted({citation.arxiv_id for citation in answer.citations})

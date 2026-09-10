@@ -587,15 +587,22 @@ def renumber_markers(
             return "[unverified]"
         return None  # not a citation marker
 
+    def is_marker(token: str) -> bool:
+        return bool(token.isdigit() or CHUNK_ID_PATTERN.fullmatch(token))
+
     def rewrite(match: re.Match[str]) -> str:
         token = match.group(1).strip()
         rewritten = rewrite_one(token)
         if rewritten is not None:
             return rewritten
-        # Models also group markers, "[5, 3]", which must not survive as a
-        # stale pair of numbers when each member was renumbered.
+        # Models also group markers - "[5, 3]", and on models that cite by
+        # chunk id, "[a826c26dad1a785511b3, 180d5845e4ce3b24a60a]". Neither may
+        # survive: a stale pair of numbers points at the wrong references, and
+        # a pair of hashes is not something a reader can follow at all. The
+        # group is only treated as markers if every member is one, so
+        # "[see also, page 3]" is left alone.
         grouped = [part.strip() for part in token.split(",")]
-        if len(grouped) > 1 and all(part.isdigit() for part in grouped):
+        if len(grouped) > 1 and all(is_marker(part) for part in grouped):
             return "".join(rewrite_one(part) or "[unverified]" for part in grouped)
         return match.group(0)  # leave anything else alone
 
