@@ -50,6 +50,16 @@ The conflict check has never fired and costs one model call per section. It is
 kept because `--critic` is opt-in, and recorded here as unproven rather than
 useful. If it is still at zero after a larger sample, it should go.
 
-What is *not* claimed: that the critic improves answers. It reports facts
-about the text. Whether acting on those facts produces better reviews is
-unmeasured, which is why the flag is off.
+**Measured 2026-09-10, and it does not pay.** Against the workflow without it,
+over 20 held-out questions and 2 runs: fewer answers with a verified citation
+(17.0 against 18.0), fewer fully marked (14.0 against 16.0), twice the
+rejected citations (3.0 against 1.5), and **none of the three baseline
+failures recovered**, for 83 model calls against 46. The mechanism is that
+escalating on an uncovered subject buys another answer that may be weaker than
+the one it replaced, and more attempts mean more chances to produce a quote
+that fails verification.
+
+The critic therefore stays off and is recorded as **measured worse, not
+unproven**. It keeps its value as observability - the uncited-claim count is a
+fact about the text and needs no model - but not as a control loop. If it
+earns a place later it will be by reporting rather than by escalating.

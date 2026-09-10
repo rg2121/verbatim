@@ -152,6 +152,56 @@ rather than lenient. The hard control is a pessimistic adversary and the true
 separation is somewhere between 26 and 89 points. Narrowing that needs
 hand-labelled pairs, which is the honest next step and is not yet done.
 
+## Is the workflow worth its cost? And the critic?
+
+The orchestrator had been justified by argument and by one report on one
+topic. `evals/three_arm.py` puts the same frozen held-out questions through
+three arms - one retrieval and one answer, the ladder, and the ladder plus the
+critic - scored on the answers rather than on which paper retrieval named.
+20 questions, 2 runs per arm:
+
+| | baseline | workflow | +critic |
+|---|---|---|---|
+| answers with a verified citation | 17.5 | **18.0** | 17.0 |
+| every claim carries a marker | 15.0 | **16.0** | 14.0 |
+| cited the expected paper | 17.0 | 17.0 | 17.0 |
+| citations rejected | 2.5 | **1.5** | 3.0 |
+| **cost** | **20 calls, 57k tokens** | **46 calls, 77k** | **83 calls, 87k** |
+| recovered, of 3 the baseline failed | — | **1.0** | 0.0 |
+
+**The quality differences are inside the noise; the cost differences are not.**
+Half a point out of twenty across two runs is exactly the size of gap this
+project has already established it cannot distinguish, and the ranges overlap.
+What is unambiguous is 20 → 46 → 83 calls.
+
+For the workflow that leaves one concrete thing in its favour: it recovered
+one of the three questions the baseline could get no verified citation for, at
+2.3× the calls. That matches what the report-mode measurement found - the
+ladder pays where the baseline fails and does identical work everywhere else,
+because the arms share their first rung. Whether 2.3× is worth one recovery in
+twenty depends on what a failure costs you. In a review, a section with no
+verified citation is a hole in the document; for a single question, you can
+just ask again.
+
+**For the critic the answer is simpler: it did not pay.** Every measure is
+equal or worse than the workflow without it - fewer verified citations, fewer
+fully marked answers, twice the rejected citations, and **none of the three
+baseline failures recovered** - for another 1.8× on top. The mechanism is
+visible in the last two rows: the critic escalates when it finds a subject no
+passage covers, each escalation is another answer that may be weaker than the
+one it replaced, and more attempts mean more chances to produce a quote that
+fails verification.
+
+So the critic stays off, and is now **measured worse rather than unproven**.
+It remains useful as *observability* - the uncited-claim count is a real fact
+about an answer and needs no model - but as a control loop it costs four times
+the baseline and buys nothing measurable. If it earns its place later it will
+be by reporting, not by escalating.
+
+The caveat that applies to all of this: 20 questions and 2 runs. Settling
+differences this small needs several hundred questions, which is the same
+conclusion the retrieval comparison reached.
+
 ## Compound questions
 
 11 development cases require *every* listed paper rather than any of them,
@@ -182,5 +232,6 @@ uv run verbatim eval --cases evals/heldout.jsonl   # the honest number
 uv run python evals/paired_bootstrap.py                # the intervals
 uv run python evals/failure_taxonomy.py                # the failure labels
 uv run verbatim eval-answers --cases evals/heldout.jsonl --limit 20 --judge
+uv run python evals/three_arm.py 20 2                  # baseline vs workflow vs critic
 uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90
 ```
