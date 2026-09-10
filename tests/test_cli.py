@@ -48,3 +48,31 @@ def test_usage_totals_across_calls() -> None:
 
     assert (usage.calls, usage.prompt_tokens, usage.output_tokens) == (2, 17, 8)
     assert usage.seconds == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "flag, expected",
+    [
+        ("--tools", "the agent is the last rung of the ladder"),
+        ("--use-compare", "the shape router chooses the strategy"),
+        ("--plan", "the ladder answers one question"),
+    ],
+)
+def test_deep_refuses_the_flags_it_would_otherwise_ignore(
+    monkeypatch, flag: str, expected: str
+) -> None:
+    """--deep subsumes each of these, so accepting them would be a lie.
+
+    The audit's complaint, applied to the new flag before it can become one:
+    a flag argparse accepts and the branch quietly drops is invisible.
+    """
+    monkeypatch.setattr(
+        "sys.argv", ["verbatim", "ask", "what is Adam?", "--deep", flag]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        run()
+
+    assert expected in str(raised.value)
+    # Refused before anything expensive is built: no model, no corpus, no ONNX.
+    assert "Drop one of the two." in str(raised.value)

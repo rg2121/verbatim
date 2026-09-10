@@ -438,6 +438,58 @@ the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.
 
+## Escalating a single question
+
+`ask` answers once and stops. When that answer has no verified citation, or
+the passages turn out to be about something else, it says so and leaves it
+there — it computes both of those facts and uses them only to print a warning.
+
+`ask --deep` acts on them instead. It routes the question by shape and climbs
+the same ladder a review section climbs, stopping as soon as a citation
+verifies and the passages are on-subject:
+
+```bash
+uv run verbatim ask "how can reinforcement learning plan a route that covers an entire floor?" --deep
+```
+
+```
+  open question, 2 attempt(s):
+    hybrid   retry
+    titles   accepted
+```
+
+Plain `ask` on that question declines with no citations and an off-subject
+warning at 0.54. The ladder retries with the title leg and comes back with two
+verified citations — and still says plainly that the passages do not fully
+settle the question, because escalating changes what is retrieved, not what
+may be claimed.
+
+**It costs nothing extra when the first attempt succeeds**, because it *is* the
+first attempt: the first rung is the same search plain `ask` runs. A
+comparison-shaped question that the `compare` rung answers straight away makes
+exactly the same calls either way. The cost is paid only where the plain path
+was going to fail.
+
+Measured over all 88 answerable held-out questions, two runs each — the
+"workflow" arm of `evals/three_arm.py` is precisely this, one question through
+the ladder:
+
+| out of 88 | plain | `--deep` |
+|---|---|---|
+| answers with a verified citation | 78.5 | **81.5** |
+| every claim carries a marker | 70.5 | **72.5** |
+| citations rejected | 10.5 | **8.5** |
+
+Ahead on every row, and **not distinguishable from noise**: the two paths give
+the same answer on 81 of the 88 questions, and the 7 that differ split 6–1, a
+sign test at p = 0.125. It ships behind a flag on that basis rather than as a
+default. See [docs/evaluation.md](docs/evaluation.md) for why the confidence
+interval alone was misleading.
+
+`--deep` subsumes `--tools` (the agent is its last rung), `--use-compare` (the
+router chooses) and `--plan` (the ladder answers one question rather than
+splitting it), and refuses each rather than ignoring it.
+
 ## Orchestrating specialist roles
 
 `report --agents` is the multi-agent version of the review, and it was

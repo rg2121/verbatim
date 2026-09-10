@@ -427,6 +427,13 @@ def run() -> None:
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
     )
     ask_parser.add_argument(
+        "--deep", action="store_true",
+        help="Escalate when the first answer fails: route by question shape and "
+             "climb the retrieval ladder until a citation verifies and the "
+             "passages are on-subject. Costs nothing extra when the first "
+             "attempt succeeds, because it is the same attempt",
+    )
+    ask_parser.add_argument(
         "--tools",
         action="store_true",
         help="Let the model route the question: recency and single-paper questions "
@@ -1136,7 +1143,63 @@ def run() -> None:
         for rank, match in enumerate(matches, start=1):
             print(format_match(rank, match, full=args.full))
     if args.command == "ask":
+        # Refused rather than ignored. --deep routes by question shape and
+        # climbs a ladder whose last rung is the tool-choosing agent, so
+        # --tools is already inside it and --use-compare would override the
+        # router on questions it never applies to. Silently dropping a flag
+        # the parser accepted is the defect the audit found here before.
+        if args.deep and args.tools:
+            raise SystemExit(
+                "error: --tools has no effect with --deep; the agent is the "
+                "last rung of the ladder. Drop one of the two."
+            )
+        if args.deep and args.use_compare:
+            raise SystemExit(
+                "error: --use-compare has no effect with --deep; the shape "
+                "router chooses the strategy. Drop one of the two."
+            )
+        if args.deep and args.plan:
+            raise SystemExit(
+                "error: --plan has no effect with --deep; the ladder answers "
+                "one question rather than splitting it. Drop one of the two."
+            )
         with CorpusStore(args.state) as corpus, record_run(corpus, "ask", model=args.model, llm=args.llm, passages=args.passages) as run:
+            if args.deep:
+                from verbatim.orchestrator import work_section
+
+                embedder = FastEmbedEmbedder(model_name=args.model)
+                completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+                # The agent rung needs a tool caller. Passing None silently
+                # disables the last rung of every ladder, which is a defect
+                # this project has already shipped once.
+                tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
+                section, ledger = work_section(
+                    corpus, embedder, completion, args.question,
+                    caller=tool_caller,
+                    per_section=args.passages,
+                    max_per_paper=args.max_per_paper,
+                    check_subject=not args.no_subject_check,
+                )
+                answer = section.answer
+                run.record(citations=len(answer.citations),
+                           rejected=len(answer.rejected),
+                           declined=answer.declined,
+                           attempts=len(ledger.attempts),
+                           outcome=ledger.outcome)
+                print(answer.text)
+                if answer.citations:
+                    print("\nReferences")
+                    print(render_bibliography(answer.citations))
+                # The trace, always - a reader who wants to know why an answer
+                # is thin needs to see what was tried, not just what worked.
+                print(f"\n  {ledger.shape} question, {len(ledger.attempts)} attempt(s):")
+                for attempt in ledger.attempts:
+                    detail = attempt.error or attempt.verdict
+                    print(f"    {attempt.strategy:<8} {detail}")
+                for item in answer.rejected:
+                    print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+                print(f"\n  {_usage_footer(completion, tool_caller)}")
+                return
             if args.tools:
                 embedder = FastEmbedEmbedder(model_name=args.model)
                 completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
