@@ -249,3 +249,47 @@ def test_the_report_separates_the_two_unanswerable_kinds() -> None:
     assert "1 answerable" in mix
     assert "2 with no coverage" in mix
     assert "1 covered but unanswered" in mix
+
+
+def test_load_key_reads_several_files_as_one(tmp_path: Path) -> None:
+    """Two keys authored differently, scored together but separable."""
+    from verbatim.evaluation import load_key, source_of
+
+    hand = tmp_path / "heldout.jsonl"
+    hand.write_text(
+        '# a header\n'
+        '{"question": "why do qubits decohere", "expect_papers": ["a1v1"],'
+        ' "note": "source=heldout; shape=plain"}\n'
+    )
+    made = tmp_path / "generated.jsonl"
+    made.write_text(
+        '{"question": "what limits coherence time", "expect_papers": ["b2v1"],'
+        ' "note": "source=heldout-generated; shape=plain; shared_run=2"}\n'
+    )
+
+    cases = load_key([hand, made])
+
+    assert len(cases) == 2
+    assert [source_of(c) for c in cases] == ["heldout", "heldout-generated"]
+
+
+def test_a_question_in_two_keys_is_refused(tmp_path: Path) -> None:
+    """Scoring a case twice weights it twice and distorts every mean."""
+    from verbatim.evaluation import load_key
+
+    first = tmp_path / "one.jsonl"
+    first.write_text('{"question": "same", "expect_papers": ["a1v1"]}\n')
+    second = tmp_path / "two.jsonl"
+    second.write_text('{"question": "same", "expect_papers": ["b2v1"]}\n')
+
+    with pytest.raises(ValueError, match="already in"):
+        load_key([first, second])
+
+
+def test_source_of_falls_back_when_a_case_is_unlabelled(tmp_path: Path) -> None:
+    from verbatim.evaluation import EvalCase, source_of
+
+    assert source_of(EvalCase(question="q", expect_papers=("a",))) == "unknown"
+    assert source_of(
+        EvalCase(question="q", expect_papers=("a",), note="shape=plain")
+    ) == "unknown"

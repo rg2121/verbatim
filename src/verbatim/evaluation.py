@@ -155,6 +155,42 @@ def load_cases(path: Path) -> list[EvalCase]:
     return cases
 
 
+def load_key(paths: Sequence[Path]) -> list[EvalCase]:
+    """Read one evaluation key spread across several files.
+
+    The hand-authored held-out cases and the generated ones live apart because
+    they were authored differently, and a set is only as trustworthy as its
+    authoring. Kept apart, `source_of` can split any result back into the two
+    and show whether the generated half is systematically easier - which would
+    mean its questions leak, not that the system improved.
+
+    A question appearing in two files is refused rather than merged: scoring
+    it twice would weight it double and silently distort every mean.
+    """
+    cases: list[EvalCase] = []
+    seen: dict[str, Path] = {}
+    for path in paths:
+        for case in load_cases(path):
+            first = seen.get(case.question)
+            if first is not None:
+                raise ValueError(
+                    f"{path}: {case.question!r} is already in {first}; a case "
+                    "scored twice is weighted twice"
+                )
+            seen[case.question] = path
+            cases.append(case)
+    return cases
+
+
+def source_of(case: EvalCase) -> str:
+    """Which key a case came from, from its own note. 'unknown' if unlabelled."""
+    for field in (case.note or "").split(";"):
+        name, _, value = field.strip().partition("=")
+        if name == "source":
+            return value or "unknown"
+    return "unknown"
+
+
 def rank_of_first_hit(matches: Sequence[ChunkMatch], expected: Iterable[str]) -> int | None:
     """1-based rank of the first result from an expected paper, or None."""
     wanted = set(expected)

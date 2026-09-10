@@ -1,0 +1,49 @@
+# Held-out evaluation cases, generated from each paper's TITLE AND ABSTRACT
+# ONLY by `verbatim author-cases`. No retrieval was run against any
+# question before this file was committed - the authoring module imports
+# nothing that can search, and a test asserts it never will.
+#
+# Papers were chosen before any question existed: current papers with 25-90
+# body passages, excluding every paper named in retrieval.jsonl, heldout.jsonl
+# and gate.jsonl, grouped by primary category and taken at a fixed stride, so
+# no category can fill the set by being large.
+#
+# A model reaches for the abstract's own words where a person paraphrases, and
+# abstracts are passages in this corpus, so a question sharing a distinctive
+# span with one would be found by keyword search for that reason alone. The
+# 88 hand-authored cases in heldout.jsonl share a median run of 2 words with
+# their paper's abstract and at most 6; only 4 share 5 or more. Cases sharing
+# 5 or more are rejected here, so this set is no leakier than that one.
+#
+# Every case is `shape=plain` with one expected paper. There are no
+# unanswerable cases: deciding that a subject is uncovered requires inspecting
+# the corpus, which is what authoring blind forbids. Those live in
+# heldout.jsonl, written by hand.
+{"question": "How does the angular correlation between pulsar signal arrival times differ in massive gravity theories compared to General Relativity?", "expect_papers": ["2108.05344v3"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
+{"question": "Can a weather forecasting model trained on Earth's atmosphere be adapted to predict temperature and wind patterns on Mars?", "expect_papers": ["2608.05054v1"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can the Ott-Antonsen equations be applied to networks of globally coupled phase oscillators that have arbitrary frequency distributions?", "expect_papers": ["2607.09516v2"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "How does the presence of pointlike charge impurities affect the electronic phases of spinless fermions on a two-dimensional hyperbolic lattice?", "expect_papers": ["2512.05109v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can the information-matching active learning strategy be used to develop interatomic potentials for predicting the plastic strength of metals?", "expect_papers": ["2606.08148v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "What causes the appearance of two distinct oscillation frequencies in the dipole-compression modes of a one-dimensional Bose gas as temperature increases?", "expect_papers": ["2508.07459v3"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "Can topological data analysis and machine learning be used to predict the permeability of porous materials?", "expect_papers": ["2605.17581v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How do the predictions of the full Eigenstate Thermalization Hypothesis apply to integrable spin models such as the Ising and XXZ Heisenberg models?", "expect_papers": ["2510.05887v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How do current top-performing neural models compare to random chance when attempting to solve the AI2 Reasoning Challenge grade-school science questions?", "expect_papers": ["1803.05457v1"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "How do different hardware accelerators on single-board computers affect the speed, power consumption, and size of local large language model deployments?", "expect_papers": ["2604.24785v2"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "How can graph neural networks be modified to better distinguish between molecules that are structurally similar but have significantly different biological activities?", "expect_papers": ["2511.03170v3"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can quadratic forms be used to quantify the directional distribution of tree-like geometric graphs in three-dimensional space?", "expect_papers": ["2606.20096v1"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "Which neural network architectures can achieve top-tier named entity recognition performance across multiple languages without using manually designed features or gazetteers?", "expect_papers": ["1603.01360v3"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can large language models be trained to prioritize developer-defined system prompts over potentially malicious user inputs to prevent prompt injection attacks?", "expect_papers": ["2404.13208v1"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
+{"question": "What resources and evaluation frameworks were established for the 2017 competition on video object segmentation?", "expect_papers": ["1704.00675v3"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "What are the definition, feasibility, and ethical implications of algorithmic neutrality?", "expect_papers": ["2303.05103v5"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
+{"question": "How does Differential Dataflow affect the efficiency of incremental materialization in Datalog engines when handling frequently changing data?", "expect_papers": ["2308.04214v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can decentralized online learning to rank systems protect against malicious updates that aim to degrade model quality?", "expect_papers": ["2606.12246v1"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "How can deep learning be used to identify and retrieve connections between scientific documents?", "expect_papers": ["2204.11488v2"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
+{"question": "Do multi-vector embeddings possess greater expressive capacity than single-vector embeddings when the total representation size is kept constant?", "expect_papers": ["2606.23475v1"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "Which stimulation encoding strategy provides the best accuracy for binary classification tasks in cultured biological neural networks?", "expect_papers": ["2607.13644v1"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How do producer exposure guarantees and consumer group fairness objectives impact business metrics and overall utility in multi-item two-sided marketplaces?", "expect_papers": ["2602.10739v3"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can cross-domain recommendation systems better handle diverse user preferences within a single domain to improve the transfer of knowledge between different domains?", "expect_papers": ["2603.07086v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How can Bayesian Personalized Ranking improve the accuracy of item recommendation models that rely on implicit user feedback?", "expect_papers": ["1205.2618v1"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
+{"question": "How can federated learning be improved to train semantic communication systems for image reconstruction when client data comes from different domains?", "expect_papers": ["2512.00711v3"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "Can a convolutional neural network using a version of Q-learning master Atari 2600 games using only raw pixel data as input?", "expect_papers": ["1312.5602v1"], "note": "source=heldout-generated; shape=plain; shared_run=4"}
+{"question": "How can topos causal models be formally implemented and verified using Cubical Agda?", "expect_papers": ["2607.15629v2"], "note": "source=heldout-generated; shape=plain; shared_run=3"}
+{"question": "How does incorporating synchronized sound and sight into a world model improve an embodied agent's ability to navigate indoor environments?", "expect_papers": ["2512.00883v4"], "note": "source=heldout-generated; shape=plain; shared_run=2"}
