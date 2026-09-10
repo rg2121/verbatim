@@ -1282,14 +1282,48 @@ signal that the generator is working: a run that keeps everything has stopped
 checking.
 
 ```
-  kept N of M candidate example(s)
-    rejected, a quote failed verification   ...
-    rejected, no citation                   ...
-    rejected, writer declined               ...
+  kept 300 of 328 candidate example(s)
+    rejected, abstains while citing            14
+    rejected, an unverified marker in the text  9
+    rejected, a quote failed verification       5
 ```
 
-(Shape only — every other number in this README is measured, and this command
-has not yet been run at size. The real mix goes here when it has been.)
+Measured over a real 300-example run against the full corpus: 300 examples
+drawn from 225 papers in 20 minutes, a 91.5% keep rate, zero faults.
+
+**Reading the first run's output was worth more than building the generator.**
+It found four defects, one of them in the answering path everything uses:
+grouped chunk-id markers — `[a826c26dad1a785511b3, 180d5845e4ce3b24a60a]` —
+survived into prose, because the renumbering rewrote a single id and left a
+group alone. Nine of 300 examples carried one, and so did every `ask` answer
+where the model grouped its markers.
+
+The other three became the acceptance rules above. Two of them are now the top
+rejection reasons, catching 23 of 28 rejections — every one of which had gone
+silently into the first dataset:
+
+- **`[unverified]` with nothing rejected.** Checking the rejected-citation list
+  is necessary and not sufficient: a model that writes an inline marker for a
+  passage it never cited leaves a dangling reference, rewritten to
+  `[unverified]` with an empty list behind it.
+- **Abstain-and-cite.** "The provided passages do not mention X" *carrying
+  citations* teaches a student to refuse and cite at once. A real abstention
+  has no citations and is rejected anyway; this is the half-abstention. The
+  pattern is anchored on references to the supplied evidence, so "the authors
+  do not provide a proof" — a finding about a paper — is kept.
+- **Bibliographic trivia.** 83 of the first 300 asked about affiliations,
+  emails or funding, because a paper's front matter is a passage like any
+  other. The check is on the *question*, not the passage: front matter shares
+  `chunk_index` 0 with 48% of the corpus and with most of the good seeds,
+  since an HTML paper's first chunk usually holds the abstract too.
+
+**What this dataset cannot teach: abstention.** Questions are seeded from
+passages that are answerable by construction, and a declined answer is
+rejected, so there are zero abstention examples in it. That is a real gap —
+"unanswerable questions get answered" is this project's founding flaw, and
+the policy names abstention wording as part of what is being taught. Teaching
+it needs a generator for questions the corpus *cannot* answer, and a
+measurement that the generated declines are real. Not built.
 
 An `ATTRIBUTIONS` file is written beside the dataset, listing every source
 paper with its authors, versioned id and licence. The policy requires it of
