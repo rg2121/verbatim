@@ -130,9 +130,15 @@ def ensure_current(
     Past that, a count comparison is the fast path, so a search over an
     up-to-date index costs one COUNT rather than two set-difference queries. On
     a mismatch the index is synced incrementally, not rebuilt, so the cost
-    tracks what changed. The count check still cannot see a change that adds
-    and removes equal numbers of vectors within one model;
-    `verbatim index --rebuild` forces a full reload for that case.
+    tracks what changed.
+
+    The count is the third check rather than the only one, and the two ahead of
+    it cover what it cannot see. Swapping equal numbers of vectors used to be
+    invisible here; it is now caught by the generation, because every chunk
+    write moves the corpus on. What remains outside all three is a vector
+    changed in place under the same model and generation, which nothing in this
+    pipeline does - `index --rebuild` is there for that and for any other
+    disagreement worth forcing.
     """
     if index.indexed_model() != model_id:
         index.rebuild(model_id, generation)

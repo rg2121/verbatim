@@ -472,3 +472,31 @@ def test_reopening_an_index_at_a_different_width_rebuilds_it(tmp_path: Path) -> 
 
     assert "float[5]" in declared and "float[3]" not in declared
     assert emptied == 0          # rebuilt empty, ready for the new vectors
+
+
+def test_an_index_run_leaves_nothing_for_the_next_search_to_reconcile(
+    tmp_path: Path,
+) -> None:
+    """Indexing records what it built from, so a search after it does no work.
+
+    Without the generation, state says 0, and the next search sees a mismatch
+    and reconciles work that had just been done - correct, but wasted.
+    """
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        generation = corpus.chunk_generation()
+        index = SqliteVecIndex(corpus.connection, 3)
+        index.rebuild("stub", generation)
+
+        assert index.indexed_generation() == generation
+        # The search after an index run finds nothing to do.
+        assert ensure_current(
+            index, corpus.embedding_count("stub"), "stub", generation
+        ) is False
+
+        # And an index built without one is repaired on first use rather than
+        # trusted, which is the safe direction for the omission.
+        index.rebuild("stub")
+        assert index.indexed_generation() == 0
+        assert ensure_current(
+            index, corpus.embedding_count("stub"), "stub", generation
+        ) is True

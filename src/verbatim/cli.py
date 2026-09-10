@@ -692,9 +692,13 @@ def run() -> None:
             model = embedder.model
             index = SqliteVecIndex(corpus.connection, model.dimensions)
             papers = SqlitePaperIndex(corpus.connection, model.dimensions)
+            # The generation is passed so the index records what it was built
+            # from. Without it the state says generation 0, the next search
+            # sees a mismatch, and reconciles work that was just done.
+            generation = corpus.chunk_generation()
             if args.rebuild:
-                rebuilt = index.rebuild(model.model_id)
-                rebuilt_papers = papers.rebuild(model.model_id)
+                rebuilt = index.rebuild(model.model_id, generation)
+                rebuilt_papers = papers.rebuild(model.model_id, generation)
                 run.record(rebuilt=rebuilt, rebuilt_papers=rebuilt_papers,
                            model=model.model_id)
                 print(
@@ -702,8 +706,8 @@ def run() -> None:
                     f"vectors and {rebuilt_papers} paper vectors."
                 )
             else:
-                change = index.sync(model.model_id)
-                paper_change = papers.sync(model.model_id)
+                change = index.sync(model.model_id, generation)
+                paper_change = papers.sync(model.model_id, generation)
                 run.record(added=change.added, removed=change.removed,
                            vectors=index.count(), model=model.model_id)
                 print(f"Index synced: {change.added} added, {change.removed} removed; "
