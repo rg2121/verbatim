@@ -1240,11 +1240,69 @@ permission:
 
 Licence URLs are carried through to every chunk, and `--require-license`
 restricts downloads to papers that report one — but note it accepts
-`arxiv-nonexclusive` too, so it is not yet a reuse gate. Nothing enforces a
-training policy.
+`arxiv-nonexclusive` too, so it is not yet a reuse gate. The one place the
+policy *is* enforced in code is `distill`, below.
 
 PyMuPDF is AGPL-3.0. That is fine for local personal use and is a decision to
 revisit before building any hosted product on top of it.
+
+## Generating training data
+
+The long-term goal is a small model that answers the way this pipeline
+answers — the flat `ANSWER`/`CITE` protocol, the abstention wording, the
+citation discipline. `distill` writes the data to teach it:
+
+```bash
+uv run verbatim distill --examples 200
+```
+
+Each example is a `(question, retrieved passages, verified answer)` triple.
+Questions are seeded from real passages, because a question the corpus cannot
+answer costs a generation call to discover; retrieval then runs for real and
+may or may not find the paper the question came from, which is the task the
+student has to learn rather than a lookup.
+
+Three rules come from [TRAINING-POLICY.md](TRAINING-POLICY.md) and are enforced
+rather than trusted:
+
+| rule | how |
+|---|---|
+| only licence-eligible papers | a `PaperFilter` pushed into **both** retrieval legs, so an ineligible passage never reaches the prompt |
+| only verified answers | one failed quote rejects the whole example |
+| provenance per example | chunk ids, papers, licence URLs and classes, source checksums |
+
+The licence gate is on the way in, not a filter on the way out. Discarding
+examples afterwards would still leave the ineligible text in the prompt that
+produced the kept ones. A final check runs over the citations anyway, and if
+it ever fires the run reports a **fault** rather than an ordinary rejection —
+it means the gate leaked, and the dataset should not be trained on.
+
+Rejections are counted and printed, because the rejection mix is the only
+signal that the generator is working: a run that keeps everything has stopped
+checking.
+
+```
+  kept 178 of 243 candidate example(s)
+    rejected, a quote failed verification   41
+    rejected, no citation                   19
+    rejected, writer declined                5
+```
+
+An `ATTRIBUTIONS` file is written beside the dataset, listing every source
+paper with its authors, versioned id and licence. The policy requires it of
+any released artifact; it is written whether or not anything is released,
+because it costs nothing now and cannot be reconstructed if the dataset is
+regenerated. Both land under `data/`, which is gitignored — the policy makes
+the dataset private by default, since it quotes the papers directly and is
+more clearly a derivative than trained weights are.
+
+Of the corpus's 7,921 papers, **3,806 are eligible** (`open` class, 410,265
+passages) — about half. The rest are `arxiv-nonexclusive`, `no-derivatives`,
+`noncommercial` or `unknown`, and `unknown` means unknown, not permitted.
+
+Runs resume: examples are keyed by a hash of their question and passages, so
+re-running with the same `--seed` skips what is already on disk instead of
+regenerating it.
 
 ## Running it in a container
 

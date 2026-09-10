@@ -65,9 +65,44 @@ class PaperFilter:
 
     since: str | None = None
     category: str | None = None
+    # What a paper's licence permits, from arXiv's OAI-PMH records. Retrieval
+    # normally ignores licences - reading a paper and quoting it with
+    # attribution needs no permission. Generating training data from it does,
+    # so `distill` narrows to the eligible classes here rather than discarding
+    # ineligible papers after the fact: a passage that was never retrieved
+    # cannot leak into an example through a path someone forgot to filter.
+    license_classes: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.since or self.category)
+        return bool(self.since or self.category or self.license_classes)
+
+    def conditions(self, table: str = "p") -> tuple[list[str], list[object]]:
+        """The predicate, once, for every leg that has to apply it.
+
+        The keyword leg filters with a correlated EXISTS and the vector leg
+        filters a list of ids the index already returned, so the same rule is
+        needed in two shapes. It used to be written out in both, plus a third
+        time in a `matches()` that had no callers - and the third copy could
+        not have expressed a licence gate at all, because it was handed only a
+        date and a category. Adding a dimension to one copy of three is how a
+        filter silently stops filtering, which for `license_classes` would
+        mean an ineligible paper reaching a training example.
+        """
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if self.since:
+            conditions.append(f"{table}.published >= ?")
+            parameters.append(self.since)
+        if self.category:
+            # categories_json is a JSON array; match the quoted element so
+            # "cs.CL" does not also match "cs.CLX".
+            conditions.append(f"{table}.categories_json LIKE ?")
+            parameters.append(f'%"{self.category}"%')
+        if self.license_classes:
+            placeholders = ",".join("?" * len(self.license_classes))
+            conditions.append(f"{table}.license_class IN ({placeholders})")
+            parameters.extend(self.license_classes)
+        return conditions, parameters
 
     def clause(self, alias: str = "c") -> tuple[str, list[object]]:
         """A SQL fragment restricting `alias` to matching papers.
@@ -77,26 +112,12 @@ class PaperFilter:
         """
         if not self:
             return "", []
-        conditions = [f"p.arxiv_id = {alias}.arxiv_id"]
-        parameters: list[object] = []
-        if self.since:
-            conditions.append("p.published >= ?")
-            parameters.append(self.since)
-        if self.category:
-            # categories_json is a JSON array; match the quoted element so
-            # "cs.CL" does not also match "cs.CLX".
-            conditions.append("p.categories_json LIKE ?")
-            parameters.append(f'%"{self.category}"%')
+        conditions, parameters = self.conditions("p")
+        conditions.insert(0, f"p.arxiv_id = {alias}.arxiv_id")
         return (
             f"EXISTS (SELECT 1 FROM papers AS p WHERE {' AND '.join(conditions)})",
             parameters,
         )
-
-    def matches(self, published: str, categories: Sequence[str]) -> bool:
-        """Whether one paper passes, for filtering results the index returned."""
-        if self.since and published < self.since:
-            return False
-        return not self.category or self.category in categories
 
 
 @dataclass(frozen=True)
@@ -1491,14 +1512,9 @@ class CorpusStore:
         if not papers or not arxiv_ids:
             return set(arxiv_ids)
         unique = list(dict.fromkeys(arxiv_ids))
-        conditions = ["arxiv_id IN (" + ",".join("?" * len(unique)) + ")"]
-        parameters: list[object] = list(unique)
-        if papers.since:
-            conditions.append("published >= ?")
-            parameters.append(papers.since)
-        if papers.category:
-            conditions.append("categories_json LIKE ?")
-            parameters.append(f'%"{papers.category}"%')
+        conditions, parameters = papers.conditions("papers")
+        conditions.insert(0, "arxiv_id IN (" + ",".join("?" * len(unique)) + ")")
+        parameters = list(unique) + parameters
         rows = self.connection.execute(
             f"SELECT arxiv_id FROM papers WHERE {' AND '.join(conditions)}", parameters
         ).fetchall()

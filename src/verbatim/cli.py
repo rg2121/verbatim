@@ -185,6 +185,28 @@ def run() -> None:
              "measured rather than believed",
     )
 
+    distill_parser = subparsers.add_parser(
+        "distill",
+        help="Generate training examples from licence-eligible papers",
+    )
+    distill_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    distill_parser.add_argument("--out", type=Path, default=config.DISTILL_PATH)
+    distill_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    distill_parser.add_argument("--llm", help="Generation model")
+    distill_parser.add_argument(
+        "--examples", type=int, default=50,
+        help="Examples to keep; each costs at least two generations",
+    )
+    distill_parser.add_argument(
+        "--questions-per-passage", type=int, default=2,
+        help="Questions asked of each seed passage",
+    )
+    distill_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES)
+    distill_parser.add_argument(
+        "--seed", type=int, default=0,
+        help="Which seed passages are drawn; the same seed draws the same ones",
+    )
+
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     index_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
@@ -643,6 +665,70 @@ def run() -> None:
                     f"below the floor of {args.min_mrr:.3f}. Either a change made "
                     f"retrieval worse, or the floor needs re-measuring on purpose."
                 )
+
+    if args.command == "distill":
+        import json
+
+        from verbatim.distill import (
+            Tally,
+            attributions,
+            generate,
+            source_papers,
+        )
+
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        # Resumed by example id rather than by count: the same seed draws the
+        # same passages, so a second run would otherwise regenerate them.
+        existing = [
+            json.loads(line)
+            for line in (args.out.read_text().splitlines() if args.out.exists() else [])
+            if line.strip()
+        ]
+        if existing:
+            print(f"resuming: {len(existing)} example(s) already in {args.out}")
+        tally = Tally()
+        kept = list(existing)
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "distill", examples=args.examples, llm=args.llm, seed=args.seed
+        ) as run, args.out.open("a") as sink:
+            for example in generate(
+                corpus, embedder, completion,
+                complete_text=completion.complete_text,
+                generator_model=args.llm or config.OLLAMA_MODEL,
+                examples=args.examples,
+                questions_per_passage=args.questions_per_passage,
+                seed=args.seed,
+                passages=args.passages,
+                tally=tally,
+                skip=[row["example_id"] for row in existing],
+            ):
+                record = example.to_dict()
+                sink.write(json.dumps(record) + "\n")
+                sink.flush()
+                kept.append(record)
+                print(f"  kept {tally.kept}/{args.examples}", end="\r", flush=True)
+            run.record(
+                kept=tally.kept,
+                considered=tally.considered,
+                faults=sum(tally.faults.values()),
+            )
+        print(f"{args.out}\n")
+        print(tally.render())
+        if tally.faults:
+            print("\n  A fault means an ineligible paper reached an answer's"
+                  " passages.\n  The licence gate is not holding; do not train"
+                  " on this dataset.")
+        # Rewritten whole from the file, so a resumed run's ATTRIBUTIONS covers
+        # every example in the dataset and not only this run's.
+        papers = source_papers(
+            paper for record in kept for paper in record["papers"]
+        )
+        credits = args.out.with_name("ATTRIBUTIONS")
+        credits.write_text(attributions(papers))
+        print(f"\n  {len(papers)} source paper(s) credited in {credits}")
+        return
 
     if args.command == "eval-answers":
         from verbatim.answer_eval import (
