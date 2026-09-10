@@ -490,6 +490,24 @@ interval alone was misleading.
 router chooses) and `--plan` (the ladder answers one question rather than
 splitting it), and refuses each rather than ignoring it.
 
+The web page has the same thing as a **dig deeper** checkbox beside the ask
+box, off by default. Unchecked, nothing changes: the answer streams token by
+token as before. Checked, `GET /api/ask?deep=true` streams the rungs instead —
+
+```
+event: working   {"strategy": "hybrid", "rung": 1, "rungs": 3}
+event: working   {"strategy": "titles", "rung": 2, "rungs": 3}
+event: answer    {...}
+event: ladder    {"shape": "open", "outcome": "accepted", "attempts": [...]}
+```
+
+— because the ladder may write an answer, find that no citation survived, and
+retry, and a draft shown to a reader and then withdrawn is worse than a slower
+page. Deep mode also reports the subject rather than warning about it: plain
+`ask` warns because it cannot act, while the ladder already retried on exactly
+that signal, so complaining afterwards would report a failure that did not
+happen.
+
 ## Orchestrating specialist roles
 
 `report --agents` is the multi-agent version of the review, and it was

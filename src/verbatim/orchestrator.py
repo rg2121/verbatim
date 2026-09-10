@@ -264,6 +264,7 @@ def work_section(
     guard: BudgetGuard | None = None,
     complete_text: Callable[[str, str], str] | None = None,
     critic: bool = False,
+    on_attempt: Callable[[str, int, int], None] | None = None,
 ) -> tuple[ReportSection, SectionLedger]:
     """Climb the ladder for one section until the verifier accepts.
 
@@ -273,6 +274,12 @@ def work_section(
 
     `ladder` overrides the router's choice, which is how the plain report runs
     this same loop with a single rung and no escalation.
+
+    `on_attempt` is called with (strategy, rung, rungs) before each rung runs,
+    for callers that must show progress while the loop blocks - a page waiting
+    silently through three retrievals and three generations reads as a broken
+    one. It is told what is *about* to be tried, because what was tried is
+    already in the ledger by the time the loop returns.
 
     A rung that raises - an unreachable model, a corpus fault - is recorded as
     a failed attempt and the ladder continues. One failure in one section must
@@ -287,7 +294,10 @@ def work_section(
     shape = question_shape(heading)
     usage = getattr(completion, "usage", None)
     candidates: list[tuple[Attempt, ReportSection]] = []
-    for strategy in ladder or LADDERS[shape]:
+    rungs = ladder or LADDERS[shape]
+    for rung, strategy in enumerate(rungs, start=1):
+        if on_attempt is not None:
+            on_attempt(strategy, rung, len(rungs))
         if guard is not None:
             stop = guard.exhausted()
             if stop is not None:

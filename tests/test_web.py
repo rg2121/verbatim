@@ -512,3 +512,116 @@ def test_health_reports_the_corpus_and_the_last_run_of_each_command(tmp_path: Pa
         "runs": 1, "citations_verified": 3, "citations_rejected": 1,
         "rejection_rate": 0.25,
     }
+
+
+class LadderScript:
+    """A model that fails one rung and answers on the next.
+
+    `complete` is what the ladder calls; the first call quotes something the
+    passage does not contain, so verification rejects it, no citation survives
+    and the verdict is retry. The second quotes exactly, and is accepted.
+    """
+
+    def __init__(self, chunk_id: str) -> None:
+        self.chunk_id = chunk_id
+        self.calls = 0
+
+    def complete(self, system, user, schema):
+        self.calls += 1
+        if self.calls == 1:
+            quote = "Qubits never decohere at all."
+        else:
+            quote = "Superconducting qubits decohere quickly."
+        return {
+            "answer": "They decohere quickly [1].",
+            "citations": [
+                {"marker": 1, "chunk_id": self.chunk_id, "quoted_text": quote}
+            ],
+        }
+
+    def stream(self, system, user):
+        raise AssertionError("deep mode must not stream a draft it may discard")
+
+    def judge(self, system, user):
+        return "superconducting qubit decoherence"
+
+
+def deep_client(tmp_path: Path) -> tuple[TestClient, LadderScript]:
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
+    ) as store:
+        chunk_id = store.all_chunks()[0].chunk_id
+    model = LadderScript(chunk_id)
+    app = create_app(
+        tmp_path / "corpus.db", completion=model, encoder=StubEncoder()
+    )
+    return TestClient(app), model
+
+
+def test_deep_streams_the_rungs_it_tries_and_the_answer_it_accepts(
+    tmp_path: Path,
+) -> None:
+    """Rungs, not tokens.
+
+    The ladder may write an answer, find that no citation survived, and retry.
+    A draft shown to a reader and then withdrawn is worse than a slower page,
+    so deep mode streams what is being tried and the answer only once a rung
+    is accepted. LadderScript.stream raises if that is ever violated.
+    """
+    client_app, model = deep_client(tmp_path)
+
+    events = sse_events(
+        client_app.get("/api/ask", params={"q": "qubits", "deep": "true"}).text
+    )
+
+    names = [name for name, _ in events]
+    assert "delta" not in names
+    assert names.count("working") >= 2  # it retried rather than giving up
+    assert names[-1] == "done"
+
+    working = [payload for name, payload in events if name == "working"]
+    assert working[0]["strategy"] == "hybrid" and working[0]["rung"] == 1
+    assert working[1]["rung"] == 2
+
+    answer = next(payload for name, payload in events if name == "answer")
+    assert [c["arxiv_id"] for c in answer["citations"]] == ["2608.11111v1"]
+    assert answer["rejected"] == []
+
+    climb = next(payload for name, payload in events if name == "ladder")
+    assert climb["shape"] == "open"
+    assert climb["attempts"][0]["verdict"] == "retry"
+    assert climb["attempts"][1]["verdict"] == "accepted"
+    assert climb["outcome"] == "accepted"
+
+
+def test_deep_does_not_warn_about_a_subject_it_already_escalated_on(
+    tmp_path: Path,
+) -> None:
+    """Warning after escalating reports a failure that did not happen.
+
+    Plain ask warns because it cannot act. The ladder retried on exactly that
+    signal, so the accepted answer is the best it found and the subject is
+    reported rather than complained about.
+    """
+    client_app, _ = deep_client(tmp_path)
+
+    events = sse_events(
+        client_app.get("/api/ask", params={"q": "qubits", "deep": "true"}).text
+    )
+
+    subject = next(payload for name, payload in events if name == "subject")
+    assert subject["warn"] is False
+    assert subject["subject"] == "superconducting qubit decoherence"
+
+
+def test_plain_ask_still_streams_tokens(tmp_path: Path) -> None:
+    """The toggle is off by default and changes nothing when it is."""
+    fragments = ["ANSWER: They decohere quickly [1].\n", ""]
+    client_app, chunk_id = ask_client(tmp_path, fragments)
+    fragments[1] = f"CITE [1] {chunk_id} :: Superconducting qubits decohere quickly."
+
+    events = sse_events(client_app.get("/api/ask", params={"q": "qubits"}).text)
+
+    names = [name for name, _ in events]
+    assert names.count("delta") == 2
+    assert "working" not in names and "ladder" not in names

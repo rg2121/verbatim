@@ -446,6 +446,104 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"No paper {arxiv_id} in this corpus")
         return found.to_dict()
 
+    def _deep_answer(asked: str, original: str, arxiv_id: str | None) -> Any:
+        """Answer one question by climbing the ladder, streaming each rung.
+
+        Rungs rather than tokens: the ladder may write an answer, find no
+        citation survived, and retry - and a draft shown to a reader and then
+        withdrawn is worse than a slower page. So this streams what is being
+        *tried*, and the answer only once a rung is accepted.
+
+        The same worker-thread-and-queue shape as `/api/report`, and for the
+        same reason: the loop blocks, the events have to leave while it runs,
+        and a SQLite connection may only be used on the thread that opened it.
+        """
+        from verbatim.orchestrator import work_section
+
+        events: queue.Queue = queue.Queue()
+        model = answering()
+        encoder_for_run = embedder()
+        caller = routing()
+        before = _usage_totals(model, caller)
+
+        def run() -> None:
+            try:
+                with CorpusStore(database) as own:
+                    section, ledger = work_section(
+                        own, encoder_for_run, model, asked,
+                        caller=caller,
+                        per_section=config.ASK_PASSAGES,
+                        max_per_paper=(
+                            config.ASK_MAX_PER_PAPER if arxiv_id is None else None
+                        ),
+                        on_attempt=lambda strategy, rung, rungs: events.put(
+                            ("working", {"strategy": strategy, "rung": rung,
+                                         "rungs": rungs})
+                        ),
+                    )
+                    answer = section.answer
+                    events.put(("answer", answer.to_dict()))
+                    events.put((
+                        "ladder",
+                        {
+                            "shape": ledger.shape,
+                            "outcome": ledger.outcome,
+                            "attempts": [
+                                {
+                                    "strategy": a.strategy,
+                                    "verdict": a.verdict,
+                                    "passages": a.passages,
+                                    "verified": a.verified,
+                                    "closeness": a.closeness,
+                                    "error": a.error,
+                                }
+                                for a in ledger.attempts
+                            ],
+                        },
+                    ))
+                    events.put((
+                        "subject",
+                        {
+                            "subject": section.subject,
+                            "closeness": (
+                                None if section.subject_closeness is None
+                                else round(section.subject_closeness, 3)
+                            ),
+                            # The ladder already retried on a low subject
+                            # score, so the accepted answer is the best it
+                            # found. Reported, never warned about: warning
+                            # after escalating says the machine failed at
+                            # something it in fact did.
+                            "warn": False,
+                        },
+                    ))
+            # Broad on purpose: the sentinel below ends the stream whatever
+            # happens, so an unnamed exception would close with a normal
+            # `done` and present nothing as a finished answer.
+            except Exception as error:  # noqa: BLE001 - see above
+                events.put(("failed", {"message": str(error)}))
+            finally:
+                events.put(None)
+
+        def stream() -> Any:
+            if asked != original:
+                yield _event("resolved", {"question": asked})
+            worker = threading.Thread(target=run, name="ask-deep", daemon=True)
+            worker.start()
+            while True:
+                item = events.get()
+                if item is None:
+                    break
+                name, payload = item
+                yield _event(name, payload)
+            yield _event("done", {"cost": _cost_since(before, model, caller)})
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/ask")
     def ask(
         q: str = Query(min_length=1, description="The question to answer"),
@@ -455,6 +553,15 @@ def create_app(
             description=(
                 "Earlier turns as JSON [{question, answer}], oldest first. Used "
                 "only to resolve what a follow-up refers to, before retrieval."
+            ),
+        ),
+        deep: bool = Query(
+            False,
+            description=(
+                "Escalate when an answer has no verified citation or drifts "
+                "off-subject: route by question shape and climb the retrieval "
+                "ladder. Streams rungs instead of tokens, because an attempt "
+                "that gets retried must not have been shown as the answer."
             ),
         ),
     ) -> Any:
@@ -481,6 +588,8 @@ def create_app(
         asked = standalone_question(
             lambda system, user: answering().complete_text(system, user), turns, q
         ) if turns else q
+        if deep:
+            return _deep_answer(asked, q, arxiv_id)
         matches = hybrid_search(
             corpus(), embedder(), asked,
             limit=config.ASK_PASSAGES,
@@ -707,6 +816,11 @@ PAGE = """<!doctype html>
       <button type="submit" id="askgo">Ask</button>
       <button type="button" id="askreset" hidden>New topic</button>
     </form>
+    <label class="note" id="deeplabel">
+      <input type="checkbox" id="askdeep"> dig deeper
+      <span class="meta">&mdash; retry with another retrieval when nothing
+      verifies, instead of streaming the first attempt</span>
+    </label>
     <p class="note" id="askstatus"></p>
   </div>
 
@@ -872,9 +986,34 @@ function runAsk(event) {
   const history = thread.length
     ? "&history=" + encodeURIComponent(JSON.stringify(thread))
     : "";
+  const deep = $("askdeep").checked;
+  // The ladder's trace, built as it climbs. Kept out of the answer paragraph
+  // so an accepted answer replaces the progress rather than appending to it.
+  const rungs = document.createElement("p");
+  rungs.className = "note";
+  rungs.hidden = true;
+  reply.insertBefore(rungs, refs);
+  if (deep) body.textContent = "Routing the question\u2026";
   asking = new EventSource(
     "/api/ask?q=" + encodeURIComponent(question) + history
+      + (deep ? "&deep=true" : "")
   );
+
+  asking.addEventListener("working", (e) => {
+    const step = JSON.parse(e.data);
+    body.className = "text thinking";
+    body.textContent =
+      "Trying " + step.strategy + " (attempt " + step.rung
+      + " of at most " + step.rungs + ")\u2026";
+  });
+  asking.addEventListener("ladder", (e) => {
+    const climb = JSON.parse(e.data);
+    rungs.hidden = false;
+    rungs.textContent =
+      climb.shape + " question \u2014 "
+      + climb.attempts.map((a) =>
+          a.strategy + " " + (a.error ? "failed" : a.verdict)).join(", ");
+  });
 
   asking.addEventListener("resolved", (e) => {
     resolved.hidden = false;
