@@ -158,30 +158,72 @@ The orchestrator had been justified by argument and by one report on one
 topic. `evals/three_arm.py` puts the same frozen held-out questions through
 three arms - one retrieval and one answer, the ladder, and the ladder plus the
 critic - scored on the answers rather than on which paper retrieval named.
-20 questions, 2 runs per arm:
 
-| | baseline | workflow | +critic |
+The first version of this ran **20 questions**, taken as the first twenty in
+file order, and reported that the workflow recovered one of three baseline
+failures. Three is not a sample and the first twenty of a file authored in
+batches is not a draw from the set, so it was re-run over **all 88 answerable
+held-out questions**, 2 runs per arm. The critic is not in the re-run: it was
+already measured worse at four times the cost, and re-deciding a decided
+question would have trebled the wall clock. Its 20-question numbers are below.
+
+| out of 88, mean of 2 runs | baseline | workflow |
+|---|---|---|
+| answers with a verified citation | 78.5 | **81.5** |
+| every claim carries a marker | 70.5 | **72.5** |
+| cited the expected paper | 72.0 | **74.5** |
+| citations rejected | 10.5 | **8.5** |
+
+The workflow is ahead on every row, and the paired difference in
+verified-citation rate is **+0.034 with a 95% bootstrap CI of [+0.006,
++0.074]** - an interval that excludes zero, which nothing in this project's
+comparisons had done before.
+
+**It still does not establish anything, and the reason is worth recording.**
+The arms give the same answer on 81 of the 88 questions. The entire result
+rests on the 7 where they differ: the workflow is better on 6 and worse on 1.
+A sign test on those 7 gives p = 0.125. And the bootstrap's lower bound is an
+artefact of the RNG seed - the per-question difference takes few distinct
+values, so the 2.5th percentile lands *on* zero for 7 of 10 seeds and just
+above it for the other 3. The first run of this reported "distinguishable"
+because seed 0 happened to fall on the right side.
+
+The driver now prints the share of bootstrap resamples at or below zero
+(0.024, and stable across seeds), the sign test, and the count of questions
+the arms actually differ on - and calls a difference distinguishable only when
+both tests agree. This one does not, so it reads **NOT distinguishable**.
+
+What survives is direction, not significance: the workflow is ahead on all
+four rows and on 6 of the 7 questions where anything changed. That is the
+strongest evidence this project has for the orchestrator, and it is still not
+enough. Settling +0.034 needs several hundred questions - the same conclusion
+the retrieval comparison reached, from the other end.
+
+Cost is **not measured in this run**. The 502 that killed it at answer 217
+meant the resumed process generated only part of each arm, and the driver
+withholds a cost it cannot attribute rather than reporting the fraction it
+happened to see. The only cost figure remains the 20-question one below: 20
+calls against 46, or 2.3×.
+
+For the workflow that leaves the same shape of argument as before. The arms
+share their first rung, so it does identical work wherever the baseline
+succeeds and can only differ where the baseline fails - and on the 12
+questions the baseline missed at least once, the workflow's verified-citation
+rate is 0.50 against 0.21. That subset is selected on the baseline's own
+failure, so the baseline's rate there is biased low and the comparison cannot
+carry a headline; it is the mechanism, not the evidence. Whether 2.3× is worth
+it depends on what a failure costs you: in a review, a section with no
+verified citation is a hole in the document; for a single question, you can
+ask again.
+
+The 20-question run, kept because it is where the critic was measured:
+
+| out of 20 | baseline | workflow | +critic |
 |---|---|---|---|
 | answers with a verified citation | 17.5 | **18.0** | 17.0 |
 | every claim carries a marker | 15.0 | **16.0** | 14.0 |
-| cited the expected paper | 17.0 | 17.0 | 17.0 |
 | citations rejected | 2.5 | **1.5** | 3.0 |
 | **cost** | **20 calls, 57k tokens** | **46 calls, 77k** | **83 calls, 87k** |
-| recovered, of 3 the baseline failed | — | **1.0** | 0.0 |
-
-**The quality differences are inside the noise; the cost differences are not.**
-Half a point out of twenty across two runs is exactly the size of gap this
-project has already established it cannot distinguish, and the ranges overlap.
-What is unambiguous is 20 → 46 → 83 calls.
-
-For the workflow that leaves one concrete thing in its favour: it recovered
-one of the three questions the baseline could get no verified citation for, at
-2.3× the calls. That matches what the report-mode measurement found - the
-ladder pays where the baseline fails and does identical work everywhere else,
-because the arms share their first rung. Whether 2.3× is worth one recovery in
-twenty depends on what a failure costs you. In a review, a section with no
-verified citation is a hole in the document; for a single question, you can
-just ask again.
 
 **For the critic the answer is simpler: it did not pay.** Every measure is
 equal or worse than the workflow without it - fewer verified citations, fewer

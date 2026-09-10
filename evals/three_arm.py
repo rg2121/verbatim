@@ -31,7 +31,9 @@ import argparse
 import json
 import random
 import statistics
+from math import comb
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,16 +96,42 @@ def decode(line: str) -> tuple[Key, AnsweredCase]:
     )
 
 
-def ci(values: list[float], rounds: int = 10000, seed: int = 0) -> tuple[float, float]:
-    """Percentile bootstrap interval for the mean of a paired difference."""
+def ci(
+    values: list[float], rounds: int = 10000, seed: int = 0
+) -> tuple[float, float, float]:
+    """Percentile bootstrap interval, plus the share of resamples at or below 0.
+
+    The share is returned because the interval alone is treacherous here. The
+    per-question difference takes few distinct values, so the 2.5th percentile
+    lands *on* zero for most RNG seeds and just above it for a few - and a
+    verdict written as `lo > 0` then depends on the seed rather than on the
+    data. The share moves smoothly and says the same thing on every seed.
+    """
     if not values:
-        return (0.0, 0.0)
+        return (0.0, 0.0, 1.0)
     rng = random.Random(seed)
     n = len(values)
     means = sorted(
         sum(rng.choice(values) for _ in range(n)) / n for _ in range(rounds)
     )
-    return means[int(0.025 * rounds)], means[int(0.975 * rounds)]
+    at_or_below = sum(1 for mean in means if mean <= 0) / rounds
+    return means[int(0.025 * rounds)], means[int(0.975 * rounds)], at_or_below
+
+
+def sign_test(diffs: Sequence[float]) -> tuple[int, int, float]:
+    """Wins, losses, and a two-sided p-value assuming nothing about the spread.
+
+    Reported beside the bootstrap because it is exact, and because it forces
+    the honest denominator into view: a difference of +0.03 over 88 questions
+    can mean the arms disagreed on seven of them.
+    """
+    wins = sum(1 for d in diffs if d > 0)
+    losses = sum(1 for d in diffs if d < 0)
+    n = wins + losses
+    if n == 0:
+        return (0, 0, 1.0)
+    tail = sum(comb(n, k) for k in range(max(wins, losses), n + 1))
+    return wins, losses, min(2 * tail / 2**n, 1.0)
 
 
 def answer_one(
@@ -181,17 +209,28 @@ def report(
         return
     shared = [q for q in questions
               if all(q in rate[arm] for arm in arms)]
-    print(f"\n  paired on the {len(shared)} question(s) every arm answered,"
-          " 95% bootstrap CI:")
+    print(f"\n  paired against the baseline on the {len(shared)} question(s)"
+          " every arm answered:")
     for arm in arms:
         if arm == "baseline":
             continue
         diffs = [rate[arm][q] - rate["baseline"][q] for q in shared]
         mean = sum(diffs) / max(len(diffs), 1)
-        lo, hi = ci(diffs)
-        verdict = "distinguishable" if (lo > 0 or hi < 0) else "NOT distinguishable"
-        print(f"    {arm:<10} - baseline  {mean:+.3f}  [{lo:+.3f}, {hi:+.3f}]"
-              f"  {verdict}")
+        lo, hi, at_or_below = ci(diffs)
+        wins, losses, p = sign_test(diffs)
+        # Both tests have to agree before this says anything. The bootstrap
+        # interval on its own put a verdict on the RNG seed once already.
+        verdict = (
+            "distinguishable" if at_or_below < 0.025 and p < 0.05
+            else "NOT distinguishable"
+        )
+        print(f"    {arm:<10} {mean:+.3f} mean difference"
+              f"  95% CI [{lo:+.3f}, {hi:+.3f}]")
+        print(f"    {'':<10} the arms differ on {wins + losses} of {len(shared)}"
+              f" question(s): {arm} better on {wins}, worse on {losses}")
+        print(f"    {'':<10} bootstrap resamples at or below zero {at_or_below:.3f};"
+              f" sign test p {p:.3f}")
+        print(f"    {'':<10} -> {verdict}")
 
     hard = [q for q in shared if rate["baseline"][q] < 1.0]
     print(f"\n  On the {len(hard)} question(s) the baseline missed at least once"
