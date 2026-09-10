@@ -86,6 +86,31 @@ def main() -> None:
         raise SystemExit("interrupted") from None
 
 
+AUTHORED_HEADER = """\
+# Held-out evaluation cases, generated from each paper's TITLE AND ABSTRACT
+# ONLY by `verbatim author-cases`. No retrieval was run against any
+# question before this file was committed - the authoring module imports
+# nothing that can search, and a test asserts it never will.
+#
+# Papers were chosen before any question existed: current papers with 25-90
+# body passages, excluding every paper named in retrieval.jsonl, heldout.jsonl
+# and gate.jsonl, grouped by primary category and taken at a fixed stride, so
+# no category can fill the set by being large.
+#
+# A model reaches for the abstract's own words where a person paraphrases, and
+# abstracts are passages in this corpus, so a question sharing a distinctive
+# span with one would be found by keyword search for that reason alone. The
+# 88 hand-authored cases in heldout.jsonl share a median run of 2 words with
+# their paper's abstract and at most 6; only 4 share 5 or more. Cases sharing
+# 5 or more are rejected here, so this set is no leakier than that one.
+#
+# Every case is `shape=plain` with one expected paper. There are no
+# unanswerable cases: deciding that a subject is uncovered requires inspecting
+# the corpus, which is what authoring blind forbids. Those live in
+# heldout.jsonl, written by hand.
+"""
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Ingest a small, traceable arXiv metadata snapshot.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -204,6 +229,23 @@ def run() -> None:
     distill_parser.add_argument(
         "--seed", type=int, default=0,
         help="Which seed passages are drawn; the same seed draws the same ones",
+    )
+
+    author_parser = subparsers.add_parser(
+        "author-cases",
+        help="Write held-out evaluation cases from titles and abstracts only",
+    )
+    author_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    author_parser.add_argument(
+        "--out", type=Path, default=Path("evals/heldout-generated.jsonl")
+    )
+    author_parser.add_argument("--cases", type=int, default=100)
+    author_parser.add_argument("--llm", help="Generation model")
+    author_parser.add_argument(
+        "--exclude", type=Path, nargs="*",
+        default=[Path("evals/retrieval.jsonl"), Path("evals/heldout.jsonl"),
+                 Path("evals/gate.jsonl")],
+        help="Existing keys whose papers must not be reused",
     )
 
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
@@ -671,6 +713,61 @@ def run() -> None:
                     f"below the floor of {args.min_mrr:.3f}. Either a change made "
                     f"retrieval worse, or the floor needs re-measuring on purpose."
                 )
+
+    if args.command == "author-cases":
+        from verbatim.authoring import author, excluded_papers, render_rejections
+
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        exclude = excluded_papers(str(path) for path in args.exclude)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        existing = [
+            line for line in
+            (args.out.read_text().splitlines() if args.out.exists() else [])
+            if line.strip() and not line.startswith("#")
+        ]
+        if existing:
+            import json as _json
+
+            for line in existing:
+                for arxiv_id in _json.loads(line).get("expect_papers") or []:
+                    exclude.add(str(arxiv_id))
+            print(f"resuming: {len(existing)} case(s) already in {args.out}")
+        rejected: dict[str, int] = {}
+        header = args.out.exists() and bool(existing)
+        stopped: str | None = None
+        written = 0
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "author-cases", cases=args.cases, llm=args.llm
+        ) as run, args.out.open("a") as sink:
+            if not header:
+                sink.write(AUTHORED_HEADER)
+            try:
+                for case in author(
+                    corpus,
+                    lambda system, user: completion.complete_text(system, user),
+                    cases=args.cases,
+                    exclude=exclude,
+                    rejected=rejected,
+                ):
+                    sink.write(case.to_row() + "\n")
+                    sink.flush()
+                    written += 1
+                    print(f"  wrote {written}/{args.cases}", end="\r", flush=True)
+            except (RuntimeError, OSError) as error:
+                stopped = f"{type(error).__name__}: {error}"
+            run.record(written=written, rejected=sum(rejected.values()))
+        print(f"{args.out}\n")
+        print(f"  wrote {written} case(s)")
+        print(render_rejections(rejected))
+        print(
+            "\n  NOT YET SCORED. Commit this file before running any evaluation"
+            " against it:\n  a question that has been retrieved for is no longer"
+            " held out."
+        )
+        if stopped is not None:
+            print(f"\n  STOPPED: {stopped}\n  Re-run to resume.")
+            raise SystemExit(1)
+        return
 
     if args.command == "distill":
         import json
