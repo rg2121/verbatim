@@ -763,7 +763,11 @@ only, with no retrieval run against any question, committed before it was
 scored, and reported at whatever it scored. Papers were picked by a fixed rule
 before any question existed, excluding every paper already in the development
 key and every subject probed by hand while building the system. 88 answerable
-cases over 88 distinct papers in 29 categories.
+cases over 88 distinct papers in 29 categories. A second file,
+`evals/heldout-generated.jsonl`, adds 400 more under the same rule — see
+[below](#several-hundred-cases-and-what-they-settled), and note that the two
+are kept apart because how a batch was authored moves its score more than any
+retrieval mode does.
 
 | mode | r@1 | r@5 | r@10 | mrr | mrr on the development key |
 |---|---|---|---|---|---|
@@ -815,9 +819,62 @@ itself the most useful number here, because it is far larger than any
 difference between modes. Deciding this needs several hundred cases, not
 another fifty.
 
-So nothing was changed. `hybrid+graph` remains the default because it is the
-incumbent and no evidence distinguishes the alternatives, which is a weaker
-reason than this file used to give and a truer one.
+### Several hundred cases, and what they settled
+
+`verbatim author-cases` wrote **400 more**, from titles and abstracts
+only, frozen and committed before being scored. The rule is structural rather
+than promised: `authoring.py` imports nothing that can search, and a test
+parses its imports and fails if that changes. A module that cannot retrieve
+cannot check a question before keeping it.
+
+**A quarter of what a model writes from an abstract borrows its wording.** Of
+536 candidates, 134 were rejected for sharing a five-or-more-word run with
+their abstract — which is a passage in this corpus, so they would have been
+retrieved for that reason alone. The threshold came from the existing set, not
+from taste: the hand-authored cases share a median run of 2 words and at most
+6.
+
+**The batch swing is real, and bigger than first thought.**
+
+| batch | cases | hybrid mrr |
+|---|---|---|
+| hand-authored, first | 36 | 0.675 |
+| hand-authored, second | 52 | 0.816 |
+| generated | 400 | 0.918 |
+
+So **an absolute mrr means nothing without naming its batch**, and figures from
+different batches must never be compared. Every held-out number above is the
+88-case pooled figure and should be read as belonging to those two batches.
+
+**But rankings replicate where absolute scores do not**, and that is what makes
+the set useful. Default against the always-on title leg:
+
+| batch | cases | difference | won–lost | sign test |
+|---|---|---|---|---|
+| hand, first | 36 | −0.052 | 6–7 | p = 1.00 |
+| hand, second | 52 | +0.071 | 13–0 | p = 0.0002 |
+| generated | 400 | +0.019 | 38–19 | p = 0.016 |
+| **all 488** | 488 | **+0.019** | **57–26** | **p = 0.0009** |
+
+**This is the first mode comparison here that says anything.** The title leg is
+reliably worse — it loses twice as often as it wins, replicated in both
+batches that carry any signal, and the batch that disagrees carries none.
+
+Reported as *direction*, not magnitude: the mean difference is 0.019 with an
+interval that still touches zero, so the verdict line reads NOT
+distinguishable. Both halves are true, and the strict verdict is kept on
+purpose — that rule exists to stop a percentile bound being read as a result,
+which is a mistake this project made once and wrote down.
+
+The graph gate still fires on **none of the 488**: `hybrid+graph` returns
+rankings identical to plain `hybrid` on every case, because authoring blind
+cannot produce definitional questions. It remains justified by the shape it
+targets and by nothing in these tables. The comparison gate fires on 6 of 488,
+wins 5, and 5–1 is p = 0.22.
+
+So `hybrid+graph` remains the default — now because the one alternative the
+set can judge is measurably worse on direction, and the rest remain undecided,
+which is a better reason than being the incumbent.
 
 ### What the misses actually are
 
@@ -1281,14 +1338,21 @@ are an auto-seeded floor of paper titles, which retrieve their own paper for
 reasons a real question does not. The 93-case held-out key was authored blind
 and frozen before scoring, and the default scores mrr 0.758 on it against
 0.869 on the development key. Neither set transfers to another corpus without
-re-measuring, and a paired bootstrap over the held-out cases cannot
-distinguish any of the retrieval modes from any other. See *What a held-out
-set measures*.
+re-measuring. Over 488 held-out cases a paired comparison can now tell the
+always-on title leg apart from the default on *direction* (57-26, sign test
+p = 0.0009) and still cannot separate the others - and the score a batch gets
+depends more on how it was authored than on which mode retrieved it. See
+*What a held-out set measures*.
 
-**Vector search is brute force.** sqlite-vec scans every vector, which is
-measured at about 94 ms for a k=50 query over 455,000 vectors and is fine at
-this scale. A corpus several times larger wants a real index behind the
-`VectorIndex` protocol rather than a faster machine.
+**Vector search is brute force.** sqlite-vec scans every vector: measured at
+**192 ms** for a k=8 query over 835,743 vectors. That is exact rather than
+approximate, which is the trade an ANN index reverses, and it is not the
+bottleneck — a whole hybrid search takes 1.3 s, of which the keyword leg is
+662 ms and the vector leg 330 ms, inside an answer that takes seconds more to
+generate. A corpus tens of times larger wants a real index behind the
+`VectorIndex` protocol; this one does not, and swapping in an approximate
+index today would spend accuracy to speed up a seventh of a seventh of the
+wait.
 
 **Some papers have no PDF at arXiv.** 32 of the papers here return 404 for
 their versioned PDF, most of them also unversioned. They are recorded as
