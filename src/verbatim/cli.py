@@ -208,6 +208,18 @@ def run() -> None:
     answers_parser.add_argument(
         "--limit", type=int, default=20, help="Questions to answer; each costs a generation"
     )
+    answers_parser.add_argument(
+        "--sample", type=int,
+        help="Draw this many questions evenly across authoring batches, rather "
+             "than taking the first --limit in file order. The batches differ "
+             "in size and difficulty, so file order decides the result",
+    )
+    answers_parser.add_argument("--seed", type=int, default=0)
+    answers_parser.add_argument(
+        "--runs", type=int, default=1,
+        help="Repeat the whole sample; generation is not deterministic and one "
+             "run cannot show its own spread",
+    )
     answers_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES)
     answers_parser.add_argument(
         "--judge", action="store_true",
@@ -866,24 +878,52 @@ def run() -> None:
 
         from verbatim.evaluation import load_key
 
-        cases = [c for c in load_key(args.cases) if not c.expect_none][: args.limit]
+        from verbatim.evaluation import source_of, stratified_sample
+
+        answerable = [c for c in load_key(args.cases) if not c.expect_none]
+        cases = (
+            stratified_sample(answerable, size=args.sample, seed=args.seed)
+            if args.sample else answerable[: args.limit]
+        )
+        source_by_question = {c.question: source_of(c) for c in cases}
         embedder = FastEmbedEmbedder(model_name=args.model)
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-        answered = []
+        answered: list = []
+        per_run: list[list] = []
+        stopped: str | None = None
+        total = len(cases) * args.runs
         with CorpusStore(args.state) as corpus, record_run(
-            corpus, "eval-answers", cases=len(cases), llm=args.llm
+            corpus, "eval-answers", cases=len(cases), runs=args.runs, llm=args.llm
         ) as run:
-            for position, case in enumerate(cases, start=1):
-                matches = hybrid_search(
-                    corpus, embedder, case.question, limit=args.passages,
-                    max_per_paper=config.ASK_MAX_PER_PAPER, use_graph=True,
-                )
-                answered.append(AnsweredCase(
-                    question=case.question,
-                    answer=answer_from_matches(corpus, completion, case.question, matches),
-                    expected_papers=case.expect_papers,
-                ))
-                print(f"  answered {position}/{len(cases)}", end="\r", flush=True)
+            done = 0
+            for _repeat in range(args.runs):
+                this_run: list = []
+                for case in cases:
+                    try:
+                        matches = hybrid_search(
+                            corpus, embedder, case.question, limit=args.passages,
+                            max_per_paper=config.ASK_MAX_PER_PAPER, use_graph=True,
+                        )
+                        answer = answer_from_matches(
+                            corpus, completion, case.question, matches
+                        )
+                    except (RuntimeError, OSError) as error:
+                        # Scored on what it got rather than lost entirely: a
+                        # model server that goes away after ninety questions
+                        # has still produced ninety questions of signal.
+                        stopped = f"{type(error).__name__}: {error}"
+                        break
+                    this_run.append(AnsweredCase(
+                        question=case.question, answer=answer,
+                        expected_papers=case.expect_papers,
+                    ))
+                    done += 1
+                    print(f"  answered {done}/{total}", end="\r", flush=True)
+                if this_run:
+                    per_run.append(this_run)
+                    answered.extend(this_run)
+                if stopped is not None:
+                    break
             score = score_answers(answered)
             run.record(
                 cases=score.cases, declined=score.declined,
@@ -891,6 +931,31 @@ def run() -> None:
             )
         print(",".join(str(path) for path in args.cases) + "\n")
         print(score.render())
+        if len(per_run) > 1:
+            # Printed because one run cannot show its own spread, and this
+            # measure swung ten points between consecutive runs of twenty.
+            print("\n  per run, answers with a verified citation:")
+            for number, batch in enumerate(per_run, start=1):
+                got = score_answers(batch)
+                print(f"    run {number}: {got.with_verified_citation}/{got.cases}"
+                      f" ({got.with_verified_citation / max(got.cases, 1):.0%})")
+        batches: dict[str, list] = {}
+        for case in answered:
+            batches.setdefault(source_by_question.get(case.question, "unknown"),
+                               []).append(case)
+        if len(batches) > 1:
+            # By batch, because how a batch was authored moves its score more
+            # than anything the system does.
+            print("\n  by authoring batch:")
+            for source, group in sorted(batches.items()):
+                got = score_answers(group)
+                share = lambda n: f"{n / max(got.cases, 1):.0%}"
+                print(f"    {source:<20} {got.cases:>4} answers, "
+                      f"verified {share(got.with_verified_citation)}, "
+                      f"marked {share(got.fully_cited)}, "
+                      f"expected paper {share(got.cited_expected_paper)}")
+        if stopped is not None:
+            print(f"\n  STOPPED after {len(answered)} answer(s): {stopped}")
         if args.judge:
             print("\n  Does a cited quote support the claim it is attached to?")
             print("  Real pairs are scored beside mismatched ones, because a")

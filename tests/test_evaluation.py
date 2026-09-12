@@ -1,3 +1,4 @@
+import collections
 from pathlib import Path
 
 import pytest
@@ -293,3 +294,60 @@ def test_source_of_falls_back_when_a_case_is_unlabelled(tmp_path: Path) -> None:
     assert source_of(
         EvalCase(question="q", expect_papers=("a",), note="shape=plain")
     ) == "unknown"
+
+
+def test_stratified_sample_draws_evenly_across_batches(tmp_path: Path) -> None:
+    """File order would let the biggest batch decide the result.
+
+    The batches here are 36, 52 and 400 cases and score 0.675, 0.816 and 0.918
+    on the same retrieval. Taking the first hundred of a concatenated key draws
+    88 from one authoring method and 12 from another, then reports the average
+    as though it described the corpus.
+    """
+    from verbatim.evaluation import EvalCase, source_of, stratified_sample
+
+    cases = (
+        [EvalCase(question=f"small {n}", expect_papers=("a",), note="source=small")
+         for n in range(5)]
+        + [EvalCase(question=f"big {n}", expect_papers=("b",), note="source=big")
+           for n in range(200)]
+    )
+
+    drawn = stratified_sample(cases, size=8)
+
+    counts = collections.Counter(source_of(c) for c in drawn)
+    assert counts["small"] == 4 and counts["big"] == 4
+
+
+def test_stratified_sample_exhausts_a_small_batch_before_padding(
+    tmp_path: Path,
+) -> None:
+    """A batch smaller than its share contributes all it has, not a crash."""
+    from verbatim.evaluation import EvalCase, source_of, stratified_sample
+
+    cases = (
+        [EvalCase(question="only one", expect_papers=("a",), note="source=tiny")]
+        + [EvalCase(question=f"big {n}", expect_papers=("b",), note="source=big")
+           for n in range(50)]
+    )
+
+    drawn = stratified_sample(cases, size=10)
+
+    counts = collections.Counter(source_of(c) for c in drawn)
+    assert len(drawn) == 10
+    assert counts["tiny"] == 1 and counts["big"] == 9
+
+
+def test_stratified_sample_is_reproducible(tmp_path: Path) -> None:
+    """The same sample must be drawable twice, to score it twice."""
+    from verbatim.evaluation import EvalCase, stratified_sample
+
+    cases = [EvalCase(question=f"q {n}", expect_papers=("a",), note="source=s")
+             for n in range(40)]
+
+    first = [c.question for c in stratified_sample(cases, size=10, seed=3)]
+    again = [c.question for c in stratified_sample(cases, size=10, seed=3)]
+    other = [c.question for c in stratified_sample(cases, size=10, seed=4)]
+
+    assert first == again
+    assert first != other

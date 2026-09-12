@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import json
+import random
 from pathlib import Path
 
 from verbatim.corpus import ChunkMatch, CorpusStore
@@ -180,6 +181,43 @@ def load_key(paths: Sequence[Path]) -> list[EvalCase]:
             seen[case.question] = path
             cases.append(case)
     return cases
+
+
+def stratified_sample(
+    cases: Sequence[EvalCase], *, size: int, seed: int = 0
+) -> list[EvalCase]:
+    """Draw evenly from each authoring batch, not from the top of the file.
+
+    The batches are wildly different sizes - 36, 52 and 400 here - and score
+    differently enough that a sample's composition decides its result. Taking
+    the first N of a concatenated key would have drawn 88 hand-authored cases
+    and 12 generated ones, and reported their average as though it described
+    the corpus.
+
+    Round-robin across batches, so a small batch is fully represented before a
+    large one dominates, and seeded so the same sample can be scored twice.
+    """
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    batches: dict[str, list[EvalCase]] = {}
+    for case in cases:
+        batches.setdefault(source_of(case), []).append(case)
+    rng = random.Random(seed)
+    for batch in batches.values():
+        rng.shuffle(batch)
+
+    drawn: list[EvalCase] = []
+    position = 0
+    while len(drawn) < size and any(
+        position < len(batch) for batch in batches.values()
+    ):
+        for _source, batch in sorted(batches.items()):
+            if position < len(batch):
+                drawn.append(batch[position])
+                if len(drawn) == size:
+                    break
+        position += 1
+    return drawn
 
 
 def source_of(case: EvalCase) -> str:
