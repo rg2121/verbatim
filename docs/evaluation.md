@@ -142,24 +142,53 @@ much: each held-out question names one acceptable paper, so a correct answer
 drawn from an equally good neighbour is counted a miss.
 `verbatim eval-answers` scores what the system actually produced.
 
-Over 20 held-out questions on the full corpus:
+Measured over **120 questions drawn evenly from all three authoring batches,
+answered twice** — 240 answers on the full corpus:
 
 | | |
 |---|---|
 | declined outright | 0% |
-| at least one verified citation | 80–90% |
-| every claim-carrying sentence has a marker | 70–75% |
-| cited the paper the question was written from | 80–85% |
+| at least one verified citation | **92%** |
+| every claim-carrying sentence has a marker | **88%** |
+| cited the paper the question was written from | **88%** |
+| citations rejected in total | 20 |
 
-Two ranges rather than two numbers, because generation is not deterministic:
-the same twenty questions on the same corpus gave 90% and 80% on consecutive
-runs. Answer-level metrics need repeats before a difference means anything.
+The sample is stratified rather than the first N of the key, because the
+batches differ enough that composition would decide the result. By batch:
 
-The third row is the one that settles a question left open above. Retrieval
-puts the expected paper first 68% of the time and somewhere in ten results 92%
-of the time; the *answer* cites it 80–85% of the time, because it can draw on
-any retrieved passage rather than only the top one. **0.758 was a floor, as
-suspected, and this is roughly where the ceiling sits.**
+| batch | answers | verified citation | every claim marked | expected paper |
+|---|---|---|---|---|
+| hand-authored, first | 72 | 86% | 83% | 82% |
+| hand-authored, second | 84 | 95% | 89% | 86% |
+| generated | 84 | 95% | 92% | 95% |
+
+The ordering is the same one retrieval showed (mrr 0.675 / 0.816 / 0.918), so
+the batches are hard for the answer in the same way and to the same degree
+that they are hard for retrieval.
+
+### The 10-point run-to-run swing was the sample, not the model
+
+This measurement used to be reported as two ranges rather than two numbers,
+because twenty questions answered twice gave 90% and then 80%, and that
+instability was attributed to generation being non-deterministic. At 120
+questions the two runs both scored **111/120**. Exactly.
+
+Generation is still non-deterministic; individual answers differ between runs.
+What was unstable was a 20-case denominator, where two answers changing moves
+the number ten points. The conclusion drawn at the time — "answer-level
+metrics need repeats before a difference means anything" — was right about
+repeats and wrong about why, and the repeats are cheap enough to keep.
+
+The third row settles a question left open above. Retrieval puts the expected
+paper first 68% of the time on the original 88; the *answer* cites it 88% of
+the time, because it can draw on any retrieved passage rather than only the
+top one. **0.758 was a floor, as suspected.**
+
+One caveat against reading the improvement from the old numbers as progress:
+this is a different sample, on a different model, after a fix to grouped
+citation markers that previously left raw chunk ids in prose where a marker
+was expected. Three changes at once, so the delta is not attributable — the
+number is trustworthy, the comparison to the older one is not.
 
 ## Whether a quote supports the claim it is attached to
 

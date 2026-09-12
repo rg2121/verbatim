@@ -914,8 +914,34 @@ paper is scored as a miss. The 0.758 is therefore a floor on how often the
 system retrieves something that answers the question, and the gap between that
 floor and the truth is exactly the 6% of cases where a near neighbour won.
 Closing it needs a judgement about whether an answer is supported, not a
-comparison of arXiv ids - the answer-level evaluation this project does not
-have.
+comparison of arXiv ids - which is what `eval-answers` measures:
+
+```bash
+uv run verbatim eval-answers --cases evals/heldout.jsonl evals/heldout-generated.jsonl --sample 120 --runs 2
+```
+
+Over **120 questions drawn evenly from all three authoring batches, answered
+twice** - 240 answers:
+
+| | |
+|---|---|
+| declined outright | 0% |
+| at least one verified citation | **92%** |
+| every claim-carrying sentence has a marker | **88%** |
+| cited the paper the question was written from | **88%** |
+
+Retrieval puts the expected paper first 68% of the time; the *answer* cites it
+88% of the time, because it can draw on any of the eight passages rather than
+only the top one. The floor was a floor.
+
+**And the run-to-run instability turned out to be the sample.** This used to be
+reported as ranges - twenty questions answered twice gave 90% then 80%, and
+that was put down to generation being non-deterministic. At 120 questions both
+runs scored 111/120, exactly. Generation is still non-deterministic and
+individual answers still differ; what was unstable was a 20-case denominator,
+where two answers moving shifts the number ten points. See
+[docs/evaluation.md](docs/evaluation.md) for the per-batch split, which follows
+the same ordering retrieval shows.
 
 The two unexplained misses are worth naming rather than rounding away:
 a cleaning-robot path-planning question and one about the analytic
