@@ -512,10 +512,10 @@ happen.
 
 `report --agents` is the multi-agent version of the review, and it was
 designed from what the 2026 literature agrees on rather than from enthusiasm.
-Published orchestrator-workers systems and the LangGraph benchmark both find that an
-orchestrator delegating to parallel specialists beats a single agent on
-breadth-first work, at a cost of 3 to 15 times the tokens; one such system also
-keeps citation checking in a separate agent because one agent both writing
+Published orchestrator-workers systems and the LangGraph benchmark both find
+that an orchestrator delegating to parallel specialists beats a single agent
+on breadth-first work, at a cost of 3 to 15 times the tokens; the same systems
+keep citation checking in a separate agent, because one agent both writing
 and checking plays "a game of telephone". Magentic-One's orchestrator keeps a
 ledger of progress and retries on error, and OrchestraBench (arXiv:2608.05263,
 held in this corpus) shows why the ledger matters: blind retry reproduces
@@ -1263,7 +1263,8 @@ a page that reached a CDN would quietly undo that.
 ## Using the corpus from an MCP client
 
 `verbatim mcp` serves the corpus over the Model Context Protocol on stdio,
-so a desktop assistant, a coding agent or an editor can search it directly. It offers
+so a desktop assistant, a coding agent or an editor can search it directly. It
+offers
 the same five tools the built-in agent uses - `search_chunks`, `get_paper`,
 `list_papers`, `get_citations`, `read_pages` - because both are front ends onto
 one set of operations rather than two implementations of it. All five are

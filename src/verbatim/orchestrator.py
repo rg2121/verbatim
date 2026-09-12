@@ -4,8 +4,9 @@ The 2026 literature on multi-agent systems agrees on more than it argues
 about, and this module is built from the parts that agree:
 
 - **Orchestrator and workers.** A lead coordinates specialists that work in
-  parallel on independent facets; a published orchestrator-workers research system reports a
-  90% gain over a single agent on breadth-first tasks, and the LangGraph
+  parallel on independent facets; a published orchestrator-workers research
+  system reports a 90% gain over a single agent on breadth-first tasks,
+  and the LangGraph
   benchmark finds supervisor designs stay accurate as tools proliferate
   where a single agent degrades. The cost is tokens - 3 to 15 times a
   single agent - so the work has to be worth it.
@@ -14,8 +15,8 @@ about, and this module is built from the parts that agree:
   splitting one question into sub-questions lost here (measured: worse on
   its own compound cases) while a review's *sections* are the right split -
   they share a topic and nothing else.
-- **A verifier that is not the writer.** The separate citation agent in those systems
-  exists because one agent both writing and checking plays "a game of
+- **A verifier that is not the writer.** The separate citation agent in those
+  systems exists because one agent both writing and checking plays "a game of
   telephone". Here the verifier is stronger than an agent: it is the
   deterministic quote check, and it never asks a model whether the answer is
   good, because models asked that always say yes (measured, four ways).

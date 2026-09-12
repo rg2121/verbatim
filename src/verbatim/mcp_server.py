@@ -1,8 +1,8 @@
 """Exposing the corpus over the Model Context Protocol.
 
 The same tools the built-in agent uses, offered to any MCP client - a desktop
-assistant, a coding agent, an editor - so the corpus can be queried from wherever
-the work is happening rather than only through this CLI.
+assistant, a coding agent, an editor - so the corpus can be queried from
+wherever the work is happening rather than only through this CLI.
 
 Nothing here reimplements retrieval. The tools, their schemas and their
 dispatch already exist in `tools`, because an assistant that answers questions
