@@ -488,6 +488,10 @@ def run() -> None:
         help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
     )
     ask_parser.add_argument(
+        "--supervisor", default="builtin", choices=["builtin", "langgraph"],
+        help="With --deep, which implementation climbs the ladder",
+    )
+    ask_parser.add_argument(
         "--deep", action="store_true",
         help="Escalate when the first answer fails: route by question shape and "
              "climb the retrieval ladder until a citation verifies and the "
@@ -521,6 +525,12 @@ def run() -> None:
         "report", help="Write a sectioned literature review with verified citations"
     )
     report_parser.add_argument("topic", help="What the review is about; a phrase, not a question")
+    report_parser.add_argument(
+        "--supervisor", default="builtin", choices=["builtin", "langgraph"],
+        help="Which implementation climbs each section's ladder. Both share "
+             "every role and the selection rule; they differ in control flow. "
+             "langgraph needs the optional extra",
+    )
     report_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     report_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     report_parser.add_argument(
@@ -1322,6 +1332,11 @@ def run() -> None:
         # --tools is already inside it and --use-compare would override the
         # router on questions it never applies to. Silently dropping a flag
         # the parser accepted is the defect the audit found here before.
+        if args.supervisor != "builtin" and not args.deep:
+            raise SystemExit(
+                "error: --supervisor only applies with --deep; without it "
+                "`ask` climbs no ladder. Add --deep or drop --supervisor."
+            )
         if args.deep and args.tools:
             raise SystemExit(
                 "error: --tools has no effect with --deep; the agent is the "
@@ -1339,7 +1354,7 @@ def run() -> None:
             )
         with CorpusStore(args.state) as corpus, record_run(corpus, "ask", model=args.model, llm=args.llm, passages=args.passages) as run:
             if args.deep:
-                from verbatim.orchestrator import work_section
+                from verbatim.orchestrator import _supervisor
 
                 embedder = FastEmbedEmbedder(model_name=args.model)
                 completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
@@ -1347,7 +1362,7 @@ def run() -> None:
                 # disables the last rung of every ladder, which is a defect
                 # this project has already shipped once.
                 tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
-                section, ledger = work_section(
+                section, ledger = _supervisor(args.supervisor)(
                     corpus, embedder, completion, args.question,
                     caller=tool_caller,
                     per_section=args.passages,
@@ -1464,6 +1479,12 @@ def run() -> None:
     if args.command == "report":
         from verbatim.report import build_report, render_markdown
 
+        if args.supervisor != "builtin" and not args.agents:
+            raise SystemExit(
+                "error: --supervisor only applies with --agents; the plain "
+                "report runs a single rung and climbs no ladder. Add --agents "
+                "or drop --supervisor."
+            )
         if args.agents and args.use_compare:
             # Refused rather than ignored: with --agents the shape router
             # picks a strategy per section, so honouring this flag would mean
@@ -1504,6 +1525,7 @@ def run() -> None:
                     ) else None,
                     critic=args.critic,
                     on_section=progress,
+                    supervisor=args.supervisor,
                 )
             else:
                 built = build_report(

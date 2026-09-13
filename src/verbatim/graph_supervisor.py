@@ -1,0 +1,255 @@
+"""The same ladder, expressed as a LangGraph state machine.
+
+A second supervisor, not a replacement. The roles this project already
+defines as Protocols - retriever, writer, verifier - become nodes here, and
+the escalation that `work_section` writes as a `for` loop becomes a
+conditional edge back to the retriever. Everything inside the nodes is the
+same code the built-in supervisor calls: the same `retrieve`, the same
+verified-answer path, the same deterministic `verdict_for`, the same
+`choose_best`. Only the control flow differs.
+
+That is the whole point of it. Two implementations behind one set of
+contracts is the only thing that shows the contracts are a real boundary
+rather than decoration, and running both over the same held-out questions
+says whether the boundary holds. If the two disagree, the abstraction leaks
+somewhere and the ledger will say where.
+
+LangGraph is an optional dependency (`uv sync --extra langgraph`). The
+default install stays at seven direct dependencies, because a local-first
+project should not oblige anyone to pull a framework tree to answer a
+question. Importing this module without it raises with that instruction
+rather than an opaque ImportError.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+import sqlite3
+from typing import Any, TypedDict
+
+from verbatim import config
+from verbatim.answers import (
+    Answer,
+    Completion,
+    answer_from_matches,
+    subject_check,
+)
+from verbatim.agent import ToolCaller
+from verbatim.contracts import BudgetGuard, Cost
+from verbatim.corpus import CorpusStore
+from verbatim.embedding import Embedder
+from verbatim.evidence import describe_evidence
+from verbatim.orchestrator import (
+    ACCEPTED,
+    LADDERS,
+    RETRY,
+    Attempt,
+    SectionLedger,
+    choose_best,
+    question_shape,
+    retrieve,
+    verdict_for,
+)
+from verbatim.report import ReportSection
+
+MISSING = (
+    "report --supervisor langgraph needs the optional langgraph extra. "
+    "Install it with: uv sync --extra langgraph"
+)
+
+
+class LadderState(TypedDict, total=False):
+    """What flows between nodes.
+
+    Deliberately only data. The corpus, the models and the tool caller are
+    closed over when the graph is built: a SQLite connection is not state, and
+    putting one here would be the first thing to break under a checkpointer.
+    """
+
+    heading: str
+    shape: str
+    ladder: tuple[str, ...]
+    rung: int
+    gathered: Any
+    answer: Any
+    subject: str | None
+    closeness: float | None
+    error: str
+    spent_before: Any
+    candidates: list[tuple[Attempt, ReportSection]]
+
+
+def build_graph(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    completion: Completion,
+    *,
+    caller: ToolCaller | None = None,
+    per_section: int = 6,
+    max_per_paper: int | None = 2,
+    check_subject: bool = True,
+    warn_below: float = config.SUBJECT_WARN_BELOW,
+    guard: BudgetGuard | None = None,
+    on_attempt: Callable[[str, int, int], None] | None = None,
+) -> Any:
+    """Compile the ladder into a graph: route, retrieve, write, verify, repeat."""
+    try:
+        from langgraph.graph import END, START, StateGraph
+    except ImportError as error:  # pragma: no cover - exercised by its own test
+        raise RuntimeError(MISSING) from error
+
+    usage = getattr(completion, "usage", None)
+
+    def route(state: LadderState) -> dict[str, Any]:
+        shape = question_shape(state["heading"])
+        return {
+            "shape": shape,
+            "ladder": state.get("ladder") or LADDERS[shape],
+            "rung": 0,
+            "candidates": [],
+        }
+
+    def gather(state: LadderState) -> dict[str, Any]:
+        strategy = state["ladder"][state["rung"]]
+        if on_attempt is not None:
+            on_attempt(strategy, state["rung"] + 1, len(state["ladder"]))
+        if guard is not None:
+            stop = guard.exhausted()
+            if stop is not None:
+                return {"error": f"budget: {stop}"}
+            guard.take()
+        before = usage.snapshot() if usage is not None else None
+        try:
+            found = retrieve(
+                strategy, corpus, embedder, state["heading"],
+                limit=per_section, max_per_paper=max_per_paper, caller=caller,
+            )
+        except (RuntimeError, OSError, sqlite3.Error) as failure:
+            return {"error": str(failure)[:200], "spent_before": before}
+        return {"gathered": found, "error": "", "spent_before": before}
+
+    def write(state: LadderState) -> dict[str, Any]:
+        if state.get("error"):
+            return {}
+        try:
+            return {
+                "answer": answer_from_matches(
+                    corpus, completion, state["heading"],
+                    list(state["gathered"].matches),
+                )
+            }
+        except (RuntimeError, OSError, sqlite3.Error) as failure:
+            return {"error": str(failure)[:200]}
+
+    def verify(state: LadderState) -> dict[str, Any]:
+        """Record this rung as a candidate, whatever happened to it."""
+        strategy = state["ladder"][state["rung"]]
+        candidates = list(state.get("candidates") or [])
+        if state.get("error"):
+            candidates.append((
+                Attempt(strategy=strategy, passages=0, verified=0, rejected=0,
+                        closeness=None, verdict=RETRY, error=state["error"]),
+                ReportSection(
+                    heading=state["heading"],
+                    answer=Answer(
+                        question=state["heading"],
+                        text=f"This section could not be written: {state['error']}",
+                        citations=[], rejected=[], declined=True,
+                    ),
+                ),
+            ))
+            return {"candidates": candidates}
+
+        answer = state["answer"]
+        matches = list(state["gathered"].matches)
+        subject = closeness = None
+        if matches and check_subject:
+            subject, closeness = subject_check(
+                completion, embedder, state["heading"], matches
+            )
+        verdict = verdict_for(answer, closeness, warn_below)
+        spent = Cost()
+        if usage is not None and state.get("spent_before") is not None:
+            delta = usage.since(state["spent_before"])
+            spent = Cost(delta.calls, delta.prompt_tokens, delta.output_tokens,
+                         delta.seconds)
+        evidence = describe_evidence(
+            corpus, state["heading"], matches, subject=subject, closeness=closeness
+        )
+        candidates.append((
+            Attempt(
+                strategy=strategy, passages=len(matches),
+                verified=len(answer.citations), rejected=len(answer.rejected),
+                closeness=closeness,
+                verdict=ACCEPTED if verdict.accepted else RETRY,
+                route=state["gathered"].route,
+                papers=state["gathered"].paper_ids,
+                chunks=state["gathered"].chunk_ids, cost=spent,
+            ),
+            ReportSection(
+                heading=state["heading"], answer=answer,
+                subject=subject, subject_closeness=closeness,
+                evidence_lines=tuple(evidence.lines()),
+            ),
+        ))
+        return {"candidates": candidates, "subject": subject, "closeness": closeness}
+
+    def escalate(state: LadderState) -> dict[str, Any]:
+        return {"rung": state["rung"] + 1, "error": "", "gathered": None,
+                "answer": None}
+
+    def next_step(state: LadderState) -> str:
+        """The `for` loop's condition, as an edge.
+
+        Accept on a verified, on-subject answer; otherwise climb, unless the
+        ladder has run out. A rung that errored is not accepted, so a dead
+        model server escalates to the next strategy exactly as it does in the
+        built-in supervisor.
+        """
+        last, _section = state["candidates"][-1]
+        if last.verdict == ACCEPTED:
+            return "done"
+        if state["rung"] + 1 >= len(state["ladder"]):
+            return "done"
+        return "escalate"
+
+    graph = StateGraph(LadderState)
+    graph.add_node("route", route)
+    graph.add_node("retrieve", gather)
+    graph.add_node("write", write)
+    graph.add_node("verify", verify)
+    graph.add_node("escalate", escalate)
+    graph.add_edge(START, "route")
+    graph.add_edge("route", "retrieve")
+    graph.add_edge("retrieve", "write")
+    graph.add_edge("write", "verify")
+    graph.add_conditional_edges(
+        "verify", next_step, {"escalate": "escalate", "done": END}
+    )
+    graph.add_edge("escalate", "retrieve")
+    return graph.compile()
+
+
+def work_section_with_graph(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    completion: Completion,
+    heading: str,
+    *,
+    ladder: tuple[str, ...] | None = None,
+    **options: Any,
+) -> tuple[ReportSection, SectionLedger]:
+    """Climb the ladder through the graph, returning what `work_section` does.
+
+    Same signature and same return type as the built-in supervisor, so callers
+    and measurements cannot tell which one ran except by asking.
+    """
+    compiled = build_graph(corpus, embedder, completion, **options)
+    state: LadderState = {"heading": heading}
+    if ladder is not None:
+        state["ladder"] = ladder
+    # The recursion limit has to clear one pass per rung: route, then four
+    # nodes per attempt. LangGraph counts supersteps, not nodes, so this is
+    # generous rather than exact - an exhausted ladder ends on its own.
+    final = compiled.invoke(state, {"recursion_limit": 64})
+    return choose_best(final["candidates"], heading, final["shape"])

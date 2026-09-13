@@ -1,0 +1,155 @@
+"""The LangGraph supervisor, and whether it agrees with the built-in one.
+
+The point of a second implementation is not that a framework is better. It is
+that two implementations behind one set of role contracts is the only thing
+that shows the contracts are a real boundary. So the test that matters is
+equivalence: given the same corpus, the same scripted model and the same
+ladder, both supervisors must reach the same section by the same route.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from verbatim.orchestrator import ACCEPTED, RETRY, work_section
+
+from test_orchestrator import QueueCompletion, StubEmbedder, cite, flux_corpus
+
+langgraph = pytest.importorskip(
+    "langgraph.graph",
+    reason="the optional langgraph extra: uv sync --extra langgraph",
+)
+
+from verbatim.graph_supervisor import (  # noqa: E402
+    MISSING,
+    work_section_with_graph,
+)
+
+
+def both_supervisors(corpus, payloads, question, ladder):
+    """Run the same scripted attempt sequence through each supervisor."""
+    builtin = work_section(
+        corpus, StubEmbedder(), QueueCompletion(list(payloads)), question,
+        ladder=ladder, per_section=4,
+    )
+    graphed = work_section_with_graph(
+        corpus, StubEmbedder(), QueueCompletion(list(payloads)), question,
+        ladder=ladder, per_section=4,
+    )
+    return builtin, graphed
+
+
+def test_both_supervisors_reach_the_same_section_by_the_same_route(
+    tmp_path: Path,
+) -> None:
+    """The equivalence that makes the comparison meaningful.
+
+    A first strategy whose quote cannot be verified, then one whose quote can.
+    Both must retry rather than accept, both must land on the second rung, and
+    both must keep the same answer.
+    """
+    with flux_corpus(tmp_path) as corpus:
+        chunk = corpus.all_chunks()[0]
+        payloads = [
+            cite(chunk.chunk_id, "Flux never threads anything."),
+            cite(chunk.chunk_id, "Magnetic flux threads the ring."),
+        ]
+        (section_a, ledger_a), (section_b, ledger_b) = both_supervisors(
+            corpus, payloads, "how does flux behave?", ("hybrid", "titles")
+        )
+
+    assert ledger_a.outcome == ledger_b.outcome == "accepted"
+    assert [a.strategy for a in ledger_a.attempts] == ["hybrid", "titles"]
+    assert [a.strategy for a in ledger_b.attempts] == ["hybrid", "titles"]
+    assert [a.verdict for a in ledger_a.attempts] == [RETRY, ACCEPTED]
+    assert [a.verdict for a in ledger_b.attempts] == [RETRY, ACCEPTED]
+    assert section_a.answer.text == section_b.answer.text
+    assert [c.chunk_id for c in section_a.answer.citations] == \
+           [c.chunk_id for c in section_b.answer.citations]
+    assert ledger_a.shape == ledger_b.shape
+
+
+def test_both_supervisors_declare_the_same_gap(tmp_path: Path) -> None:
+    """Agreement has to hold when nothing works, not only when something does."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk = corpus.all_chunks()[0]
+        payloads = [cite(chunk.chunk_id, "Flux never threads anything.")] * 2
+        (_a, ledger_a), (_b, ledger_b) = both_supervisors(
+            corpus, payloads, "how does flux behave?", ("hybrid", "titles")
+        )
+
+    assert ledger_a.outcome == ledger_b.outcome
+    assert "gap" in ledger_a.outcome
+    assert len(ledger_a.attempts) == len(ledger_b.attempts) == 2
+
+
+def test_the_graph_stops_at_the_first_accepted_rung(tmp_path: Path) -> None:
+    """The conditional edge is the `break`, and must not climb past success."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk = corpus.all_chunks()[0]
+        _section, ledger = work_section_with_graph(
+            corpus, StubEmbedder(),
+            QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")]),
+            "how does flux behave?", ladder=("hybrid", "titles", "agent"),
+            per_section=4,
+        )
+
+    assert len(ledger.attempts) == 1
+    assert ledger.attempts[0].verdict == ACCEPTED
+
+
+def test_a_rung_that_raises_is_contained_in_the_graph_too(tmp_path: Path) -> None:
+    """A dead model must escalate, not abort the graph."""
+    class Dies:
+        def complete(self, system, user, schema):
+            raise RuntimeError("model went away")
+
+        def judge(self, system, user):
+            return "flux and charge"
+
+    with flux_corpus(tmp_path) as corpus:
+        _section, ledger = work_section_with_graph(
+            corpus, StubEmbedder(), Dies(), "how does flux behave?",
+            ladder=("hybrid", "titles"), per_section=4,
+        )
+
+    assert len(ledger.attempts) == 2
+    assert all(a.error for a in ledger.attempts)
+    assert "failed" in ledger.outcome
+
+
+def test_the_reported_nodes_are_the_roles(tmp_path: Path) -> None:
+    """The graph's shape is the argument for it, so it is asserted.
+
+    Retriever, writer and verifier are separate nodes rather than one step,
+    because they are separate Protocols. If they were fused the graph would
+    say nothing the `for` loop does not.
+    """
+    from verbatim.graph_supervisor import build_graph
+
+    with flux_corpus(tmp_path) as corpus:
+        compiled = build_graph(corpus, StubEmbedder(), QueueCompletion([]))
+
+    nodes = set(compiled.get_graph().nodes)
+    assert {"route", "retrieve", "write", "verify", "escalate"} <= nodes
+
+
+def test_a_missing_extra_says_how_to_install_it(monkeypatch, tmp_path: Path) -> None:
+    """An opaque ImportError is a worse answer than an instruction."""
+    import builtins
+
+    from verbatim.graph_supervisor import build_graph
+
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name.startswith("langgraph"):
+            raise ImportError("no langgraph here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+    with pytest.raises(RuntimeError) as raised:
+        build_graph(None, None, None)  # type: ignore[arg-type]
+
+    assert "uv sync --extra langgraph" in str(raised.value)
+    assert MISSING in str(raised.value)

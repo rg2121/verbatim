@@ -374,6 +374,21 @@ def work_section(
         ))
         if accepted:
             break
+    return choose_best(candidates, heading, shape)
+
+
+def choose_best(
+    candidates: list[tuple[Attempt, ReportSection]], heading: str, shape: str
+) -> tuple[ReportSection, SectionLedger]:
+    """Pick the attempt to keep, and say what the ladder came to.
+
+    The best attempt, not the last: an escalation can retrieve worse than what
+    it replaced, and the reader should get the strongest section found.
+
+    Shared by both supervisors rather than written twice. They are meant to
+    differ in control flow and in nothing else, so any selection rule living
+    in one of them would make a comparison between them meaningless.
+    """
     best_attempt, best_section = max(
         candidates,
         key=lambda pair: (
@@ -427,6 +442,27 @@ class _Serialized:
             return self._embedder.embed_passages(texts)
 
 
+SUPERVISORS = ("builtin", "langgraph")
+
+
+def _supervisor(name: str) -> Callable[..., tuple[ReportSection, SectionLedger]]:
+    """The function that climbs one section's ladder.
+
+    Imported lazily, because the LangGraph one needs an optional dependency
+    and a default install does not have it - naming a supervisor nobody
+    installed should say so, not fail at import time for everybody else.
+    """
+    if name == "builtin":
+        return work_section
+    if name == "langgraph":
+        from verbatim.graph_supervisor import work_section_with_graph
+
+        return work_section_with_graph
+    raise ValueError(
+        f"unknown supervisor {name!r}; known: {', '.join(SUPERVISORS)}"
+    )
+
+
 def orchestrate(
     corpus: CorpusStore,
     embedder: Embedder,
@@ -446,6 +482,7 @@ def orchestrate(
     critic: bool = False,
     on_section: Callable[[str, int, int], None] | None = None,
     on_section_done: Callable[[ReportSection, SectionLedger], None] | None = None,
+    supervisor: str = "builtin",
 ) -> tuple[Report, Ledger]:
     """Plan a review, then work its sections - in parallel when asked.
 
@@ -456,9 +493,16 @@ def orchestrate(
 
     `on_section_done` receives each finished section and its ledger entry as
     it lands, which is what lets a review be streamed rather than waited for.
+
+    `supervisor` chooses which implementation climbs the ladder: the built-in
+    loop, or the same ladder as a LangGraph state machine. They share every
+    role and the selection rule and are meant to differ only in control flow;
+    the point of keeping both is that two implementations behind one set of
+    contracts is what shows the contracts are a boundary.
     """
     if workers < 1:
         raise ValueError("workers must be at least 1")
+    climb = _supervisor(supervisor)
     headings = plan_sections(complete_text, topic, max_sections=max_sections)
     shared = _Serialized(embedder) if workers > 1 else embedder
     guard = (
@@ -475,10 +519,10 @@ def orchestrate(
             guard=guard, complete_text=complete_text, critic=critic,
         )
         if workers == 1:
-            worked = work_section(corpus, shared, completion, heading, **options)
+            worked = climb(corpus, shared, completion, heading, **options)
         else:
             with CorpusStore(corpus.path) as own:
-                worked = work_section(own, shared, completion, heading, **options)
+                worked = climb(own, shared, completion, heading, **options)
         if on_section_done is not None:
             # Fired as each section lands, so a caller streaming a review has
             # something to show before the whole thing is finished. With
