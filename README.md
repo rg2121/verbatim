@@ -438,6 +438,48 @@ the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.
 
+## Two supervisors behind one set of contracts
+
+The orchestrator's roles are Protocols — planner, retriever, writer, verifier,
+critic. For as long as one implementation consumed them, that was a claim about
+the design rather than a property of it. There are two now:
+
+```bash
+uv run verbatim report "sparse attention" --agents                        # built-in loop
+uv sync --extra langgraph
+uv run verbatim report "sparse attention" --agents --supervisor langgraph  # LangGraph
+```
+
+The second is the same ladder as a `StateGraph`: the roles are nodes, and the
+escalation the built-in supervisor writes as a `for` loop is a conditional edge
+back to the retriever. Both call the same retrieval, the same verified-answer
+path, the same deterministic verdict and the same selection rule. They differ
+in control flow and nothing else.
+
+Offline, with the model scripted so nothing is left to chance, both are
+asserted to reach the same section by the same route — for an escalation that
+succeeds and one that ends in a gap.
+
+On the real corpus over 60 held-out questions:
+
+| out of 60 | built-in | LangGraph |
+|---|---|---|
+| answered with a verified citation | 55 | **55** |
+| cited the expected paper | 51 | **51** |
+| model calls, total | 138 | 140 |
+| identical route | **57 of 60** | |
+
+Three routed differently — which on its own means nothing, because generation
+is not deterministic. **So the control is the same supervisor run twice: it
+agrees with itself on 55 of 60.** The built-in supervisor disagrees with
+*itself* more often than it disagrees with LangGraph. The divergence between
+the two implementations is below the model's own run-to-run variation.
+
+That is what makes the contracts a boundary rather than a diagram. LangGraph
+stays an **optional extra**: a default install has seven direct dependencies
+and none of it, because a local-first project should not oblige anyone to pull
+a framework tree to answer a question.
+
 ## Escalating a single question
 
 `ask` answers once and stops. When that answer has no verified citation, or

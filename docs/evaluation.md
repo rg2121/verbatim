@@ -232,6 +232,60 @@ rather than lenient. The hard control is a pessimistic adversary and the true
 separation is somewhere between 26 and 89 points. Narrowing that needs
 hand-labelled pairs, which is the honest next step and is not yet done.
 
+## Two supervisors, and a control that says what agreement is worth
+
+`contracts.py` defines the roles as Protocols — planner, retriever, writer,
+verifier, critic — and for as long as one implementation consumed them, that
+was a claim about the design rather than a property of it. `graph_supervisor.py`
+is a second: the same ladder as a LangGraph state machine, where the roles are
+nodes and the escalation the built-in supervisor writes as a `for` loop is a
+conditional edge back to the retriever. Both call the same retrieval, the same
+verified-answer path, the same deterministic verdict, and the same
+`choose_best`; they differ in control flow and nothing else.
+
+Offline, with the model scripted so nothing is left to chance, the two are
+asserted to reach the same section by the same route — for an escalation that
+succeeds and for one that ends in a gap.
+
+On the real corpus, over 60 held-out questions drawn evenly from all three
+authoring batches:
+
+| out of 60 | built-in | LangGraph |
+|---|---|---|
+| answered with a verified citation | 55 | **55** |
+| cited the expected paper | 51 | **51** |
+| accepted on the first rung | 51 | 50 |
+| climbed every rung | 7 | 8 |
+| model calls, total | 138 | 140 |
+| **identical route** | **57 of 60** | |
+
+Three questions routed differently. On its own that number means nothing,
+because generation is not deterministic: a first answer whose citations or
+subject score differ changes what the verifier sees, and the ladder then
+climbs or stops for reasons that have nothing to do with who is driving it.
+
+So the control is the same supervisor run twice:
+
+| out of 60 | built-in #1 | built-in #2 |
+|---|---|---|
+| answered with a verified citation | 55 | 54 |
+| cited the expected paper | 50 | 51 |
+| accepted on the first rung | 50 | 48 |
+| model calls, total | 140 | 144 |
+| **identical route** | **55 of 60** | |
+
+**The built-in supervisor disagrees with itself more often than it disagrees
+with LangGraph** — five questions against three. The divergence between the two
+implementations is not merely within the noise floor; it is below it.
+
+That is the result worth having, and it is the reason for keeping both rather
+than replacing one. Two implementations agreeing to within less than the
+model's own run-to-run variation is what makes the role contracts a boundary
+rather than a diagram. LangGraph is an optional extra (`uv sync --extra
+langgraph`); a default install carries seven direct dependencies and none of
+this, because a local-first project should not oblige anyone to pull a
+framework tree to answer a question.
+
 ## Is the workflow worth its cost? And the critic?
 
 The orchestrator had been justified by argument and by one report on one

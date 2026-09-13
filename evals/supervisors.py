@@ -36,7 +36,17 @@ def main() -> int:
     parser.add_argument("--sample", type=int, default=60)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--llm")
+    parser.add_argument(
+        "--arms", default="builtin,langgraph",
+        help="Two supervisors to compare. Pass 'builtin,builtin' for the "
+             "control: the same implementation twice, which measures how much "
+             "of any disagreement is generation non-determinism rather than "
+             "the supervisor. Without it, a route that differs proves nothing",
+    )
     args = parser.parse_args()
+    arms = [a.strip() for a in args.arms.split(",")]
+    if len(arms) != 2:
+        parser.error("--arms takes exactly two, comma-separated")
 
     cases = [c for c in load_key([p for p in KEYS if p.exists()]) if not c.expect_none]
     cases = stratified_sample(cases, size=args.sample, seed=args.seed)
@@ -47,8 +57,9 @@ def main() -> int:
     rows: list[dict] = []
     done = 0
     with CorpusStore(config.STATE_PATH) as corpus, OUT.open("w") as sink:
-        for name in ("builtin", "langgraph"):
+        for position, name in enumerate(arms):
             climb = _supervisor(name)
+            label = f"{name}#{position + 1}"
             for case in cases:
                 before = completion.usage.snapshot()
                 try:
@@ -62,7 +73,7 @@ def main() -> int:
                     break
                 spent = completion.usage.since(before)
                 row = {
-                    "supervisor": name,
+                    "supervisor": label,
                     "question": case.question,
                     "outcome": ledger.outcome,
                     "shape": ledger.shape,
@@ -82,11 +93,11 @@ def main() -> int:
                 print(f"  {done}/{len(cases) * 2}", end="\r", flush=True)
 
     print(f"\n\n{len(cases)} held-out questions through each supervisor\n")
-    print(f"  {'':<22}{'builtin':>12}{'langgraph':>12}")
+    labels = [f"{n}#{i + 1}" for i, n in enumerate(arms)]
+    print(f"  {'':<22}" + "".join(f"{l:>12}" for l in labels))
     def column(fn):
         return [
-            fn([r for r in rows if r["supervisor"] == name])
-            for name in ("builtin", "langgraph")
+            fn([r for r in rows if r["supervisor"] == label]) for label in labels
         ]
     measures = [
         ("answered with a citation", lambda rs: sum(1 for r in rs if r["verified"])),
@@ -105,13 +116,13 @@ def main() -> int:
     for row in rows:
         by_question[row["question"]][row["supervisor"]] = row["route"]
     both = [q for q, v in by_question.items() if len(v) == 2]
-    same = [q for q in both if by_question[q]["builtin"] == by_question[q]["langgraph"]]
+    same = [q for q in both if by_question[q][labels[0]] == by_question[q][labels[1]]]
     print(f"\n  identical route on {len(same)} of {len(both)} question(s)")
     for q in both:
         if q not in same:
             print(f"    differs: {q[:60]}")
-            print(f"      builtin   {by_question[q]['builtin']}")
-            print(f"      langgraph {by_question[q]['langgraph']}")
+            print(f"      {labels[0]:<12}{by_question[q][labels[0]]}")
+            print(f"      {labels[1]:<12}{by_question[q][labels[1]]}")
     return 0
 
 
