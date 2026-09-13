@@ -232,6 +232,59 @@ rather than lenient. The hard control is a pessimistic adversary and the true
 separation is somewhere between 26 and 89 points. Narrowing that needs
 hand-labelled pairs, which is the honest next step and is not yet done.
 
+## Can the system say what the corpus does *not* contain?
+
+Seven detectors have been measured on that question and all seven scored zero.
+The eighth attempt is not a detector. `gaps` is two agents with opposing goals:
+a **Prospector** that reads a topic and asserts an absence, and a **Falsifier**
+given only that claim, its own retrieval budget and its own queries, rewarded
+for destroying it. A claim that survives a genuine attempt to refute it is
+evidence in a way that "I looked and did not find it" is not.
+
+Two things are arithmetic rather than judgement. A refutation must be a quote
+that passes the same character-level check as every citation here. And a
+*failure* to refute only counts once the Falsifier has demonstrably tried —
+distinct queries and distinct papers over a floor — because a Falsifier that
+runs one lazy query would confirm every gap handed to it.
+
+### Planting gaps whose answer is known
+
+A standing gap means nothing unless the Falsifier would have found the paper
+had it been there. So: take a real paper, write a claim *that paper refutes*,
+and run the Falsifier twice — once with the paper reachable, once with it
+hidden by a filter rather than deleted.
+
+**The first run of this measured 100% and the number was wrong.** The claims
+are written from each paper's own abstract, and 16 of 25 shared a
+five-or-more-word run with it, so the Falsifier was being handed the wording of
+the paper it had to find. The same threshold the held-out eval key uses rejects
+those — and on the real run it rejected **52 of 77 candidate claims, 67%**.
+
+Filtered, over 25 planted gaps:
+
+| with the paper reachable | |
+|---|---|
+| refuted the claim | **23/25 (92%)** |
+| citing the planted paper itself | 22/25 |
+| citing a different paper that also fits | 1 |
+| **missed evidence that was there** | **2** |
+
+**Falsifier recall is 92%, 95% Wilson interval [75%, 98%].** That is the number
+that licenses reading a standing gap as absence, and it is the number to quote.
+
+The two misses are the dangerous kind and are worth naming rather than
+averaging away. Both came back `stands` rather than `unproven` — the Falsifier
+reached 13 and 10 papers against a floor of 8, so it tried hard enough for its
+failure to count, and was wrong anyway. **Roughly one standing gap in twelve is
+false.** The referee catches thin searches; it cannot catch a thorough search
+that looked in the wrong place.
+
+With the planted paper hidden, 4 of 25 claims were still refuted — by a
+neighbouring paper covering the same ground. That is the system being right,
+not wrong, and it is a useful number on its own: **about one "gap" in six was
+never a gap**, because hiding one paper does not create absence in a corpus of
+7,921.
+
 ## Two supervisors, and a control that says what agreement is worth
 
 `contracts.py` defines the roles as Protocols — planner, retriever, writer,

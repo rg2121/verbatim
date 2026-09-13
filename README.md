@@ -438,6 +438,68 @@ the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.
 
+## Saying what the corpus does not contain
+
+The founding flaw of this project is that it answers questions nothing in the
+corpus can answer. Seven detectors have been measured on that and all seven
+scored zero, always for the same reason: absence is not a property of any
+passage, so looking at passages cannot reveal it.
+
+`gaps` is not an eighth detector. It is two agents with opposing goals.
+
+```bash
+uv run verbatim gaps "sparse attention for long context"
+```
+
+```
+  3 gap(s) proposed, 1 refuted, 1 stood, 1 unproven
+
+  [STANDS]   no paper evaluates sparse attention on multilingual retrieval
+             the falsifier tried 4 queries, 18 papers, 23 passages
+
+  [REFUTED]  no paper evaluates the effect of sparse attention on the accuracy
+             of autonomous agentic systems
+             refuted by 2601.07978v4: "CASK reduces inference-time memory in
+             MAS through a dynamic sparse attention module..."
+
+  [unproven] no paper compares pi-Attention against Compressed Sparse Attention
+             the falsifier reached 7 papers against a floor of 8
+```
+
+A **Prospector** asserts the absence; a **Falsifier**, given only the claim and
+its own retrieval budget, is rewarded for destroying it. One paper is enough.
+A claim that survives a genuine attempt to refute it is evidence in a way that
+"I looked and did not find it" never is — and that asymmetry is why this needs
+two agents rather than a better detector.
+
+Two things keep it honest and both are arithmetic. **A refutation must be a
+verified quote**, through the same check as every citation here. And **the
+referee counts effort**: the third verdict above is the design defending itself
+on its first real run, refusing to confirm a gap from a search that reached
+seven papers.
+
+**Measured by planting gaps whose answer is known** — write a claim a real
+paper refutes, then run the Falsifier with that paper reachable and with it
+hidden:
+
+| out of 25 planted gaps | |
+|---|---|
+| refuted when the paper was reachable | **23 (92%)** |
+| missed evidence that was there | 2 |
+| still refuted with the paper hidden, by a neighbour | 4 |
+
+**Falsifier recall 92%, 95% interval [75%, 98%]** — which is what licenses
+reading a standing gap as absence rather than as a failed search. Both misses
+cleared the effort floor and were wrong anyway, so **about one standing gap in
+twelve is false**; the referee catches a thin search, not a thorough one that
+looked in the wrong place.
+
+The first version of this measured 100%, and that was an artifact: the claims
+were written from each paper's abstract and two-thirds borrowed its phrasing,
+handing the Falsifier the words it needed. The filter that caught it is the one
+already used on the held-out eval key. See
+[docs/evaluation.md](docs/evaluation.md).
+
 ## Two supervisors behind one set of contracts
 
 The orchestrator's roles are Protocols — planner, retriever, writer, verifier,
