@@ -34,7 +34,7 @@ from verbatim import config
 from verbatim.answers import Answer, Completion, answer_from_matches
 from verbatim.board import (
     ABANDONED,
-    COUNTER,
+    ADVERSARIAL,
     DIRECT,
     SATISFIED,
     Missing,
@@ -46,11 +46,11 @@ from verbatim.embedding import Embedder
 from verbatim.retrieval import hybrid_search
 
 RETRIEVAL = "retrieval"
-COUNTER_EVIDENCE = "counter-evidence"
+ADVERSARIAL_SEARCH = "adversarial-search"
 
 NO_EVIDENCE = "no evidence"
 THIN = "thinner than asked"
-NO_COUNTER = "no counter-evidence sought"
+NO_ADVERSARIAL = "no adversarial search run"
 
 PLANNER_SYSTEM = """You are given a research question. Break it into the things that must be established before it can be answered.
 
@@ -68,7 +68,7 @@ TASK: <objective>"""
 
 TASK_LINE = re.compile(r"^\s*TASK:\s*(.+?)\s*$", re.MULTILINE)
 
-COUNTER_SYSTEM = """You are given a research claim that other people are trying to support.
+ADVERSARIAL_SYSTEM = """You are given a research claim that other people are trying to support.
 
 Write search queries that would surface its limitations: failure cases, negative results, criticism, papers reporting it does not work, or conditions under which it breaks.
 
@@ -90,6 +90,7 @@ class TeamReport:
 
     state: ResearchState
     answers: dict[str, Answer]
+    final: Answer | None = None
 
     @property
     def redirections(self) -> int:
@@ -109,16 +110,16 @@ class TeamReport:
         return extra if first_pass else 0
 
     @property
-    def citations_from_counter(self) -> tuple[int, int]:
+    def citations_from_adversarial(self) -> tuple[int, int]:
         """Citations resting on a passage an adversarial search found, of the total.
 
-        The number that says whether the counter-evidence worker earns its
+        The number that says whether the adversarial worker earns its
         cost. It can file as many rows as it likes; what matters is whether
         the written answer rests on any of them. Zero means the board paid for
         a search whose results nothing used.
         """
         counter = {
-            e.chunk_id for e in self.state.evidence if e.stance == COUNTER
+            e.chunk_id for e in self.state.evidence if e.stance == ADVERSARIAL
         }
         cited = [
             c.chunk_id for answer in self.answers.values() for c in answer.citations
@@ -130,11 +131,15 @@ class TeamReport:
         lines.append(
             f"  the board redirected work {self.redirections} time(s)"
         )
-        from_counter, total = self.citations_from_counter
+        from_counter, total = self.citations_from_adversarial
         lines.append(
-            f"  {from_counter} of {total} citation(s) rest on a passage the "
-            "adversarial search found"
+            f"  {from_counter} of {total} citation(s) rest on a passage only "
+            "the adversarial search found"
         )
+        if self.final is not None:
+            lines.append("")
+            lines.append(f"  {self.state.question}")
+            lines.append(f"    {self.final.text}")
         for task in self.state.tasks:
             answer = self.answers.get(task.task_id)
             if answer is None:
@@ -167,7 +172,7 @@ def inspect(state: ResearchState) -> list[Missing]:
                 task.task_id, THIN, f"{len(direct)} of {task.needs} asked for"
             ))
             continue
-        if not state.attempted(task.task_id, COUNTER_EVIDENCE):
+        if not state.attempted(task.task_id, ADVERSARIAL_SEARCH):
             # Sought, not found. An adversarial search that turns up only the
             # passages the supporting search already filed has done its job and
             # come back empty, and the board dedupes by passage - so asking
@@ -175,14 +180,14 @@ def inspect(state: ResearchState) -> list[Missing]:
             # a task where there is genuinely nothing against. The gap is
             # closed by the attempt, which is what its name says.
             missing.append(Missing(
-                task.task_id, NO_COUNTER, "an adversarial search has not run"
+                task.task_id, NO_ADVERSARIAL, "an adversarial search has not run"
             ))
     return missing
 
 
 def worker_for(kind: str) -> str:
     """Which worker a structural gap implies. A rule, not a judgement."""
-    return COUNTER_EVIDENCE if kind == NO_COUNTER else RETRIEVAL
+    return ADVERSARIAL_SEARCH if kind == NO_ADVERSARIAL else RETRIEVAL
 
 
 def retrieval_worker(
@@ -208,7 +213,7 @@ def retrieval_worker(
     return filed
 
 
-def counter_worker(
+def adversarial_worker(
     corpus: CorpusStore,
     embedder: Embedder,
     complete: Callable[[str, str], str],
@@ -225,7 +230,7 @@ def counter_worker(
     judgement this project has measured failing, so the model's job here ends
     at writing adversarial queries - which is retrieval, and it is good at it.
     """
-    reply = complete(COUNTER_SYSTEM, f"CLAIM: {task.objective}")
+    reply = complete(ADVERSARIAL_SYSTEM, f"CLAIM: {task.objective}")
     searches = list(dict.fromkeys(
         m.group(1) for m in QUERY_LINE.finditer(reply or "")
     ))[:queries] or [f"limitations of {task.objective}"]
@@ -237,7 +242,7 @@ def counter_worker(
             if state.add_evidence(
                 task.task_id, chunk_id=match.chunk.chunk_id,
                 arxiv_id=match.chunk.arxiv_id, quote=match.chunk.text[:400],
-                found_by=COUNTER_EVIDENCE, stance=COUNTER,
+                found_by=ADVERSARIAL_SEARCH, stance=ADVERSARIAL,
             ):
                 filed += 1
     return filed
@@ -277,12 +282,51 @@ def run_team(
         if worker == RETRIEVAL:
             retrieval_worker(corpus, embedder, state, task, limit=passages)
         else:
-            counter_worker(corpus, embedder, complete, state, task)
+            adversarial_worker(corpus, embedder, complete, state, task)
         if not inspect_task(state, task):
             state.close(gap.task_id, SATISFIED)
 
     answers = write_answers(corpus, completion, state)
-    return TeamReport(state=state, answers=answers)
+    final = write_final(corpus, completion, state, answers)
+    return TeamReport(state=state, answers=answers, final=final)
+
+
+def write_final(
+    corpus: CorpusStore,
+    completion: Completion,
+    state: ResearchState,
+    answers: dict[str, Answer],
+    *,
+    limit: int = 12,
+) -> Answer | None:
+    """One answer to the question that was asked, from approved evidence only.
+
+    The per-task answers are working notes: they answer what the coordinator
+    decided to establish, not what the reader asked. This writes the answer to
+    the original question.
+
+    "Approved" is doing real work in that sentence. The passages offered here
+    are only those a per-task answer *cited* - which means each one already
+    carried a quote through verification. Evidence a worker filed and no task
+    answer used is left out, so a passage that survived retrieval but nothing
+    else cannot reach the final text.
+    """
+    approved = {
+        citation.chunk_id for answer in answers.values() for citation in answer.citations
+    }
+    on_board = [e for e in state.evidence if e.chunk_id in approved]
+    if not on_board:
+        return None
+    chunks = corpus.chunks_by_id(
+        list(dict.fromkeys(e.chunk_id for e in on_board))[:limit]
+    )
+    if not chunks:
+        return None
+    matches = [
+        ChunkMatch(chunk=chunk, score=1.0, snippet=chunk.text[:160])
+        for chunk in chunks
+    ]
+    return answer_from_matches(corpus, completion, state.question, matches)
 
 
 def inspect_task(state: ResearchState, task: Task) -> list[Missing]:

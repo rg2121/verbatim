@@ -492,6 +492,18 @@ A worker is never sent twice at the same task — blind retry reproduces the
 fault that caused the first failure — and a task whose workers are exhausted is
 abandoned rather than reattempted.
 
+The per-task answers are working notes; a **final synthesis** answers the
+question that was actually asked, and may use only evidence a task answer
+*cited* — so a passage that survived retrieval and nothing else cannot reach
+the final text.
+
+Two limits stated rather than implied. `adversarial` is a **retrieval stance,
+not a proven contradiction**: it means an adversarial query returned this
+passage, and whether it undermines anything is a judgement the board refuses to
+make. And the board **lives for one run** — see
+[decision 13](docs/decisions/0013-the-board-lives-for-one-run.md) for the
+tables that would persist it and the three triggers for building them.
+
 ## Saying what the corpus does not contain
 
 The founding flaw of this project is that it answers questions nothing in the

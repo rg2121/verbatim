@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from verbatim.board import COUNTER, DIRECT, ResearchState
+from verbatim.board import ADVERSARIAL, DIRECT, ResearchState
 from verbatim.team import (
-    COUNTER_EVIDENCE,
-    NO_COUNTER,
+    ADVERSARIAL_SEARCH,
+    NO_ADVERSARIAL,
     NO_EVIDENCE,
     RETRIEVAL,
     THIN,
@@ -56,8 +56,8 @@ def test_two_workers_finding_the_same_passage_file_it_once() -> None:
         task, chunk_id="a", arxiv_id="p1", quote="q", found_by=RETRIEVAL
     )
     again = state.add_evidence(
-        task, chunk_id="a", arxiv_id="p1", quote="q", found_by=COUNTER_EVIDENCE,
-        stance=COUNTER,
+        task, chunk_id="a", arxiv_id="p1", quote="q", found_by=ADVERSARIAL_SEARCH,
+        stance=ADVERSARIAL,
     )
 
     assert first is not None and again is None
@@ -72,11 +72,11 @@ def test_the_critic_reports_absence_in_a_fixed_order() -> None:
     state.add_evidence(task, chunk_id="a", arxiv_id="p1", quote="q", found_by=RETRIEVAL)
     assert inspect(state)[0].kind == THIN
     state.add_evidence(task, chunk_id="b", arxiv_id="p2", quote="q", found_by=RETRIEVAL)
-    assert inspect(state)[0].kind == NO_COUNTER
+    assert inspect(state)[0].kind == NO_ADVERSARIAL
     # Closed by the attempt, not by what it found: an adversarial search that
     # turns up only passages already filed has done its job and come back
     # empty, and the board dedupes by passage.
-    state.record(COUNTER_EVIDENCE, task, "sought")
+    state.record(ADVERSARIAL_SEARCH, task, "sought")
     assert inspect(state) == []
 
 
@@ -92,7 +92,7 @@ def test_a_single_paper_is_not_reported_as_a_gap() -> None:
         state.add_evidence(
             task, chunk_id=chunk, arxiv_id="p1", quote="q", found_by=RETRIEVAL
         )
-    state.record(COUNTER_EVIDENCE, task, "sought")
+    state.record(ADVERSARIAL_SEARCH, task, "sought")
 
     assert state.papers_for(task) == {"p1"}   # everything from one paper
     assert inspect(state) == []               # and the board says nothing
@@ -101,7 +101,7 @@ def test_a_single_paper_is_not_reported_as_a_gap() -> None:
 def test_a_gap_chooses_its_worker_by_rule() -> None:
     assert worker_for(NO_EVIDENCE) == RETRIEVAL
     assert worker_for(THIN) == RETRIEVAL
-    assert worker_for(NO_COUNTER) == COUNTER_EVIDENCE
+    assert worker_for(NO_ADVERSARIAL) == ADVERSARIAL_SEARCH
 
 
 def test_a_worker_is_never_sent_twice_at_the_same_task(tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ def test_the_board_redirects_work_and_says_how_often(tmp_path: Path) -> None:
     assert RETRIEVAL in actions
     # Retrieval satisfied the evidence count, and the board then sent a
     # different worker for what was still missing - that is the redirection.
-    assert COUNTER_EVIDENCE in actions
+    assert ADVERSARIAL_SEARCH in actions
     assert report.redirections >= 1
     # The task closed because the adversarial search ran, not because it
     # happened to find something the supporting search had missed.
@@ -207,7 +207,7 @@ def test_the_writer_may_use_only_what_is_on_the_board(tmp_path: Path) -> None:
     assert state.claims and state.claims[0].evidence_ids
 
 
-def test_the_report_says_whether_counter_evidence_was_actually_used(
+def test_the_report_says_whether_the_adversarial_search_was_used(
     tmp_path: Path,
 ) -> None:
     """A worker that files rows nothing cites has not earned its cost.
@@ -233,12 +233,78 @@ def test_the_report_says_whether_counter_evidence_was_actually_used(
         # Filed by the adversarial search, not the supporting one.
         state.add_evidence(
             task.task_id, chunk_id=chunk.chunk_id, arxiv_id=chunk.arxiv_id,
-            quote=chunk.text, found_by=COUNTER_EVIDENCE, stance=COUNTER,
+            quote=chunk.text, found_by=ADVERSARIAL_SEARCH, stance=ADVERSARIAL,
         )
         answers = write_answers(corpus, CitesTheCounterRow(), state)
         report = TeamReport(state=state, answers=answers)
 
-    used, total = report.citations_from_counter
+    used, total = report.citations_from_adversarial
     assert total == 1 and used == 1
-    assert "1 of 1 citation(s) rest on a passage the adversarial search found" \
+    assert "1 of 1 citation(s) rest on a passage only the adversarial search found" \
         in report.render()
+
+
+def test_the_final_answer_uses_only_evidence_a_task_answer_cited(
+    tmp_path: Path,
+) -> None:
+    """"Approved" means it already carried a quote through verification.
+
+    A passage a worker filed and no task answer ever cited survived retrieval
+    and nothing else. It must not reach the final text, or the board's
+    provenance stops meaning anything at the last step.
+    """
+    from verbatim.team import write_final
+
+    with flux_corpus(tmp_path) as corpus:
+        cited = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        filed_only = next(c for c in corpus.all_chunks() if c.chunk_id != cited.chunk_id)
+
+        seen: dict[str, str] = {}
+
+        class Writes:
+            def complete(self, system, user, schema):
+                seen["prompt"] = user
+                return cite(cited.chunk_id, "Magnetic flux threads the ring.")
+
+            def judge(self, system, user):
+                return "flux"
+
+        state = ResearchState(question="how does flux thread a ring?")
+        task = state.add_task("how flux threads a ring")
+        for chunk in (cited, filed_only):
+            state.add_evidence(
+                task.task_id, chunk_id=chunk.chunk_id, arxiv_id=chunk.arxiv_id,
+                quote=chunk.text, found_by=RETRIEVAL,
+            )
+        answers = write_answers(corpus, Writes(), state)
+        final = write_final(corpus, Writes(), state, answers)
+
+    assert final is not None
+    # The task answer cited one chunk; only that one reached the final prompt.
+    assert cited.chunk_id in seen["prompt"]
+    assert filed_only.chunk_id not in seen["prompt"]
+    assert final.question == "how does flux thread a ring?"
+
+
+def test_no_final_answer_when_nothing_was_approved(tmp_path: Path) -> None:
+    """A board whose task answers cited nothing has nothing to synthesise."""
+    from verbatim.team import write_final
+
+    class CitesNothing:
+        def complete(self, system, user, schema):
+            return {"answer": "The passages do not say.", "citations": []}
+
+        def judge(self, system, user):
+            return "flux"
+
+    with flux_corpus(tmp_path) as corpus:
+        chunk = corpus.all_chunks()[0]
+        state = ResearchState(question="q")
+        task = state.add_task("something")
+        state.add_evidence(
+            task.task_id, chunk_id=chunk.chunk_id, arxiv_id=chunk.arxiv_id,
+            quote=chunk.text, found_by=RETRIEVAL,
+        )
+        answers = write_answers(corpus, CitesNothing(), state)
+
+        assert write_final(corpus, CitesNothing(), state, answers) is None

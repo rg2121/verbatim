@@ -32,7 +32,7 @@ SATISFIED = "satisfied"
 ABANDONED = "abandoned"
 
 DIRECT = "direct"
-COUNTER = "counter"
+ADVERSARIAL = "adversarial"
 
 
 @dataclass(frozen=True)
@@ -50,9 +50,10 @@ class Evidence:
     """A passage a worker put forward, and what it was looking for.
 
     `stance` records what the worker was *seeking*, not what the passage
-    proves. A counter-evidence worker searching for limitations files what it
-    finds as `counter`; whether the passage actually contradicts anything is
-    not a judgement this board will make.
+    proves. A worker searching for limitations files what it finds as
+    `adversarial`, which means "an adversarial query returned this" and
+    nothing more. Whether the passage contradicts anything is a judgement this
+    board will not make, and the label deliberately does not imply it.
     """
 
     evidence_id: str
@@ -203,13 +204,13 @@ class ResearchState:
         lines = [f"  question: {self.question}", ""]
         for task in self.tasks:
             direct = len(self.evidence_for(task.task_id, stance=DIRECT))
-            counter = len(self.evidence_for(task.task_id, stance=COUNTER))
+            counter = len(self.evidence_for(task.task_id, stance=ADVERSARIAL))
             papers = len(self.papers_for(task.task_id))
             lines.append(
                 f"  [{task.status}] {task.task_id} {task.objective}"
             )
             lines.append(
-                f"      {direct} direct, {counter} counter, {papers} paper(s),"
+                f"      {direct} direct, {counter} adversarial, {papers} paper(s),"
                 f" {len([c for c in self.claims if c.task_id == task.task_id])} claim(s)"
             )
         if self.decisions:
