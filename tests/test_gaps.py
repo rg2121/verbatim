@@ -193,3 +193,32 @@ def test_the_prospector_reports_what_it_rejected(tmp_path: Path) -> None:
         "no paper measures flux in superconducting rings below one kelvin"
     ]
     assert len(rejected) == 2
+
+
+def test_a_verdict_does_not_claim_more_than_it_established(tmp_path: Path) -> None:
+    """The quote check proves the words are there, not that they answer.
+
+    Whether a cited passage is responsive to the gap claim is the model's
+    judgement, and this project has measured seven times that models judge
+    relevance badly. A refutation that said "a paper in the corpus does this"
+    asserted the part that was never verified, so the wording is pinned here:
+    a standing gap must never be described as absence.
+    """
+    from verbatim.gaps import REFUTED, STANDS, Effort, Finding, render
+
+    stands = Finding(
+        gap=Gap(topic="t", claim="no paper measures flux in cold rings"),
+        verdict=STANDS,
+        effort=Effort(queries=tuple("abcd"), papers=tuple(f"p{n}" for n in range(9)),
+                      passages=20),
+        reason="survived a bounded adversarial search - which is not the same as "
+               "proof of absence",
+    )
+
+    text = render([stands], rejected=[])
+
+    assert "adversarial search" in text
+    assert "not" in text and "proof" in text
+    # The claim the verification cannot support must not appear anywhere.
+    assert "does not exist" not in text
+    assert "proof the literature lacks it" in text

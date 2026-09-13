@@ -270,7 +270,9 @@ Filtered, over 25 planted gaps:
 | **missed evidence that was there** | **2** |
 
 **Falsifier recall is 92%, 95% Wilson interval [75%, 98%].** That is the number
-that licenses reading a standing gap as absence, and it is the number to quote.
+that licenses reading a standing gap as *nothing found by an opponent who
+tried*, and it is the number to quote. It does not license reading it as
+absence - see below.
 
 The two misses are the dangerous kind and are worth naming rather than
 averaging away. Both came back `stands` rather than `unproven` — the Falsifier
@@ -284,6 +286,25 @@ neighbouring paper covering the same ground. That is the system being right,
 not wrong, and it is a useful number on its own: **about one "gap" in six was
 never a gap**, because hiding one paper does not create absence in a corpus of
 7,921.
+
+### What a verdict establishes, and what it does not
+
+The quote check proves the quoted words are in the passage named. It does not
+prove the passage is *responsive* to the claim — that judgement belongs to the
+model, and this project has measured seven times that models judge relevance
+badly. The chain is therefore only as strong as its weakest link, and the weak
+link is named rather than hidden:
+
+| verdict | what it establishes |
+|---|---|
+| `REFUTED` | a passage was cited as filling the gap, and the quote is real. Whether it *is* responsive is the model's judgement — which the planted-gap experiment tests, and where 22 of 25 refutations cited the very paper the claim was built from |
+| `STANDS` | the claim survived a bounded adversarial search of **this corpus**. Roughly one in twelve is false |
+| `UNPROVEN` | the search was too thin for its failure to mean anything |
+
+So `STANDS` should be read as *"nothing found, by an opponent who tried"* and
+never as *"this does not exist"*. The strongest honest phrasing is that a gap
+claim survived a bounded adversarial evidence search — which is a real result,
+and a weaker one than absence.
 
 ## Two supervisors, and a control that says what agreement is worth
 

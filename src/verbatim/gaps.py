@@ -32,6 +32,22 @@ reported as unproven. No model decides whether the attempt was serious.
 it found something; it has to quote a passage, and the quote goes through the
 same mechanical check every citation in this project goes through. A
 refutation is a citation or it is nothing.
+
+**What a verdict does and does not establish.** The quote check proves the
+quoted words are in the passage named. It does not prove the passage is
+*responsive* to the claim - that judgement is the model's, and this project
+has measured seven times that models judge relevance badly. So:
+
+- `REFUTED` means a passage was cited as filling the gap and the quote is real.
+  The planted-gap experiment is what tests the judgement behind it, and there
+  22 of 25 refutations cited the very paper the claim had been built from.
+- `STANDS` means the claim survived a bounded adversarial search. It is **not**
+  proof that the literature lacks the thing. It is the strongest statement
+  available about absence, and it is weaker than absence.
+- `UNPROVEN` means the search was too thin for its failure to mean anything.
+
+Read `STANDS` as "nothing found, by an opponent who tried" - never as "this
+does not exist".
 """
 
 from __future__ import annotations
@@ -283,7 +299,10 @@ def falsify(
         # is not a refutation.
         return Finding(
             gap=gap, verdict=REFUTED, effort=effort, citation=answer.citations[0],
-            reason="a paper in the corpus does this",
+            reason=(
+                "the falsifier cited this passage as filling the gap; the "
+                "quote is verified, its relevance is the model's judgement"
+            ),
         )
     if not effort.genuine:
         return Finding(
@@ -295,7 +314,10 @@ def falsify(
         )
     return Finding(
         gap=gap, verdict=STANDS, effort=effort,
-        reason="a genuine search found nothing that fills it",
+        reason=(
+            "survived a bounded adversarial search - which is not the same as "
+            "proof of absence"
+        ),
     )
 
 
@@ -330,6 +352,10 @@ def render(findings: Sequence[Finding], rejected: Sequence[str]) -> str:
     lines = [
         f"  {len(findings)} gap(s) proposed, "
         f"{len(refuted)} refuted, {len(stood)} stood, {len(unproven)} unproven",
+        "",
+        "  A gap that STANDS survived a bounded adversarial search. That is not",
+        "  proof the literature lacks it: the falsifier searches this corpus,",
+        "  and about one standing gap in twelve was measured false.",
         "",
     ]
     for finding in [*stood, *refuted, *unproven]:

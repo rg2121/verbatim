@@ -489,7 +489,8 @@ hidden:
 | still refuted with the paper hidden, by a neighbour | 4 |
 
 **Falsifier recall 92%, 95% interval [75%, 98%]** — which is what licenses
-reading a standing gap as absence rather than as a failed search. Both misses
+reading a standing gap as **nothing found by an opponent who tried**, rather
+than as a failed search. It is not proof of absence. Both misses
 cleared the effort floor and were wrong anyway, so **about one standing gap in
 twelve is false**; the referee catches a thin search, not a thorough one that
 looked in the wrong place.
