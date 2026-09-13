@@ -267,6 +267,24 @@ def run() -> None:
         help="Existing keys whose papers must not be reused",
     )
 
+    gaps_parser = subparsers.add_parser(
+        "gaps",
+        help="Propose what a topic's literature is missing, then try to disprove it",
+    )
+    gaps_parser.add_argument("topic", help="The area to look for gaps in")
+    gaps_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    gaps_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    gaps_parser.add_argument("--llm", help="Generation model")
+    gaps_parser.add_argument("--limit", type=int, default=4,
+                             help="Gaps to propose; each costs a falsification")
+    gaps_parser.add_argument("--queries", type=int, default=4,
+                             help="Searches the falsifier may run per gap")
+    gaps_parser.add_argument(
+        "--hide", nargs="*", default=[], metavar="ARXIV_ID",
+        help="Hide these papers from the falsifier, to plant a gap whose "
+             "answer is known. Nothing is deleted",
+    )
+
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     index_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
@@ -799,6 +817,34 @@ def run() -> None:
         if stopped is not None:
             print(f"\n  STOPPED: {stopped}\n  Re-run to resume.")
             raise SystemExit(1)
+        return
+
+    if args.command == "gaps":
+        from verbatim.gaps import REFUTED, STANDS, find_gaps, render
+
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "gaps", topic=args.topic, limit=args.limit, llm=args.llm
+        ) as run:
+            findings, rejected = find_gaps(
+                corpus, embedder, completion,
+                lambda system, user: completion.complete_text(system, user),
+                args.topic, limit=args.limit, hidden=args.hide,
+                queries=args.queries,
+            )
+            run.record(
+                proposed=len(findings),
+                refuted=sum(1 for f in findings if f.verdict == REFUTED),
+                stood=sum(1 for f in findings if f.verdict == STANDS),
+                unfalsifiable=len(rejected),
+            )
+        print(f"{args.topic}\n")
+        print(render(findings, rejected))
+        if args.hide:
+            print(f"\n  {len(args.hide)} paper(s) were hidden from the falsifier."
+                  "\n  A gap that stands here is only absent from what it could reach.")
+        print(f"\n  {_usage_footer(completion)}")
         return
 
     if args.command == "distill":
