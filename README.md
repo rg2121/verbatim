@@ -497,6 +497,40 @@ question that was actually asked, and may use only evidence a task answer
 *cited* — so a passage that survived retrieval and nothing else cannot reach
 the final text.
 
+### Measured against the simpler things, and it does not pay
+
+Three arms over 30 held-out questions, scored on the answer a reader gets:
+
+| out of 30 | baseline | ladder | **team** |
+|---|---|---|---|
+| answers with a verified citation | 26 | **28** | 26 |
+| every claim carries a marker | 24 | 24 | **25** |
+| cited the expected paper | 24 | **25** | 23 |
+| citations rejected | 2 | 2 | **1** |
+| **model calls per question** | **1.0** | 2.3 | **5.8** |
+| produced an answer at all | 30 | 30 | **29** |
+
+**The team costs 5.8× the baseline and buys nothing measurable here.** Paired
+per question it is better on 2 and worse on 2 for verified citations, and
+better on 2 and worse on 3 for finding the expected paper. It also failed to
+produce a final answer once, where both simpler arms always produced one.
+
+So `team` is a command you reach for, not a default — the same verdict the
+critic got, on the same grounds.
+
+**But the metric cannot see what the team is for, and that is worth stating
+precisely.** Every held-out question was authored from *one* paper's abstract,
+so "cited the expected paper" asks whether one specific paper was found. A team
+that gathers limitations from thirteen papers earns nothing for it. 63 of its
+144 citations rested on passages *only* the adversarial search found — the
+answers genuinely rest on different, broader evidence, and this key has no
+column for that.
+
+That is an explanation, not a defence. An unmeasured benefit is not a benefit,
+and until there is a question set where breadth and counter-evidence are what
+correctness means, the honest statement is that the team costs six times more
+for no measured gain.
+
 Two limits stated rather than implied. `adversarial` is a **retrieval stance,
 not a proven contradiction**: it means an adversarial query returned this
 passage, and whether it undermines anything is a judgement the board refuses to
