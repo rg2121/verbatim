@@ -285,6 +285,20 @@ def run() -> None:
              "answer is known. Nothing is deleted",
     )
 
+    team_parser = subparsers.add_parser(
+        "team",
+        help="Answer through a shared evidence board that decides what runs next",
+    )
+    team_parser.add_argument("question")
+    team_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    team_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
+    team_parser.add_argument("--llm", help="Generation model")
+    team_parser.add_argument("--tasks", type=int, default=3,
+                             help="Most tasks the coordinator may create")
+    team_parser.add_argument("--needs", type=int, default=2,
+                             help="Passages a task wants before it is satisfied")
+    team_parser.add_argument("--max-steps", type=int, default=12)
+
     index_parser = subparsers.add_parser("index", help="Reconcile the vector index")
     index_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     index_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
@@ -817,6 +831,30 @@ def run() -> None:
         if stopped is not None:
             print(f"\n  STOPPED: {stopped}\n  Re-run to resume.")
             raise SystemExit(1)
+        return
+
+    if args.command == "team":
+        from verbatim.team import run_team
+
+        embedder = FastEmbedEmbedder(model_name=args.model)
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "team", question=args.question, tasks=args.tasks, llm=args.llm
+        ) as run:
+            report = run_team(
+                corpus, embedder, completion,
+                lambda system, user: completion.complete_text(system, user),
+                args.question, max_tasks=args.tasks, needs=args.needs,
+                max_steps=args.max_steps,
+            )
+            run.record(
+                tasks=len(report.state.tasks),
+                evidence=len(report.state.evidence),
+                decisions=len(report.state.decisions),
+                redirections=report.redirections,
+            )
+        print(report.render())
+        print(f"\n  {_usage_footer(completion)}")
         return
 
     if args.command == "gaps":

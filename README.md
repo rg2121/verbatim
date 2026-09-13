@@ -438,6 +438,60 @@ the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.
 
+## A team around a shared evidence board
+
+The ladder is a workflow: roles run in a fixed order and nothing one discovers
+changes what another does next. `team` is the other thing — workers append to a
+shared board, and **what runs next is read off the board**.
+
+```bash
+uv run verbatim team "how do sparse attention methods trade accuracy for memory?"
+```
+
+```
+  [satisfied] t1 Compare the memory usage of sparse attention versus dense attention
+      6 direct, 11 counter, 13 paper(s), 6 claim(s)
+
+  what the board made the coordinator do:
+    1. retrieval on t1 - no evidence: nothing filed yet
+    2. counter-evidence on t1 - no counter-evidence sought: an adversarial
+       search has not run
+
+  the board redirected work 3 time(s)
+  10 of 17 citation(s) rest on a passage the adversarial search found
+```
+
+Four roles. A **coordinator** turns the question into tasks; a **retrieval
+worker** files supporting passages; a **counter-evidence worker** searches for
+limitations, failure cases and criticism; a **critic** reports what the board
+shows is missing. The writer may cite only what is on the board.
+
+**That last number is the point.** The board dedupes by passage and retrieval
+runs first, so a `counter` row is by definition a passage the supporting search
+never found. Ten of seventeen cited passages came only from the adversarial
+worker — including the limitation that *"sparse attention typically still
+requires maintaining a large KV cache"*, which a supporting-only search does
+not surface. One worker's findings changed what another could write, which is
+the line between a team and a pipeline.
+
+Three things keep it from becoming a place to hide judgements:
+
+- **The coordinator plans with a model and delegates without one.** Writing
+  tasks is writing; choosing what runs next is routing, and routing by model
+  was measured here losing to routing by rule. The same board always produces
+  the same next action.
+- **The critic is arithmetic** — tasks with no evidence, tasks thinner than
+  they asked for, tasks where no adversarial search has run. It does *not*
+  report that a claim rests on a single paper: that check was measured firing
+  on 5 of 14 good answers while catching 2 of 6 bad ones, so it is not raised.
+- **The counter worker retrieves; it never judges.** It writes adversarial
+  queries and files what they return. Asking a model whether a passage
+  undermines a claim is the judgement this project has measured failing.
+
+A worker is never sent twice at the same task — blind retry reproduces the
+fault that caused the first failure — and a task whose workers are exhausted is
+abandoned rather than reattempted.
+
 ## Saying what the corpus does not contain
 
 The founding flaw of this project is that it answers questions nothing in the
