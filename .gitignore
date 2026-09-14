@@ -18,3 +18,8 @@ overnight.log
 # sample/corpus.db is committed: it is what makes a clone usable.
 *.log
 evals/results/
+
+# SQLite's write-ahead files. Opening a WAL-mode database - even read-only,
+# even the committed sample - creates these beside it.
+*.db-shm
+*.db-wal

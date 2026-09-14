@@ -7,11 +7,8 @@ import time
 from collections.abc import Sequence
 from typing import Callable
 from urllib.parse import urlencode, urlparse, urlunparse
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
-from verbatim import config
 from verbatim.fetching import fetch
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"

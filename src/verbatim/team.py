@@ -26,7 +26,7 @@ abandoned rather than reattempted.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 import re
 
@@ -324,13 +324,13 @@ def write_final(
     on_board = [e for e in state.evidence if e.chunk_id in approved]
     chunks = corpus.chunks_by_id(
         list(dict.fromkeys(e.chunk_id for e in on_board))[:limit]
-    ) if on_board else []
+    )
     if not chunks:
         return Answer(
             question=state.question,
             text=(
                 "The team found no passage it could cite for this question. "
-                "Every task it set came back without a verified citation."
+                + why_nothing_was_cited(state)
             ),
             citations=[], rejected=[], declined=True,
         )
@@ -339,6 +339,29 @@ def write_final(
         for chunk in chunks
     ]
     return answer_from_matches(corpus, completion, state.question, matches)
+
+
+def why_nothing_was_cited(state: ResearchState) -> str:
+    """Say what actually happened, not what usually happens.
+
+    "Every task came back without a verified citation" is only true when every
+    task was worked. A run that hit its step limit first has tasks no worker
+    was ever sent to, and saying they came back empty describes work that
+    never happened - which an audit caught with `--max-steps 0`.
+    """
+    unfinished = state.open_tasks()
+    finished = len(state.tasks) - len(unfinished)
+    if not state.decisions:
+        return "No task was worked before the team stopped."
+    if unfinished and not finished:
+        return f"It stopped before finishing any of its {len(state.tasks)} task(s)."
+    if unfinished:
+        return (
+            f"{len(unfinished)} of {len(state.tasks)} task(s) were not finished "
+            "before the team stopped, and the finished ones produced no verified "
+            "citation."
+        )
+    return "Every task it set came back without a verified citation."
 
 
 def inspect_task(state: ResearchState, task: Task) -> list[Missing]:

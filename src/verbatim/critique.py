@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 
-from verbatim.answers import Answer, Completion
+from verbatim.answers import Answer
 from verbatim.contracts import Critique, Gathered
 
 # A sentence ends at punctuation followed by a space and a capital, which is

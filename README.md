@@ -1752,6 +1752,13 @@ reason the CLI's `serve` is. The image is a reproducible environment for the
 tool, not a production deployment: this is a local-first assistant whose corpus
 lives on one machine.
 
+**Not yet verified: this image has never been built.** Docker was not installed
+on the machine this was developed on. The files are written to work, and a
+pre-publish audit fixed two things a first build would have hit - the
+container installing dev dependencies on its first command, and a build
+context that would have sent the entire corpus to the daemon - but treat the
+container path as untested until `docker compose build` has run somewhere.
+
 ## Configuration
 
 All tunables live in `.env`; copy the template and edit:

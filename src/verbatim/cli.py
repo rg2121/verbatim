@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import argparse
 import sqlite3
 from pathlib import Path
@@ -52,7 +54,6 @@ from verbatim.evaluation import (
     describe_case_mix,
     evaluate,
     evaluate_compound,
-    load_cases,
     render_compound_report,
     render_report,
 )
@@ -1083,7 +1084,9 @@ def run() -> None:
                 change = index.sync(model.model_id, generation)
                 paper_change = papers.sync(model.model_id, generation)
                 run.record(added=change.added, removed=change.removed,
-                           vectors=index.count(), model=model.model_id)
+                           vectors=index.count(), model=model.model_id,
+                           paper_vectors_added=paper_change.added,
+                           paper_vectors_removed=paper_change.removed)
                 print(f"Index synced: {change.added} added, {change.removed} removed; "
                       f"{index.count()} passage vectors, {papers.count()} paper vectors.")
 
@@ -1733,7 +1736,7 @@ def _usage_footer(*clients: object) -> str:
     )
 
 
-def _line_completion(model: str | None) -> "Callable[[str, str], str]":
+def _line_completion(model: str | None) -> Callable[[str, str], str]:
     """A plain text completion, for the query rewriting that expansion needs.
 
     Answering uses a line protocol with a schema; rewriting wants prose back,

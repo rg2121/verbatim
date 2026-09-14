@@ -4,13 +4,12 @@
 # corpus without installing Python, uv, or ONNX runtime first.
 FROM python:3.12-slim
 
-# PyMuPDF and ONNX runtime both want a C toolchain absent from -slim, and
-# curl fetches uv. Removed again in the same layer so they are not shipped.
+# curl fetches uv. No compiler: every dependency - PyMuPDF, ONNX runtime,
+# sqlite-vec - ships a manylinux wheel. (An earlier version installed a
+# toolchain and purged it before `uv sync` ever ran, so it was never usable.)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential curl \
+ && apt-get install -y --no-install-recommends curl \
  && curl -LsSf https://astral.sh/uv/install.sh | sh \
- && apt-get purge -y build-essential \
- && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 ENV PATH="/root/.local/bin:${PATH}"
 
@@ -31,5 +30,8 @@ ENV VERBATIM_STATE_PATH=/data/corpus.db \
     OLLAMA_HOST=http://ollama:11434
 VOLUME ["/data"]
 
-ENTRYPOINT ["uv", "run", "--frozen", "verbatim"]
+# --no-dev matches the sync above. Without it `uv run` treats the dev group
+# as missing and installs pytest on the container's first command, which
+# needs a network the container may not have.
+ENTRYPOINT ["uv", "run", "--frozen", "--no-dev", "verbatim"]
 CMD ["stats"]

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 import re
 from typing import Any
 
@@ -28,13 +27,11 @@ from verbatim import config
 from verbatim.answers import (
     Answer,
     Completion,
-    answer_from_matches,
 )
 from verbatim.citations import render_bibliography
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import Embedder
 from verbatim.research import parse_plan_lines
-from verbatim.retrieval import hybrid_search
 
 MAX_SECTIONS = 6
 MARKER = re.compile(r"\[(\d+)\]")

@@ -24,7 +24,7 @@ set no leakier than the hand-authored one, and slightly stricter.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 import json
 import re

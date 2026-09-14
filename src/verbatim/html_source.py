@@ -30,7 +30,6 @@ from hashlib import sha256
 from pathlib import Path
 
 from verbatim.chunking import (
-    BODY,
     TABLE,
     Chunk,
     Section,

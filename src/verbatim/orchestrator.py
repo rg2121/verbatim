@@ -58,7 +58,7 @@ from verbatim.answers import (
     subject_check,
 )
 from verbatim.contracts import Budget, BudgetGuard, Cost, Critique, Gathered, Verdict
-from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.corpus import CorpusStore
 from verbatim.critique import critique as run_critique
 from verbatim.embedding import Embedder
 from verbatim.evidence import describe_evidence

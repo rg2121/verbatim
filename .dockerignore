@@ -1,0 +1,13 @@
+# The build copies only what the Dockerfile names, but the whole context is
+# sent to the daemon first. Without this, a working checkout sends data/ (the
+# full corpus, tens of gigabytes), the virtualenv and the git history.
+.git
+.venv
+data
+evals/results
+.env
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.db-shm
+*.db-wal

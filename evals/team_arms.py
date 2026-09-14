@@ -97,6 +97,7 @@ def main() -> int:
                 ))
                 sink.write(json.dumps({
                     "arm": arm, "question": case.question,
+                    "declined": answer.declined,
                     "verified": len(answer.citations),
                     "rejected": len(answer.rejected),
                     "cited_expected": bool(

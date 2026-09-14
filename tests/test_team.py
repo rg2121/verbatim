@@ -316,3 +316,37 @@ def test_nothing_approved_declines_in_words_rather_than_returning_nothing(tmp_pa
     assert final.declined is True
     assert final.citations == []
     assert "no passage it could cite" in final.text
+
+
+def test_a_decline_does_not_claim_work_the_step_limit_prevented(
+    tmp_path: Path,
+) -> None:
+    """Found in audit: the decline described work that never happened.
+
+    With the step limit at zero no worker is ever dispatched, yet the answer
+    said every task came back without a verified citation. It must say what
+    actually happened.
+    """
+    class Silent:
+        def complete(self, system, user, schema):
+            return {"answer": "The passages do not say.", "citations": []}
+
+        def judge(self, system, user):
+            return "flux"
+
+    def plans(system, user):
+        return (
+            "TASK: establish how magnetic flux threads a ring\n"
+            "TASK: establish how charge moves along a wire\n"
+        )
+
+    with flux_corpus(tmp_path) as corpus:
+        report = run_team(
+            corpus, StubEmbedder(), Silent(), plans,
+            "how does flux thread a ring?", max_steps=0,
+        )
+
+    assert report.final is not None and report.final.declined
+    assert "Every task it set came back" not in report.final.text
+    assert "No task was worked before the team stopped." in report.final.text
+    assert all(t.status == "open" for t in report.state.tasks)
