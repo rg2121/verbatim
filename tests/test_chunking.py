@@ -3,7 +3,7 @@ from hashlib import sha256
 
 import pytest
 
-from verbatim.chunking import chunk_page, chunk_text, extract_pdf_chunks
+from verbatim.chunking import chunk_text, extract_pdf_chunks
 from verbatim.downloads import DownloadedPaper
 from verbatim.storage import save_chunks
 

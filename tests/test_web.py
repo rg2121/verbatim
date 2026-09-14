@@ -15,7 +15,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from helpers import chunked_corpus
-from verbatim.web import PAGE, create_app, match_to_dict
+from verbatim.web import PAGE, create_app
 
 
 class StreamingScript:

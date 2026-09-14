@@ -5,7 +5,6 @@ conversation reaches retrieval and never reaches the answering model, because
 text from an earlier turn cannot be verified against any paper.
 """
 
-import pytest
 
 from verbatim.conversation import MAX_TURNS, Turn, standalone_question
 

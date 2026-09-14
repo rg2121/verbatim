@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 
 from verbatim.answers import Answer
 from verbatim.citations import Citation

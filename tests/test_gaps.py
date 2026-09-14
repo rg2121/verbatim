@@ -204,7 +204,7 @@ def test_a_verdict_does_not_claim_more_than_it_established(tmp_path: Path) -> No
     asserted the part that was never verified, so the wording is pinned here:
     a standing gap must never be described as absence.
     """
-    from verbatim.gaps import REFUTED, STANDS, Effort, Finding, render
+    from verbatim.gaps import Effort, Finding, render
 
     stands = Finding(
         gap=Gap(topic="t", claim="no paper measures flux in cold rings"),

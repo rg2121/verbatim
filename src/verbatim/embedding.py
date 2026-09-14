@@ -143,7 +143,7 @@ def embed_pending(
                 f"Embedder returned {len(vectors)} vectors for {len(batch)} chunks"
             )
         corpus.record_embeddings(
-            model.model_id, [(chunk.chunk_id, vector) for chunk, vector in zip(batch, vectors)]
+            model.model_id, [(chunk.chunk_id, vector) for chunk, vector in zip(batch, vectors, strict=True)]
         )
         if on_progress is not None:
             on_progress(start + len(batch), len(pending))
@@ -206,7 +206,7 @@ def embed_pending_papers(
             )
         corpus.record_paper_embeddings(
             model.model_id,
-            [(paper.arxiv_id, vector) for paper, vector in zip(batch, vectors)],
+            [(paper.arxiv_id, vector) for paper, vector in zip(batch, vectors, strict=True)],
         )
         if on_progress is not None:
             on_progress(start + len(batch), len(pending))

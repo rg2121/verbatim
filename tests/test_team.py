@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
-from verbatim.board import ADVERSARIAL, DIRECT, ResearchState
+from verbatim.board import ADVERSARIAL, ResearchState
 from verbatim.team import (
     ADVERSARIAL_SEARCH,
     NO_ADVERSARIAL,

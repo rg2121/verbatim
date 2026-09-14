@@ -303,7 +303,6 @@ def test_a_paper_whose_html_is_unchecked_can_be_held_back_from_chunking(
     The rendering arrives minutes later, the paper is re-chunked from it, and
     every vector made from the PDF passages is thrown away with them.
     """
-    from verbatim.html_source import HtmlSource
 
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         downloaded(corpus, tmp_path, "2608.11111v1")  # never checked for HTML

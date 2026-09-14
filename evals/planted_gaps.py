@@ -87,7 +87,7 @@ def main() -> int:
 
         skipped = 0
         leaky = 0
-        for position, row in enumerate(picked, start=1):
+        for row in picked:
             reply = complete(CLAIM_SYSTEM, f"TITLE: {row['title']}\n\nABSTRACT: {row['summary']}")
             found = CLAIM_LINE.search(reply or "")
             if found is None or not checkable(found.group(1)):

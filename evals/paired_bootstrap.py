@@ -84,7 +84,7 @@ for mode in MODES:
 print("\npaired differences (positive = first mode better):")
 for a, b in [("hybrid+graph", "hybrid"), ("hybrid+graph", "hybrid+titles"),
              ("hybrid+graph", "hybrid+compare"), ("hybrid", "hybrid+titles")]:
-    diffs = [x - y for x, y in zip(rr[a], rr[b])]
+    diffs = [x - y for x, y in zip(rr[a], rr[b], strict=True)]
     mean = sum(diffs) / len(diffs)
     lo, hi, below = ci(diffs)
     wins, losses, p = sign_test(diffs)

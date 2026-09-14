@@ -209,7 +209,6 @@ def test_hybrid_cap_promotes_a_second_paper_into_the_results(tmp_path: Path) -> 
 def test_index_filters_by_kind_and_paper_without_passing_ids(tmp_path: Path) -> None:
     """Filtering happens inside the KNN query, so it survives a large corpus."""
     from verbatim.chunking import REFERENCES
-    from verbatim.corpus import CorpusStore
 
     with embedded_corpus(
         tmp_path,
@@ -297,7 +296,6 @@ def test_index_sync_drops_vectors_whose_chunks_are_gone(tmp_path: Path) -> None:
 def test_the_paper_index_finds_papers_by_subject(tmp_path: Path) -> None:
     """Nearest-neighbour over abstracts, keyed by paper rather than passage."""
     from helpers import paper
-    from verbatim.corpus import CorpusStore
     from verbatim.vectors import SqlitePaperIndex
 
     with CorpusStore(tmp_path / "corpus.db") as corpus:
@@ -319,7 +317,6 @@ def test_the_paper_index_finds_papers_by_subject(tmp_path: Path) -> None:
 
 def test_the_paper_index_drops_vectors_the_corpus_no_longer_has(tmp_path: Path) -> None:
     from helpers import paper
-    from verbatim.corpus import CorpusStore
     from verbatim.vectors import SqlitePaperIndex
 
     with CorpusStore(tmp_path / "corpus.db") as corpus:

@@ -83,7 +83,7 @@ def rerank(
     ordered = sorted(
         (
             ChunkMatch(chunk=m.chunk, score=score, snippet=m.snippet)
-            for m, score in zip(matches, scores)
+            for m, score in zip(matches, scores, strict=True)
         ),
         key=lambda m: -m.score,
     )

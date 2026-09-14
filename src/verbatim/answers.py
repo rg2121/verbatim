@@ -675,7 +675,7 @@ def describe_subject(
 def subject_similarity(embedder: Any, question: str, subject: str) -> float:
     """Compare question and subject arithmetically, so no model judges the match."""
     a, b = embedder.embed_query(question), embedder.embed_query(subject)
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def subject_check(

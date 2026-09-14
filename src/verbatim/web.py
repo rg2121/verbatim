@@ -111,7 +111,7 @@ def _cost_since(
     after = _usage_totals(*models)
     if before is None or after is None:
         return "cost not reported"
-    calls, prompt, output, seconds = (a - b for a, b in zip(after, before))
+    calls, prompt, output, seconds = (a - b for a, b in zip(after, before, strict=True))
     return (
         f"{calls} model call{'s' if calls != 1 else ''}, "
         f"{prompt:,} tokens in, {output:,} out, {seconds:.1f}s in the model"

@@ -67,7 +67,7 @@ def abstract_similarity(corpus: CorpusStore, model_id: str, one: str, two: str) 
     }
     if one not in rows or two not in rows:
         return None
-    return sum(a * b for a, b in zip(rows[one], rows[two]))
+    return sum(a * b for a, b in zip(rows[one], rows[two], strict=True))
 
 
 def classify(rank: int | None, covered: float, neighbour: float | None) -> str:

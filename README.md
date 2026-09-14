@@ -1763,6 +1763,61 @@ the compose file, and runs `--help`, `stats` and a real `search` against the
 sample inside the container on every push. Its first green run is what will
 retire this paragraph.
 
+## Every command
+
+Each takes `--help` for its full options: `uv run verbatim <command> --help`.
+
+**Build and inspect a corpus**
+
+| command | what it does |
+|---|---|
+| `sync` | Fetch metadata and upsert it into the cumulative corpus catalogue |
+| `fetch` | Fetch paper metadata from one arXiv category |
+| `licenses` | Look up licences via OAI-PMH, which the query API omits |
+| `download` | Download a bounded set of PDFs from a metadata snapshot |
+| `html` | Fetch arXiv HTML renderings, which keep maths as LaTeX |
+| `references` | Read bibliographies from HTML renderings and rank what the corpus lacks |
+| `chunk` | Extract page-aware text chunks from downloaded PDFs |
+| `embed` | Embed chunks that have no vector yet |
+| `index` | Reconcile the vector index |
+| `grow` | Add the papers this corpus cites most and does not hold |
+| `pipeline` | Run every ingest stage in rounds until nothing is pending |
+| `stats` | Show corpus size and work remaining |
+| `runs` | What each command did, and whether it finished |
+| `graph` | Walk the internal citation graph: what cites a paper, what it builds on |
+
+**Search and answer**
+
+| command | what it does |
+|---|---|
+| `search` | Keyword-search the chunked corpus |
+| `ask` | Answer a question from the corpus, with citations |
+| `report` | Write a sectioned literature review with verified citations |
+| `team` | Answer through a shared evidence board that decides what runs next |
+| `gaps` | Propose what a topic's literature is missing, then try to disprove it |
+
+**Evaluate**
+
+| command | what it does |
+|---|---|
+| `eval` | Score every retrieval mode on an answer key |
+| `eval-answers` | Score the answers themselves, not whether retrieval named the expected paper |
+| `author-cases` | Write held-out evaluation cases from titles and abstracts only |
+
+**Serve and share**
+
+| command | what it does |
+|---|---|
+| `serve` | Serve the corpus over HTTP, with a search page |
+| `mcp` | Serve the corpus over the Model Context Protocol, on stdio |
+| `sample` | Export a small self-contained corpus that works without an ingest |
+
+**Training data**
+
+| command | what it does |
+|---|---|
+| `distill` | Generate training examples from licence-eligible papers |
+
 ## Configuration
 
 All tunables live in `.env`; copy the template and edit:

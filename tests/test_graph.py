@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 
 from verbatim.corpus import CorpusStore, EmbeddingModel
 from verbatim.embedding import embed_pending

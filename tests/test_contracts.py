@@ -1,6 +1,6 @@
 """The roles, as contracts rather than as functions that happen to fit."""
 
-from verbatim.answers import Answer, Usage
+from verbatim.answers import Usage
 from verbatim.contracts import (
     Budget,
     BudgetGuard,

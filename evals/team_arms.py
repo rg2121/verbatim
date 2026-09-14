@@ -58,6 +58,7 @@ def main() -> int:
     costs: dict[str, list] = {a: [] for a in ARMS}
     adversarial_used: list[tuple[int, int]] = []
     done = 0
+    stopped: str | None = None
     with CorpusStore(config.STATE_PATH) as corpus, OUT.open("w") as sink:
         for arm in ARMS:
             for case in cases:
@@ -87,7 +88,10 @@ def main() -> int:
                         answer = report.final
                         adversarial_used.append(report.citations_from_adversarial)
                 except (RuntimeError, OSError) as error:
-                    print(f"\nSTOPPED in {arm}: {error}")
+                    # Stop the whole run, not just this arm. Carrying on would
+                    # score the remaining arms against a dead model server and
+                    # print them as though every arm had seen every question.
+                    stopped = f"{arm}: {error}"
                     break
                 spent = completion.usage.since(before)
                 costs[arm].append(spent)
@@ -109,14 +113,23 @@ def main() -> int:
                 sink.flush()
                 done += 1
                 print(f"  {done}/{len(cases) * len(ARMS)}", end="\r", flush=True)
+            if stopped is not None:
+                break
 
-    print(f"\n\n{len(cases)} held-out questions through each arm\n")
+    if stopped is not None:
+        print(f"\n\nSTOPPED in {stopped}")
+        print("  not every arm saw every question - read the answered row")
+    print(f"\n\n{len(cases)} held-out questions\n")
     print(f"  {'':<26}" + "".join(f"{a:>12}" for a in ARMS))
     rows = [
         ("verified citation", lambda s: s.with_verified_citation),
         ("every claim marked", lambda s: s.fully_cited),
         ("cited expected paper", lambda s: s.cited_expected_paper),
-        ("declined", lambda s: s.declined),
+        # Compared on "no verified citation", because arms say nothing in
+        # different ways: the team declines explicitly, while the baseline
+        # answers in prose that cites nothing and is not marked declined.
+        ("no verified citation", lambda s: s.cases - s.with_verified_citation),
+        ("  of which declined outright", lambda s: s.declined),
         ("citations rejected", lambda s: s.rejected_citations),
     ]
     for label, get in rows:
