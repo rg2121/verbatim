@@ -85,8 +85,6 @@ def main() -> int:
                             max_tasks=2, needs=2,
                         )
                         answer = report.final
-                        if answer is None:
-                            continue
                         adversarial_used.append(report.citations_from_adversarial)
                 except (RuntimeError, OSError) as error:
                     print(f"\nSTOPPED in {arm}: {error}")

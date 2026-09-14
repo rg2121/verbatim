@@ -508,12 +508,19 @@ Three arms over 30 held-out questions, scored on the answer a reader gets:
 | cited the expected paper | 24 | **25** | 23 |
 | citations rejected | 2 | 2 | **1** |
 | **model calls per question** | **1.0** | 2.3 | **5.8** |
-| produced an answer at all | 30 | 30 | **29** |
+| produced an answer at all | 30 | 30 | **29**\* |
 
 **The team costs 5.8× the baseline and buys nothing measurable here.** Paired
 per question it is better on 2 and worse on 2 for verified citations, and
 better on 2 and worse on 3 for finding the expected paper. It also failed to
 produce a final answer once, where both simpler arms always produced one.
+
+\* Fixed since: when no task answer cites anything, the team now declines in
+words instead of returning nothing, so that question gets an answer saying no
+passage could be cited. The table is the run as measured, before the fix. A
+declined answer carries no citations, so every other row would read the same;
+the cost row would move slightly, because that question's calls were not
+counted in the 5.8.
 
 So `team` is a command you reach for, not a default — the same verdict the
 critic got, on the same grounds.

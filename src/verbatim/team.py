@@ -298,7 +298,7 @@ def write_final(
     answers: dict[str, Answer],
     *,
     limit: int = 12,
-) -> Answer | None:
+) -> Answer:
     """One answer to the question that was asked, from approved evidence only.
 
     The per-task answers are working notes: they answer what the coordinator
@@ -310,18 +310,30 @@ def write_final(
     carried a quote through verification. Evidence a worker filed and no task
     answer used is left out, so a passage that survived retrieval but nothing
     else cannot reach the final text.
+
+    When nothing was approved, the answer is a declined one in words - never
+    nothing. The first version returned None there, and the three-arm run
+    caught it: on one question in thirty the team handed the reader working
+    notes and no answer, where both simpler arms always answered, even if only
+    to say nothing matched. Falling back to unapproved evidence would have
+    filled the gap by breaking the rule above, so the fix is to decline.
     """
     approved = {
         citation.chunk_id for answer in answers.values() for citation in answer.citations
     }
     on_board = [e for e in state.evidence if e.chunk_id in approved]
-    if not on_board:
-        return None
     chunks = corpus.chunks_by_id(
         list(dict.fromkeys(e.chunk_id for e in on_board))[:limit]
-    )
+    ) if on_board else []
     if not chunks:
-        return None
+        return Answer(
+            question=state.question,
+            text=(
+                "The team found no passage it could cite for this question. "
+                "Every task it set came back without a verified citation."
+            ),
+            citations=[], rejected=[], declined=True,
+        )
     matches = [
         ChunkMatch(chunk=chunk, score=1.0, snippet=chunk.text[:160])
         for chunk in chunks

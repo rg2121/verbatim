@@ -286,7 +286,7 @@ def test_the_final_answer_uses_only_evidence_a_task_answer_cited(
     assert final.question == "how does flux thread a ring?"
 
 
-def test_no_final_answer_when_nothing_was_approved(tmp_path: Path) -> None:
+def test_nothing_approved_declines_in_words_rather_than_returning_nothing(tmp_path: Path) -> None:
     """A board whose task answers cited nothing has nothing to synthesise."""
     from verbatim.team import write_final
 
@@ -307,4 +307,12 @@ def test_no_final_answer_when_nothing_was_approved(tmp_path: Path) -> None:
         )
         answers = write_answers(corpus, CitesNothing(), state)
 
-        assert write_final(corpus, CitesNothing(), state, answers) is None
+        final = write_final(corpus, CitesNothing(), state, answers)
+
+    # Declined in words, never nothing: the reader always gets an answer to the
+    # question they asked, and the approved-only rule still holds, because no
+    # passage reached it.
+    assert final is not None
+    assert final.declined is True
+    assert final.citations == []
+    assert "no passage it could cite" in final.text
