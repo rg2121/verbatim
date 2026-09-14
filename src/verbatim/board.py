@@ -204,13 +204,13 @@ class ResearchState:
         lines = [f"  question: {self.question}", ""]
         for task in self.tasks:
             direct = len(self.evidence_for(task.task_id, stance=DIRECT))
-            counter = len(self.evidence_for(task.task_id, stance=ADVERSARIAL))
+            adversarial = len(self.evidence_for(task.task_id, stance=ADVERSARIAL))
             papers = len(self.papers_for(task.task_id))
             lines.append(
                 f"  [{task.status}] {task.task_id} {task.objective}"
             )
             lines.append(
-                f"      {direct} direct, {counter} adversarial, {papers} paper(s),"
+                f"      {direct} direct, {adversarial} adversarial, {papers} paper(s),"
                 f" {len([c for c in self.claims if c.task_id == task.task_id])} claim(s)"
             )
         if self.decisions:

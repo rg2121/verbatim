@@ -212,7 +212,7 @@ def test_the_report_says_whether_the_adversarial_search_was_used(
 ) -> None:
     """A worker that files rows nothing cites has not earned its cost.
 
-    The counter-evidence worker can fill the board and change nothing. What
+    The adversarial worker can fill the board and change nothing. What
     matters is whether the written answer rests on any of what it found, so
     that is counted rather than assumed.
     """
@@ -221,7 +221,7 @@ def test_the_report_says_whether_the_adversarial_search_was_used(
     with flux_corpus(tmp_path) as corpus:
         chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
 
-        class CitesTheCounterRow:
+        class CitesTheAdversarialRow:
             def complete(self, system, user, schema):
                 return cite(chunk.chunk_id, "Magnetic flux threads the ring.")
 
@@ -235,7 +235,7 @@ def test_the_report_says_whether_the_adversarial_search_was_used(
             task.task_id, chunk_id=chunk.chunk_id, arxiv_id=chunk.arxiv_id,
             quote=chunk.text, found_by=ADVERSARIAL_SEARCH, stance=ADVERSARIAL,
         )
-        answers = write_answers(corpus, CitesTheCounterRow(), state)
+        answers = write_answers(corpus, CitesTheAdversarialRow(), state)
         report = TeamReport(state=state, answers=answers)
 
     used, total = report.citations_from_adversarial

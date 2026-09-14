@@ -450,24 +450,24 @@ uv run verbatim team "how do sparse attention methods trade accuracy for memory?
 
 ```
   [satisfied] t1 Compare the memory usage of sparse attention versus dense attention
-      6 direct, 11 counter, 13 paper(s), 6 claim(s)
+      6 direct, 11 adversarial, 13 paper(s), 6 claim(s)
 
   what the board made the coordinator do:
     1. retrieval on t1 - no evidence: nothing filed yet
-    2. counter-evidence on t1 - no counter-evidence sought: an adversarial
+    2. adversarial-search on t1 - no adversarial search run: an adversarial
        search has not run
 
   the board redirected work 3 time(s)
-  10 of 17 citation(s) rest on a passage the adversarial search found
+  10 of 17 citation(s) rest on a passage only the adversarial search found
 ```
 
 Four roles. A **coordinator** turns the question into tasks; a **retrieval
-worker** files supporting passages; a **counter-evidence worker** searches for
+worker** files supporting passages; an **adversarial worker** searches for
 limitations, failure cases and criticism; a **critic** reports what the board
 shows is missing. The writer may cite only what is on the board.
 
 **That last number is the point.** The board dedupes by passage and retrieval
-runs first, so a `counter` row is by definition a passage the supporting search
+runs first, so an `adversarial` row is by definition a passage the supporting search
 never found. Ten of seventeen cited passages came only from the adversarial
 worker — including the limitation that *"sparse attention typically still
 requires maintaining a large KV cache"*, which a supporting-only search does
@@ -484,7 +484,7 @@ Three things keep it from becoming a place to hide judgements:
   they asked for, tasks where no adversarial search has run. It does *not*
   report that a claim rests on a single paper: that check was measured firing
   on 5 of 14 good answers while catching 2 of 6 bad ones, so it is not raised.
-- **The counter worker retrieves; it never judges.** It writes adversarial
+- **The adversarial worker retrieves; it never judges.** It writes adversarial
   queries and files what they return. Asking a model whether a passage
   undermines a claim is the judgement this project has measured failing.
 
@@ -1758,6 +1758,10 @@ pre-publish audit fixed two things a first build would have hit - the
 container installing dev dependencies on its first command, and a build
 context that would have sent the entire corpus to the daemon - but treat the
 container path as untested until `docker compose build` has run somewhere.
+That somewhere is now CI: the `container` workflow builds the image, checks
+the compose file, and runs `--help`, `stats` and a real `search` against the
+sample inside the container on every push. Its first green run is what will
+retire this paragraph.
 
 ## Configuration
 

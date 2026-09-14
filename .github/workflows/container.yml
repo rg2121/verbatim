@@ -1,0 +1,38 @@
+name: container
+
+# The image was written on a machine with no Docker, so nothing had ever
+# built it. This is where it gets built: every push to main, every pull
+# request, and on demand. A Dockerfile nobody has run is a claim, and this
+# turns it into a check - the same reason the retrieval gate exists.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The compose file is valid
+        run: docker compose config --quiet
+
+      - name: Build the image
+        run: docker build --tag verbatim:ci .
+
+      - name: The entrypoint starts
+        run: docker run --rm verbatim:ci --help
+
+      - name: It reads the sample corpus
+        # Needs no model and no network beyond the build.
+        run: docker run --rm verbatim:ci stats --state sample/corpus.db
+
+      - name: It searches the sample corpus end to end
+        # Downloads the small embedding model inside the container, which is
+        # the real first-run experience for anyone using the image.
+        run: >
+          docker run --rm verbatim:ci
+          search "how do transformers handle long context"
+          --state sample/corpus.db

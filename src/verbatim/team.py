@@ -13,7 +13,7 @@ so the choice is made by reading the board. That also makes the loop
 reproducible: the same board always produces the same next action.
 
 **The critic is arithmetic.** It reports tasks with no evidence, tasks thinner
-than they asked to be, and tasks where counter-evidence was never sought. It
+than they asked to be, and tasks where no adversarial search has run. It
 does not report that evidence is weak, or that a claim rests on one paper -
 that second one was measured here firing on 5 of 14 good answers while catching
 2 of 6 bad ones, so it is not a gap worth acting on and is not raised.
@@ -118,22 +118,22 @@ class TeamReport:
         the written answer rests on any of them. Zero means the board paid for
         a search whose results nothing used.
         """
-        counter = {
+        adversarial_chunks = {
             e.chunk_id for e in self.state.evidence if e.stance == ADVERSARIAL
         }
         cited = [
             c.chunk_id for answer in self.answers.values() for c in answer.citations
         ]
-        return sum(1 for chunk_id in cited if chunk_id in counter), len(cited)
+        return sum(1 for chunk_id in cited if chunk_id in adversarial_chunks), len(cited)
 
     def render(self) -> str:
         lines = [self.state.render(), ""]
         lines.append(
             f"  the board redirected work {self.redirections} time(s)"
         )
-        from_counter, total = self.citations_from_adversarial
+        from_adversarial, total = self.citations_from_adversarial
         lines.append(
-            f"  {from_counter} of {total} citation(s) rest on a passage only "
+            f"  {from_adversarial} of {total} citation(s) rest on a passage only "
             "the adversarial search found"
         )
         if self.final is not None:
@@ -176,7 +176,7 @@ def inspect(state: ResearchState) -> list[Missing]:
             # Sought, not found. An adversarial search that turns up only the
             # passages the supporting search already filed has done its job and
             # come back empty, and the board dedupes by passage - so asking
-            # whether counter rows exist would send the worker out for ever on
+            # whether adversarial rows exist would send the worker out for ever on
             # a task where there is genuinely nothing against. The gap is
             # closed by the attempt, which is what its name says.
             missing.append(Missing(
@@ -223,7 +223,7 @@ def adversarial_worker(
     queries: int = 3,
     limit: int = 4,
 ) -> int:
-    """Search for what would undermine the task, and file it as counter.
+    """Search for what would undermine the task, and file it as adversarial.
 
     It files what it finds; it does not decide that a passage contradicts
     anything. Asking a model whether evidence undermines a claim is the
