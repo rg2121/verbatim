@@ -112,6 +112,24 @@ AUTHORED_HEADER = """\
 """
 
 
+BREADTH_HEADER = """\
+# Breadth evaluation questions, written under evals/breadth/PROTOCOL.md, which
+# was committed before this file existed and before any arm ran.
+#
+# Each question was written by a model from the titles and abstracts of TWO
+# papers joined by an in-corpus citation edge, and names both as
+# require_papers. No retrieval was run against any question before this file
+# was committed; the authoring module imports nothing that can search.
+#
+# Rejected before they were kept: questions sharing a run of five or more
+# words with either abstract, questions that do not name their subject, and
+# questions about authors or funding. Kinds - comparison, limitation,
+# synthesis - in equal numbers.
+#
+# NOT YET RUN. Commit this file before running any arm against it.
+"""
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(description="Ingest a small, traceable arXiv metadata snapshot.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -260,11 +278,20 @@ def run() -> None:
         "--out", type=Path, default=Path("evals/heldout-generated.jsonl")
     )
     author_parser.add_argument("--cases", type=int, default=100)
+    author_parser.add_argument(
+        "--breadth", action="store_true",
+        help="Write two-paper questions for the breadth evaluation, under "
+             "evals/breadth/PROTOCOL.md",
+    )
+    author_parser.add_argument(
+        "--per-kind", type=int, default=8,
+        help="With --breadth: questions of each kind (comparison, limitation, synthesis)",
+    )
     author_parser.add_argument("--llm", help="Generation model")
     author_parser.add_argument(
         "--exclude", type=Path, nargs="*",
         default=[Path("evals/retrieval.jsonl"), Path("evals/heldout.jsonl"),
-                 Path("evals/gate.jsonl")],
+                 Path("evals/heldout-generated.jsonl"), Path("evals/gate.jsonl")],
         help="Existing keys whose papers must not be reused",
     )
 
@@ -778,6 +805,66 @@ def run() -> None:
                     f"below the floor of {args.min_mrr:.3f}. Either a change made "
                     f"retrieval worse, or the floor needs re-measuring on purpose."
                 )
+
+    if args.command == "author-cases" and args.breadth:
+        from verbatim.authoring import (
+            PAIR_KINDS,
+            author_pairs,
+            excluded_papers,
+            render_rejections,
+        )
+
+        out = (
+            Path("evals/breadth/questions.jsonl")
+            if args.out == Path("evals/heldout-generated.jsonl") else args.out
+        )
+        if out.exists() and out.read_text(encoding="utf-8").strip():
+            # A frozen key is written once. Re-authoring after an arm has run
+            # against it is the move pre-registration exists to rule out, so it
+            # takes a deliberate deletion rather than a flag.
+            raise SystemExit(
+                f"error: {out} already exists. A frozen key is written once; "
+                "delete it deliberately if you mean to re-author it."
+            )
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        exclude = excluded_papers(str(path) for path in args.exclude)
+        rejected: dict[str, int] = {}
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "author-cases", breadth=True, per_kind=args.per_kind, llm=args.llm
+        ) as run:
+            try:
+                cases = list(author_pairs(
+                    corpus,
+                    lambda system, user: completion.complete_text(system, user),
+                    per_kind=args.per_kind, exclude=exclude, rejected=rejected,
+                ))
+            except (RuntimeError, OSError) as error:
+                raise SystemExit(
+                    f"error: authoring stopped ({error}). Nothing was written: a "
+                    "half-written key must never sit on disk looking frozen."
+                ) from error
+            run.record(written=len(cases), rejected=sum(rejected.values()))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Written only once every case exists, for the same reason.
+        out.write_text(
+            BREADTH_HEADER + "".join(case.to_row() + "\n" for case in cases),
+            encoding="utf-8",
+        )
+        print(f"{out}\n")
+        short = []
+        for kind in PAIR_KINDS:
+            got = sum(1 for case in cases if case.kind == kind)
+            print(f"  {kind:<11} {got}/{args.per_kind}")
+            if got < args.per_kind:
+                short.append(kind)
+        print(render_rejections(rejected))
+        if short:
+            print(f"\n  SHORT on {', '.join(short)}: the protocol asks for "
+                  f"{args.per_kind} of each, and candidate pairs ran out.")
+        print("\n  NOT YET RUN. Commit this file before running any arm against it.")
+        if short:
+            raise SystemExit(1)
+        return
 
     if args.command == "author-cases":
         from verbatim.authoring import author, excluded_papers, render_rejections

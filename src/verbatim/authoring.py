@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import json
 import re
 
-from verbatim.corpus import CorpusStore
+from verbatim.corpus import CorpusStore, split_arxiv_version
 from verbatim.distill import bibliographic, standalone
 
 # Set from the hand-authored key rather than chosen: see the module docstring.
@@ -258,3 +258,203 @@ def render_rejections(counts: dict[str, int]) -> str:
         f"    rejected, {reason:<28} {count}"
         for reason, count in sorted(counts.items(), key=lambda kv: -kv[1])
     )
+
+
+# --- two-paper questions, for the breadth evaluation ----------------------
+#
+# Held-out cases are written from one abstract, so they reward finding one
+# paper. The team exists for questions that need several, and the only honest
+# way to test it on those is to write them under the same blind rule: titles
+# and abstracts only, no retrieval, frozen before anything runs. See
+# evals/breadth/PROTOCOL.md, which fixed all of this before any question existed.
+
+PAIR_KINDS: tuple[str, ...] = ("comparison", "limitation", "synthesis")
+
+KIND_RULES = {
+    "comparison": (
+        "Ask how the two approaches differ, and on what: method, assumptions, "
+        "results or cost."
+    ),
+    "limitation": (
+        "Ask what limitation of one approach the other exposes or addresses, "
+        "and at what cost."
+    ),
+    "synthesis": (
+        "Ask what approaches exist to the problem the two share, in a way that "
+        "needs both to answer."
+    ),
+}
+
+PAIR_SYSTEM = """You are given the titles and abstracts of two related research papers.
+
+Write ONE question that can only be answered well by drawing on BOTH papers.
+
+{kind_rule}
+
+Rules:
+- Use your own words. Do not reuse phrases from either abstract.
+- Name the subjects concretely, so the question stands alone.
+- Do not mention the papers, the authors, the abstracts, or which paper said what.
+- Ask about the research, never about who wrote it, where they work or who
+  funded it.
+
+Reply with exactly one line, and nothing else:
+
+Q: <question>"""
+
+
+@dataclass(frozen=True)
+class PairCase:
+    """One breadth question, and the two papers it needs."""
+
+    question: str
+    kind: str
+    arxiv_ids: tuple[str, str]
+    shared_run: int
+
+    def to_row(self) -> str:
+        # require_papers alone: the key format reads it as "all of these", and
+        # refuses a case that also lists expect_papers ("any of these"), since
+        # the two contradict each other.
+        return json.dumps({
+            "question": self.question,
+            "require_papers": list(self.arxiv_ids),
+            "note": (
+                f"source=breadth; shape={self.kind}; "
+                f"shared_run={self.shared_run}"
+            ),
+        })
+
+
+def candidate_pairs(
+    corpus: CorpusStore,
+    *,
+    exclude: set[str],
+    limit: int,
+    min_passages: int = MIN_PASSAGES,
+    max_passages: int = MAX_PASSAGES,
+    stride: int = 3,
+) -> list[tuple[tuple[str, str, str], tuple[str, str, str]]]:
+    """Pairs of related papers, chosen before any question exists.
+
+    Related by the corpus's own record: one holds the other in its
+    bibliography. That keeps "these two bear on each other" out of anyone's
+    judgement, a model's included. Each pair is ((id, title, abstract) of the
+    cited paper, the same for the citing one), taken in a fixed order at a
+    fixed stride, with no paper in two pairs - a paper reused across questions
+    would weight its subject twice.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    rows = corpus.connection.execute(
+        """
+        WITH band AS MATERIALIZED (
+            SELECT p.arxiv_id, p.base_arxiv_id, p.title, p.summary
+            FROM papers AS p
+            JOIN chunks AS c ON c.arxiv_id = p.arxiv_id AND c.kind = 'body'
+            WHERE p.is_latest = 1 AND p.summary IS NOT NULL AND p.summary != ''
+            GROUP BY p.arxiv_id
+            HAVING COUNT(c.chunk_id) BETWEEN ? AND ?
+        )
+        SELECT DISTINCT
+            cited.arxiv_id AS cited_id, cited.title AS cited_title,
+            cited.summary AS cited_summary,
+            citing.arxiv_id AS citing_id, citing.title AS citing_title,
+            citing.summary AS citing_summary
+        FROM paper_references AS r
+        JOIN band AS citing ON citing.arxiv_id = r.citing_arxiv_id
+        JOIN band AS cited ON cited.base_arxiv_id = r.cited_arxiv_id
+        WHERE citing.base_arxiv_id != cited.base_arxiv_id
+        ORDER BY citing.arxiv_id, cited.arxiv_id
+        """,
+        (min_passages, max_passages),
+    ).fetchall()
+
+    def excluded(arxiv_id: str) -> bool:
+        return arxiv_id in exclude or split_arxiv_version(arxiv_id)[0] in exclude
+
+    usable = [
+        row for row in rows
+        if not (excluded(row["cited_id"]) or excluded(row["citing_id"]))
+    ]
+    picked: list[tuple[tuple[str, str, str], tuple[str, str, str]]] = []
+    used: set[str] = set()
+    for row in usable[::stride]:
+        first, second = row["cited_id"], row["citing_id"]
+        if first in used or second in used:
+            continue
+        used.update((first, second))
+        picked.append((
+            (first, row["cited_title"], row["cited_summary"]),
+            (second, row["citing_title"], row["citing_summary"]),
+        ))
+        if len(picked) == limit:
+            break
+    return picked
+
+
+def question_for_pair(
+    complete: Callable[[str, str], str],
+    kind: str,
+    first: tuple[str, str, str],
+    second: tuple[str, str, str],
+) -> str | None:
+    """One question needing both papers, written from their abstracts only."""
+    if kind not in KIND_RULES:
+        raise ValueError(f"unknown kind {kind!r}; known: {', '.join(PAIR_KINDS)}")
+    reply = complete(
+        PAIR_SYSTEM.format(kind_rule=KIND_RULES[kind]),
+        f"PAPER ONE\nTITLE: {first[1]}\nABSTRACT: {first[2]}\n\n"
+        f"PAPER TWO\nTITLE: {second[1]}\nABSTRACT: {second[2]}",
+    )
+    found = QUESTION_LINE.search(reply or "")
+    return found.group(1).strip() if found else None
+
+
+def author_pairs(
+    corpus: CorpusStore,
+    complete: Callable[[str, str], str],
+    *,
+    per_kind: int,
+    exclude: set[str],
+    rejected: dict[str, int] | None = None,
+    stride: int = 3,
+) -> Iterator[PairCase]:
+    """Yield breadth questions until every kind has `per_kind`, or pairs run out."""
+    if per_kind < 1:
+        raise ValueError("per_kind must be at least 1")
+    counts = rejected if rejected is not None else {}
+    bump = lambda reason: counts.__setitem__(reason, counts.get(reason, 0) + 1)
+    wanted = {kind: per_kind for kind in PAIR_KINDS}
+    for first, second in candidate_pairs(
+        corpus, exclude=exclude, limit=per_kind * len(PAIR_KINDS) * 4, stride=stride,
+    ):
+        open_kinds = [kind for kind in PAIR_KINDS if wanted[kind]]
+        if not open_kinds:
+            return
+        # The kind still needing the most goes next, so every kind fills at the
+        # same pace and no kind is starved by rejections in the others.
+        kind = max(open_kinds, key=lambda k: wanted[k])
+        question = question_for_pair(complete, kind, first, second)
+        if question is None:
+            bump("no question written")
+            continue
+        if not standalone(question):
+            bump("does not stand alone")
+            continue
+        if bibliographic(question):
+            bump("about the paper's cover")
+            continue
+        run = max(
+            longest_shared_run(question, first[2]),
+            longest_shared_run(question, second[2]),
+        )
+        if run >= MAX_SHARED_RUN:
+            bump(f"borrowed a {run}-word phrase")
+            continue
+        wanted[kind] -= 1
+        yield PairCase(
+            question=question, kind=kind,
+            arxiv_ids=(first[0], second[0]), shared_run=run,
+        )
+

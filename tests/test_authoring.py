@@ -159,3 +159,82 @@ def test_a_written_case_matches_the_key_format(tmp_path: Path) -> None:
     assert row["question"] == "why do qubits decohere"
     assert row["expect_papers"] == ["2608.00001v1"]
     assert "heldout-generated" in row["note"]
+
+
+def linked_corpus(tmp_path: Path, links: list[tuple[str, str]], papers: int):
+    """Papers in the passage band, and bibliography rows linking them."""
+    pages = {f"2608.{n:05d}v1": ["Transmon qubits and their losses."] * 30
+             for n in range(1, papers + 1)}
+    corpus = chunked_corpus(tmp_path, pages)
+    corpus.connection.execute("UPDATE papers SET summary = ?", (ABSTRACT,))
+    for ordinal, (citing, cited_base) in enumerate(links):
+        corpus.connection.execute(
+            "INSERT INTO paper_references (citing_arxiv_id, ordinal, raw_text,"
+            " cited_arxiv_id, cited_doi, source_sha256, extracted_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (citing, ordinal, "a reference", cited_base, None, "sha", "2026-09-14T00:00:00Z"),
+        )
+    corpus.connection.commit()
+    return corpus
+
+
+def test_pairs_are_linked_by_citation_and_never_reuse_a_paper(tmp_path: Path) -> None:
+    """Related by the corpus's own record, and no subject weighted twice.
+
+    Paper 1 cites both 2 and 3. Only one of those pairs may be kept, because a
+    paper in two questions weights its subject twice.
+    """
+    from verbatim.authoring import candidate_pairs
+
+    links = [("2608.00001v1", "2608.00002"), ("2608.00001v1", "2608.00003"),
+             ("2608.00003v1", "2608.00004"), ("2608.00005v1", "2608.00006")]
+    with linked_corpus(tmp_path, links, papers=6) as corpus:
+        pairs = candidate_pairs(corpus, exclude=set(), limit=10, stride=1)
+        without = candidate_pairs(corpus, exclude={"2608.00005"}, limit=10, stride=1)
+
+    ids = [paper[0] for pair in pairs for paper in pair]
+    assert len(ids) == len(set(ids)), "a paper appeared in two pairs"
+    assert {frozenset((a[0], b[0])) for a, b in pairs} == {
+        frozenset(("2608.00002v1", "2608.00001v1")),
+        frozenset(("2608.00004v1", "2608.00003v1")),
+        frozenset(("2608.00006v1", "2608.00005v1")),
+    }
+    # Excluding either paper by its base identifier drops the pair.
+    assert not any("2608.00005v1" in (a[0], b[0]) for a, b in without)
+
+
+def test_pair_questions_are_filtered_and_every_kind_fills(tmp_path: Path) -> None:
+    """The same blind filters as single-paper cases, checked against BOTH abstracts."""
+    import json
+
+    from verbatim.authoring import PAIR_KINDS, author_pairs
+    from verbatim.evaluation import load_cases
+
+    links = [(f"2608.{n:05d}v1", f"2608.{n + 1:05d}") for n in range(1, 12, 2)]
+    replies = iter([
+        "Q: do transmon qubits lose coherence through dielectric loss in the amorphous oxide",
+        "Q: how do annealing and substrate treatment differ in reducing resonator loss",
+        "Q: what does this paper show",
+        "Q: what limits coherence in transmon qubits and which treatment helps most",
+        "Q: what approaches exist to lowering dielectric loss in superconducting circuits",
+    ])
+    with linked_corpus(tmp_path, links, papers=12) as corpus:
+        rejected: dict[str, int] = {}
+        cases = list(author_pairs(
+            corpus, lambda system, user: next(replies, "Q: "),
+            per_kind=1, exclude=set(), rejected=rejected, stride=1,
+        ))
+
+    assert sorted(case.kind for case in cases) == sorted(PAIR_KINDS)
+    assert any(reason.startswith("borrowed a") for reason in rejected)
+    assert rejected.get("does not stand alone") == 1
+    for case in cases:
+        assert case.arxiv_ids[0] != case.arxiv_ids[1]
+        row = json.loads(case.to_row())
+        assert row["require_papers"] == list(case.arxiv_ids)
+        assert "expect_papers" not in row  # "any of" would contradict "all of"
+
+    key = tmp_path / "breadth.jsonl"
+    key.write_text("".join(case.to_row() + "\n" for case in cases))
+    loaded = load_cases(key)
+    assert all(len(c.require_papers) == 2 for c in loaded)

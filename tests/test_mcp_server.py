@@ -21,7 +21,7 @@ def test_the_server_offers_exactly_the_tools_the_agent_has() -> None:
 
 
 def test_parameters_are_restated_as_the_input_schema_mcp_expects() -> None:
-    for tool, schema in zip(as_mcp_tools(), TOOL_SCHEMAS):
+    for tool, schema in zip(as_mcp_tools(), TOOL_SCHEMAS, strict=True):
         assert tool["inputSchema"] == schema["parameters"]
         assert tool["description"] == schema["description"]
         assert "parameters" not in tool

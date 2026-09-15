@@ -107,3 +107,20 @@ def test_eval_accepts_several_key_files(monkeypatch, tmp_path) -> None:
     # Both paths were parsed: it got past the first file and failed on the
     # second, rather than rejecting the extra argument.
     assert "b.jsonl" in str(raised.value)
+
+
+def test_breadth_authoring_refuses_to_overwrite_a_frozen_key(monkeypatch, tmp_path) -> None:
+    """Re-authoring after an arm has run is what pre-registration rules out.
+
+    Refused before any model or corpus is built, so this stays offline.
+    """
+    key = tmp_path / "questions.jsonl"
+    key.write_text('{"question": "q", "expect_papers": ["a1v1", "b2v1"]}\n')
+    monkeypatch.setattr(
+        "sys.argv", ["verbatim", "author-cases", "--breadth", "--out", str(key)]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        run()
+
+    assert "already exists" in str(raised.value)
