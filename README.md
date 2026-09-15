@@ -1,6 +1,8 @@
 # Verbatim
 
-A local-first, citation-focused literature-review assistant for scientific papers.
+A local-first, citation-focused literature-review assistant for scientific papers,
+named for the one thing it guarantees: a quote either appears word for word in
+the passage it cites, or it is thrown out.
 
 **[What it looks like](demo/transcript.md)** · **[Architecture](docs/architecture.md)**
 · **[Evaluation](docs/evaluation.md)** · **[Decisions](docs/decisions)**
