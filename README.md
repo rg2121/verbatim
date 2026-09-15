@@ -576,7 +576,31 @@ Answers and the sheet stay in the gitignored results folder, because they quote
 papers under mixed licences; what gets committed is questions, scores and the
 aggregate result.
 
-**Status: in progress.**
+**Status: answers in, awaiting blind human scoring - no verdict yet.**
+
+The mechanical measures, computed before any scoring:
+
+| out of 24 | baseline | ladder | team |
+|---|---|---|---|
+| cited both required papers | 3 | 3 | **7** |
+| distinct papers cited, mean | 1.7 | 2.0 | **2.5** |
+| citations rejected | 3 | 2 | 2 |
+| model calls per question | **1.0** | 3.6 | 6.8 |
+
+On the one mechanical primary measure the team is ahead and **not
+significantly so**. Paired per question, it cites both papers where the
+baseline does not on 4 questions and the reverse on none (p = 0.125), and
+against the ladder 5 to 1 (p = 0.219). On 16 of the 24 questions no arm cited
+both papers at all - which says as much about how hard two-paper coverage is
+for retrieval as about any arm.
+
+The team does draw on more papers - more than the baseline on 13 questions and
+fewer on 2 (p = 0.007). That measure was not pre-registered as primary, and
+promoting it now that it came out significant is exactly the move the protocol
+exists to stop. It is context, not a result.
+
+Whether the team earns its cost now rests on the two human primary measures,
+coverage and limitations, which are scored blind.
 
 ## Saying what the corpus does not contain
 
