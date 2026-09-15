@@ -545,6 +545,39 @@ make. And the board **lives for one run** — see
 [decision 13](docs/decisions/0013-the-board-lives-for-one-run.md) for the
 tables that would persist it and the three triggers for building them.
 
+### A test built for what the team is for
+
+The held-out key cannot see breadth, and building a new key after watching the
+team lose is how a benchmark gets rigged. So the second test was fixed before
+it existed: [evals/breadth/PROTOCOL.md](evals/breadth/PROTOCOL.md) was committed
+on its own before any question, the questions are committed before any arm
+runs, and the scoring script will not read which arm wrote which answer until
+the human scores are committed too.
+
+24 questions, each written blind from the titles and abstracts of two papers
+joined by a citation edge, and each needing both: comparisons, limitations and
+syntheses, eight of each. The three arms run as they ship. Four measures are
+mechanical - whether both papers were cited, how many papers were, rejected
+citations, and cost. Three are scored by a person who is not told which arm
+wrote which answer: coverage, balance, and whether a limitation was surfaced
+with a citation behind it. The decision rule is written down in advance: the
+team earns its cost only by beating **both** simpler arms on a primary measure
+at p < 0.05, without losing significantly on any.
+
+```bash
+uv run verbatim author-cases --breadth   # the frozen questions (written once)
+uv run python evals/breadth_arms.py          # answers -> evals/results/ (gitignored)
+uv run python evals/breadth_sheet.py         # the blind sheet, a local HTML page
+# score every answer, save the download as evals/breadth/labels.json, commit it
+uv run python evals/breadth_score.py         # the verdict, once the scores are committed
+```
+
+Answers and the sheet stay in the gitignored results folder, because they quote
+papers under mixed licences; what gets committed is questions, scores and the
+aggregate result.
+
+**Status: in progress.**
+
 ## Saying what the corpus does not contain
 
 The founding flaw of this project is that it answers questions nothing in the
