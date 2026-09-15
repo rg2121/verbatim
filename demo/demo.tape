@@ -4,7 +4,17 @@
 #
 # Everything here runs against sample/corpus.db, the forty-paper corpus
 # committed to this repository, so the recording reproduces on a clean clone.
-# `ask` needs a model through Ollama; every other step needs nothing.
+# `ask` needs a model through Ollama; every other step needs nothing. `ask`
+# writes a ledger row into the sample, so restore it afterwards with
+# `git restore sample/corpus.db`.
+#
+# vhs 0.12 with ffmpeg 9 recorded every frame here and then wrote no GIF. If
+# that happens, change the Output line to `Output demo/frames/` and encode:
+#
+#     ffmpeg -framerate 50 -i demo/frames/frame-text-%05d.png \
+#       -framerate 50 -i demo/frames/frame-cursor-%05d.png \
+#       -filter_complex "[0][1]overlay,fps=10,pad=w=iw+36:h=ih+36:x=18:y=18:color=0x171717,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
+#       demo/demo.gif
 Output demo/demo.gif
 
 Set Shell zsh
@@ -13,6 +23,14 @@ Set Width 1300
 Set Height 800
 Set Padding 18
 Set TypingSpeed 25ms
+
+# Off camera: let zsh read the commentary lines as comments, and keep the
+# stage events that go to stderr out of a recording meant for people.
+Hide
+Type "setopt interactivecomments; export VERBATIM_LOG_LEVEL=warning; clear"
+Enter
+Sleep 500ms
+Show
 
 Type "# forty papers, their passages, and their vectors - already in the repo"
 Enter

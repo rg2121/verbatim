@@ -8,6 +8,8 @@ the passage it cites, or it is thrown out.
 · **[Evaluation](docs/evaluation.md)** · **[Decisions](docs/decisions)**
 · **[Postmortems](docs/postmortems)**
 
+![Sixty seconds against the sample corpus: stats, a search, an answer whose every quote is verified, the citation graph, and the run ledger](demo/demo.gif)
+
 Every claim in an answer carries a quote, and every quote is checked against
 the passage it cites before the answer is shown. What the project has learned
 is mostly what did *not* work: reranking, query rewriting, HyDE, always-on
@@ -1816,16 +1818,15 @@ reason the CLI's `serve` is. The image is a reproducible environment for the
 tool, not a production deployment: this is a local-first assistant whose corpus
 lives on one machine.
 
-**Not yet verified: this image has never been built.** Docker was not installed
-on the machine this was developed on. The files are written to work, and a
-pre-publish audit fixed two things a first build would have hit - the
+**Built and smoke-tested on 2026-09-15**, on an arm64 Mac through Colima: the
+compose file validates, the image builds, and `--help`, `stats` and a real
+`search` against the sample all succeed - the search downloading the embedding
+model inside the container, which is the first-run experience. A pre-publish
+audit had already fixed two things a first build would have hit: the
 container installing dev dependencies on its first command, and a build
-context that would have sent the entire corpus to the daemon - but treat the
-container path as untested until `docker compose build` has run somewhere.
-That somewhere is now CI: the `container` workflow builds the image, checks
-the compose file, and runs `--help`, `stats` and a real `search` against the
-sample inside the container on every push. Its first green run is what will
-retire this paragraph.
+context that would have sent the entire corpus to the daemon. The `container`
+workflow repeats the same steps on every push, on amd64, so the path stays
+checked rather than having been checked once.
 
 ## Every command
 

@@ -1,9 +1,9 @@
 name: container
 
-# The image was written on a machine with no Docker, so nothing had ever
-# built it. This is where it gets built: every push to main, every pull
-# request, and on demand. A Dockerfile nobody has run is a claim, and this
-# turns it into a check - the same reason the retrieval gate exists.
+# The image was first built by hand on an arm64 Mac. This builds it again on
+# every push to main, every pull request, and on demand, on amd64. A
+# Dockerfile nobody runs is a claim, and this turns it into a check - the
+# same reason the retrieval gate exists.
 on:
   push:
     branches: [main]
