@@ -1,6 +1,6 @@
 """Exporting a small, self-contained corpus that works out of the box.
 
-Building the real corpus means 28 GB of PDFs and most of a day of embedding.
+Building the real corpus means 26 GB of PDFs and most of a day of embedding.
 Nobody evaluates a tool that way. A sample holds a few dozen papers with their
 passages and vectors already in place, so `search` and `ask` work the moment
 the repository is cloned, offline and with nothing to fetch.

@@ -186,9 +186,6 @@ class ResearchState:
     def open_tasks(self) -> list[Task]:
         return [t for t in self.tasks if t.status == OPEN]
 
-    def workers_on(self, task_id: str) -> set[str]:
-        return {e.found_by for e in self.evidence_for(task_id)}
-
     def attempted(self, task_id: str, worker: str) -> bool:
         """Whether a worker has already been sent at this task.
 

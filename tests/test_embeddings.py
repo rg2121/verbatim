@@ -209,9 +209,10 @@ def test_context_is_part_of_the_model_identity(tmp_path: Path) -> None:
         model_name="BAAI/bge-small-en-v1.5", with_context=True
     )
 
-    assert plain.model.model_id != contextual.model.model_id
-    assert contextual.model.model_id.endswith("+context")
-    assert plain.model.dimensions == contextual.model.dimensions
+    # Named without loading: the suite runs offline and downloads no weights.
+    assert plain.model_id != contextual.model_id
+    assert contextual.model_id.endswith("+context")
+    assert plain.model_id == "BAAI/bge-small-en-v1.5"
 
 
 def test_a_passage_is_embedded_behind_its_title_and_section() -> None:

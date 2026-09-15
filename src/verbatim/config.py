@@ -78,20 +78,22 @@ SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))
 # paragraph lacks, and also makes one paper's passages resemble each other.
 EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "false", "False", ""}
 
-# Answer generation. Every model runs locally through Ollama: the corpus is
-# 26 GB of other people's papers, and sending it to a third party is a decision
-# that should not follow from a default.
-# Stage events go to stderr so stdout stays parseable. "json" for a shipper,
-# "text" for a person.
 # How the answering model is asked for structure. "lines" is the flat
 # ANSWER/CITE protocol, which every model tested has followed; "tools" uses
 # Ollama tool calling, which the 4B model ignored on realistic prompts and the
-# 31B one honours. Default stays "lines" until the two are measured.
+# 31B one honours. Measured on the 31B model it is no better, so the default
+# stays "lines".
 ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
 
+# Stage events go to stderr so stdout stays parseable. "json" for a shipper,
+# "text" for a person.
 LOG_FORMAT = _text("VERBATIM_LOG_FORMAT", "text")
 LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 
+# Answer generation goes through Ollama and nothing else. A local model keeps
+# the corpus - 26 GB of other people's papers - on this machine; a model whose
+# name ends `-cloud` sends each prompt's passages to Ollama's servers. Which
+# one runs is the user's visible choice, not a default (decision 10).
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))

@@ -41,10 +41,11 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "chunked_sha256": "TEXT",
     },
 }
-# Columns renamed after data was already stored: (old, new).
-RENAMED_COLUMNS: dict[str, tuple[str, str]] = {
-    "chunks": ("pdf_sha256", "source_sha256"),
-}
+# Passages loaded for a reader carry their paper's licence, joined in under
+# this name and preferred by _chunk_from_row - see there for why the chunk's
+# own column is not enough.
+CHUNK_COLUMNS = "c.*, lic.license_url AS paper_license_url"
+PAPER_LICENCE_JOIN = "LEFT JOIN papers AS lic ON lic.arxiv_id = c.arxiv_id"
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Long enough for one stage's write to finish while another stage waits.
 # Chunking commits in large batches and holds the write lock for a long time
@@ -566,7 +567,7 @@ class CorpusStore:
         """Return every stored chunk in a stable, citable order."""
         rows = self.connection.execute(
             """
-            SELECT c.* FROM chunks AS c
+            SELECT c.*, p.license_url AS paper_license_url FROM chunks AS c
             JOIN papers AS p ON p.arxiv_id = c.arxiv_id
             ORDER BY p.updated DESC, c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
             """
@@ -746,8 +747,9 @@ class CorpusStore:
         placeholders = ",".join("?" * len(pages))
         rows = self.connection.execute(
             f"""
-            SELECT * FROM chunks WHERE arxiv_id = ? AND page_number IN ({placeholders})
-            ORDER BY page_number, chunk_index
+            SELECT {CHUNK_COLUMNS} FROM chunks AS c {PAPER_LICENCE_JOIN}
+            WHERE c.arxiv_id = ? AND c.page_number IN ({placeholders})
+            ORDER BY c.page_number, c.chunk_index
             """,
             (arxiv_id, *pages),
         ).fetchall()
@@ -770,7 +772,8 @@ class CorpusStore:
 
     def chunks_for_paper(self, arxiv_id: str) -> list[Chunk]:
         rows = self.connection.execute(
-            "SELECT * FROM chunks WHERE arxiv_id = ? ORDER BY page_number, chunk_index",
+            f"SELECT {CHUNK_COLUMNS} FROM chunks AS c {PAPER_LICENCE_JOIN}"
+            " WHERE c.arxiv_id = ? ORDER BY c.page_number, c.chunk_index",
             (arxiv_id,),
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
@@ -780,19 +783,11 @@ class CorpusStore:
             return []
         placeholders = ",".join("?" * len(chunk_ids))
         rows = self.connection.execute(
-            f"SELECT * FROM chunks WHERE chunk_id IN ({placeholders})", tuple(chunk_ids)
+            f"SELECT {CHUNK_COLUMNS} FROM chunks AS c {PAPER_LICENCE_JOIN}"
+            f" WHERE c.chunk_id IN ({placeholders})",
+            tuple(chunk_ids),
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
-
-    def body_chunk_ids(self, arxiv_id: str | None = None) -> list[str]:
-        """Chunk ids excluding bibliographies, for filtering vector search."""
-        if arxiv_id is None:
-            rows = self.connection.execute("SELECT chunk_id FROM chunks WHERE kind = 'body'")
-        else:
-            rows = self.connection.execute(
-                "SELECT chunk_id FROM chunks WHERE kind = 'body' AND arxiv_id = ?", (arxiv_id,)
-            )
-        return [row["chunk_id"] for row in rows]
 
     def iter_chunks(self):
         """Yield every chunk without holding the corpus in memory.
@@ -802,7 +797,7 @@ class CorpusStore:
         """
         cursor = self.connection.execute(
             """
-            SELECT c.* FROM chunks AS c
+            SELECT c.*, p.license_url AS paper_license_url FROM chunks AS c
             JOIN papers AS p ON p.arxiv_id = c.arxiv_id
             ORDER BY p.updated DESC, c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
             """
@@ -946,11 +941,6 @@ class CorpusStore:
                 """,
                 [(arxiv_id, url, reason, now) for arxiv_id, url, reason in failures],
             )
-
-    def unavailable_downloads(self) -> int:
-        return int(
-            self.connection.execute("SELECT COUNT(*) FROM download_failures").fetchone()[0]
-        )
 
     def record_references(self, references: list[Reference], source_sha256: str) -> None:
         """Replace the stored bibliography of every paper represented here."""
@@ -1243,11 +1233,12 @@ class CorpusStore:
         parameters.append(limit)
         rows = self.connection.execute(
             f"""
-            SELECT c.*,
+            SELECT {CHUNK_COLUMNS},
                    bm25(chunks_fts) AS relevance,
                    snippet(chunks_fts, 0, '[', ']', '…', 16) AS snippet
             FROM chunks_fts
             JOIN chunks AS c ON c.rowid = chunks_fts.rowid
+            {PAPER_LICENCE_JOIN}
             WHERE {' AND '.join(clauses)}
             ORDER BY relevance ASC
             LIMIT ?
@@ -1328,6 +1319,8 @@ class CorpusStore:
                     char_start INTEGER NOT NULL,
                     char_end INTEGER NOT NULL,
                     text TEXT NOT NULL,
+                    -- Nothing reads or writes this. Kept because dropping a
+                    -- column means rebuilding this table and its search index.
                     context TEXT,
                     kind TEXT NOT NULL DEFAULT 'body',
                     source_kind TEXT NOT NULL DEFAULT 'pdf',
@@ -1376,14 +1369,6 @@ class CorpusStore:
                     created_at TEXT NOT NULL
                 );
 
-                -- One vector per paper, over its title and abstract. Separate
-                -- from `embeddings` because it answers a different question:
-                -- a chunk vector says what a passage mentions, a paper vector
-                -- says what the paper is about. A paper can mention anything
-                -- in passing; its abstract states its subject.
-                -- One row per bibliography entry. cited_arxiv_id is set only
-                -- when the entry states an identifier; a reference resolved by
-                -- title similarity would be a guess recorded as a fact.
                 -- Papers arXiv has no PDF for at the version we hold. Kept
                 -- so they are not asked for again on every run and not
                 -- reported as outstanding work for ever.
@@ -1393,6 +1378,9 @@ class CorpusStore:
                     reason TEXT NOT NULL,
                     failed_at TEXT NOT NULL
                 );
+                -- One row per bibliography entry. cited_arxiv_id is set only
+                -- when the entry states an identifier; a reference resolved by
+                -- title similarity would be a guess recorded as a fact.
                 CREATE TABLE IF NOT EXISTS paper_references (
                     citing_arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
                     ordinal INTEGER NOT NULL,
@@ -1405,6 +1393,11 @@ class CorpusStore:
                 );
                 CREATE INDEX IF NOT EXISTS references_by_cited
                     ON paper_references (cited_arxiv_id);
+                -- One vector per paper, over its title and abstract. Separate
+                -- from `embeddings` because it answers a different question:
+                -- a chunk vector says what a passage mentions, a paper vector
+                -- says what the paper is about. A paper can mention anything
+                -- in passing; its abstract states its subject.
                 CREATE TABLE IF NOT EXISTS paper_embeddings (
                     arxiv_id TEXT NOT NULL
                         REFERENCES papers(arxiv_id) ON DELETE CASCADE,
@@ -1800,11 +1793,19 @@ def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:
 
 
 def _chunk_from_row(row: sqlite3.Row) -> Chunk:
+    # A chunk stores a licence only if its download record had one when it was
+    # chunked, and an HTML chunk never does - while `licenses` usually runs
+    # after both. Measured on the full corpus that left 0 of 835,743 passages
+    # with a licence and 7,869 of 7,921 papers with one. The paper's record is
+    # the authority, so it wins wherever the query joined it in.
+    license_url = row["license_url"]
+    if "paper_license_url" in row.keys() and row["paper_license_url"] is not None:
+        license_url = row["paper_license_url"]
     return Chunk(
         chunk_id=row["chunk_id"],
         arxiv_id=row["arxiv_id"],
         source_url=row["source_url"],
-        license_url=row["license_url"],
+        license_url=license_url,
         source_sha256=row["source_sha256"],
         page_number=row["page_number"],
         chunk_index=row["chunk_index"],

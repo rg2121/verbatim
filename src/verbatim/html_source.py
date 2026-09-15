@@ -439,6 +439,7 @@ def extract_html_chunks(
                         chunk_id=_html_chunk_id(source, ordinal, index, fingerprint),
                         arxiv_id=source.arxiv_id,
                         source_url=f"https://arxiv.org/abs/{source.arxiv_id}",
+                        # Supplied from the paper's record when the passage is read.
                         license_url=None,
                         source_sha256=source.sha256,
                         page_number=ordinal,

@@ -112,6 +112,24 @@ AUTHORED_HEADER = """\
 """
 
 
+# Shared by `search` and `ask`, which both offer these legs. The numbers the
+# help once quoted came from the development key, which a held-out key later
+# showed could not separate the modes; the gates are justified by the question
+# shape each one targets, and that is what the help now says.
+NO_GRAPH_HELP = (
+    "Skip the citation-graph leg on definitional questions. On by default: "
+    "it fires only on definition-shaped questions, where \"what is the Adam "
+    "optimizer\" goes from unfound to rank 3, and leaves every other question's "
+    "ranking untouched"
+)
+USE_COMPARE_HELP = (
+    "On comparison-shaped questions only, also retrieve from papers whose "
+    "titles match. Off by default: it lifts full coverage of multi-paper "
+    "questions, but its cost on single-paper comparison questions is still "
+    "unmeasured - it fires on 6 of 488 held-out cases"
+)
+
+
 BREADTH_HEADER = """\
 # Breadth evaluation questions, written under evals/breadth/PROTOCOL.md, which
 # was committed before this file existed and before any arm ran.
@@ -131,7 +149,9 @@ BREADTH_HEADER = """\
 
 
 def run() -> None:
-    parser = argparse.ArgumentParser(description="Ingest a small, traceable arXiv metadata snapshot.")
+    parser = argparse.ArgumentParser(
+        description="A citation-checked literature assistant over a local arXiv corpus."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     fetch_parser = subparsers.add_parser("fetch", help="Fetch paper metadata from one arXiv category")
     fetch_parser.add_argument("--category", required=True, help="arXiv category, e.g. physics.gen-ph")
@@ -182,7 +202,7 @@ def run() -> None:
     eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     eval_parser.add_argument(
         "--rerank", action="store_true",
-        help="Re-score with a cross-encoder. Measured worse: mrr 0.940 -> 0.752",
+        help="Re-score with a cross-encoder. Measured worse on all three models tried",
     )
     eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
@@ -467,30 +487,28 @@ def run() -> None:
     embed_parser.add_argument("--batch-size", type=int, default=64)
     embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
 
-    search_parser = subparsers.add_parser("search", help="Keyword-search the chunked corpus")
+    search_parser = subparsers.add_parser(
+        "search", help="Search the corpus: hybrid by default, or keyword or vector only"
+    )
     search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
     search_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     search_parser.add_argument(
         "--rerank", action="store_true",
-        help="Re-score with a cross-encoder. Measured worse: mrr 0.940 -> 0.752",
+        help="Re-score with a cross-encoder. Measured worse on all three models tried",
     )
     search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
     search_parser.add_argument(
         "--use-titles", action="store_true",
         help="Also retrieve from papers whose title matches. Measured worse "
-             "overall (mrr 0.866 -> 0.822) but finds definitional papers",
+             "overall on both answer keys, but finds definitional papers",
     )
     search_parser.add_argument(
         "--no-graph", dest="use_graph", action="store_false",
-        help="Skip the citation-graph leg on definitional questions. On by "
-             "default: it holds recall@1 and lifts mrr 0.866 -> 0.869, and "
-             "touches no other kind of question",
+        help=NO_GRAPH_HELP,
     )
     search_parser.add_argument(
         "--use-compare", action="store_true",
-        help="On comparison-shaped questions only, also retrieve from papers "
-             "whose titles match; off by default because the answer key has "
-             "no comparison-shaped single-paper questions to measure its cost on",
+        help=USE_COMPARE_HELP,
     )
     search_parser.add_argument(
         "--since", help="Only papers published on or after this date (YYYY-MM-DD)"
@@ -511,7 +529,7 @@ def run() -> None:
         choices=("any", "all"),
         default="any",
         help="keyword mode only: rank by matched terms (default), or require every term. "
-             "Requiring every term scored mrr 0.214 against 0.845 on the eval set",
+             "Requiring every term scored mrr 0.389 against 0.866 on the development key",
     )
     search_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model for --mode vector")
     search_parser.add_argument(
@@ -533,15 +551,11 @@ def run() -> None:
     )
     ask_parser.add_argument(
         "--no-graph", dest="use_graph", action="store_false",
-        help="Skip the citation-graph leg on definitional questions. On by "
-             "default: it holds recall@1 and lifts mrr 0.866 -> 0.869, and "
-             "touches no other kind of question",
+        help=NO_GRAPH_HELP,
     )
     ask_parser.add_argument(
         "--use-compare", action="store_true",
-        help="On comparison-shaped questions only, also retrieve from papers "
-             "whose titles match; off by default because the answer key has "
-             "no comparison-shaped single-paper questions to measure its cost on",
+        help=USE_COMPARE_HELP,
     )
     ask_parser.add_argument(
         "--llm",
@@ -645,7 +659,9 @@ def run() -> None:
         help="Stop after this many retrieval attempts across all sections",
     )
 
-    chunk_parser = subparsers.add_parser("chunk", help="Extract page-aware text chunks from downloaded PDFs")
+    chunk_parser = subparsers.add_parser(
+        "chunk", help="Extract passages from HTML renderings, or from the PDF where there is none"
+    )
     chunk_parser.add_argument("--manifest", type=Path, help="Legacy one-off PDF manifest; omit to use --state")
     chunk_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     chunk_parser.add_argument("--output", type=Path, default=config.CHUNKS_PATH)
@@ -1057,10 +1073,7 @@ def run() -> None:
             judge_with_control,
             score_answers,
         )
-
-        from verbatim.evaluation import load_key
-
-        from verbatim.evaluation import source_of, stratified_sample
+        from verbatim.evaluation import load_key, source_of, stratified_sample
 
         answerable = [c for c in load_key(args.cases) if not c.expect_none]
         cases = (
@@ -1526,6 +1539,23 @@ def run() -> None:
                 "error: --plan has no effect with --deep; the ladder answers "
                 "one question rather than splitting it. Drop one of the two."
             )
+        if args.deep:
+            _refuse_ignored("--deep", "each rung of the ladder sets its own retrieval", {
+                "--arxiv-id": args.arxiv_id is not None,
+                "--include-references": args.include_references,
+                "--no-graph": not args.use_graph,
+            })
+        if args.tools:
+            _refuse_ignored("--tools", "the model chooses what to search and how", {
+                "--arxiv-id": args.arxiv_id is not None,
+                "--include-references": args.include_references,
+                "--no-graph": not args.use_graph,
+                "--use-compare": args.use_compare,
+                "--plan": args.plan,
+                "--passages": args.passages != config.ASK_PASSAGES,
+                "--max-per-paper": args.max_per_paper != config.ASK_MAX_PER_PAPER,
+                "--no-subject-check": args.no_subject_check,
+            })
         with CorpusStore(args.state) as corpus, record_run(corpus, "ask", model=args.model, llm=args.llm, passages=args.passages) as run:
             if args.deep:
                 from verbatim.orchestrator import _supervisor
@@ -1590,6 +1620,13 @@ def run() -> None:
                     lambda system, user: completion.complete_text(system, user),
                     args.question,
                     per_part=max(args.passages // 3, 2),
+                    # Every flag plain `ask` honours reaches each part too;
+                    # they used to be parsed here and then dropped.
+                    max_per_paper=args.max_per_paper,
+                    arxiv_id=args.arxiv_id,
+                    include_references=args.include_references,
+                    use_graph=args.use_graph,
+                    use_compare=args.use_compare,
                 )
             else:
                 matches = hybrid_search(
@@ -1753,6 +1790,7 @@ def run() -> None:
                 html_pending = corpus.html_sources_pending_chunking(
                     fingerprint, limit=args.limit
                 )
+                html_written = 0
                 for start in range(0, len(html_pending), args.batch_size):
                     batch = html_pending[start : start + args.batch_size]
                     produced = extract_html_chunks(
@@ -1762,6 +1800,7 @@ def run() -> None:
                         produced, for_papers=[source.arxiv_id for source in batch]
                     )
                     corpus.mark_html_chunked(batch, fingerprint)
+                    html_written += len(produced)
                     print(f"  chunked {min(start + len(batch), len(html_pending))}"
                           f"/{len(html_pending)} HTML", end="\r", flush=True)
                 remaining = None if args.limit is None else max(args.limit - len(html_pending), 0)
@@ -1793,12 +1832,27 @@ def run() -> None:
                         end="\r",
                         flush=True,
                     )
-                new_chunks = range(written + sum(1 for _ in html_pending))
                 exported = save_chunks(corpus.iter_chunks(), args.output)
             print(
-                f"Chunked {len(pending)} PDFs into {len(new_chunks)} new passages; "
-                f"corpus holds {exported}. Exported to {args.output}"
+                f"Chunked {len(html_pending)} HTML renderings and {len(pending)} PDFs "
+                f"into {html_written + written} new passages; corpus holds "
+                f"{exported}. Exported to {args.output}"
             )
+
+
+def _refuse_ignored(mode: str, reason: str, given: dict[str, bool]) -> None:
+    """Refuse flags a routed `ask` would parse and then silently drop.
+
+    Refused before anything is built, like the other refusals. A search the
+    reader scoped to one paper that quietly comes back from the whole corpus
+    is worse than an error saying the scope cannot apply.
+    """
+    named = [flag for flag, present in given.items() if present]
+    if named:
+        raise SystemExit(
+            f"error: {', '.join(named)} has no effect with {mode}; {reason}. "
+            f"Drop {'it' if len(named) == 1 else 'them'}, or drop {mode}."
+        )
 
 
 def _usage_footer(*clients: object) -> str:

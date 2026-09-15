@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import time
-from collections.abc import Sequence
-from typing import Callable
+from collections.abc import Callable, Sequence
 from urllib.parse import urlencode, urlparse, urlunparse
 from xml.etree import ElementTree
 

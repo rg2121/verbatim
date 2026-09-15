@@ -54,3 +54,19 @@ def test_a_non_numeric_setting_is_rejected_with_its_name(tmp_path: Path) -> None
 
     assert result.returncode != 0
     assert "VERBATIM_CHUNK_SIZE must be an integer" in result.stderr
+
+
+def test_the_extraction_timeout_setting_reaches_the_chunker(tmp_path: Path) -> None:
+    """It was read into config, documented in .env.example, and never used.
+
+    Chunking hard-coded 180 seconds, so setting it changed nothing.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from verbatim import chunking; print(chunking.EXTRACTION_TIMEOUT_SECONDS)"],
+        capture_output=True, text=True, check=True, cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+             "VERBATIM_EXTRACTION_TIMEOUT": "7"},
+    )
+
+    assert result.stdout.strip() == "7.0"

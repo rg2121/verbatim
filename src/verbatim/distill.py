@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import hashlib
 import random
 import re
@@ -400,7 +400,7 @@ def keep(
         source_sha256s=tuple(
             dict.fromkeys(match.chunk.source_sha256 for match in matches)
         ),
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         generator_model=generator_model,
     )
 

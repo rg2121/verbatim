@@ -8,8 +8,8 @@ that it carries little signal ("entropy?").
 
 Two standard treatments, both kept behind flags and off until measured on this
 corpus, which is the same discipline the reranker and the contextual embedding
-prefix are held to. Retrieval here scores mrr 0.940, so a change that is not
-measured is as likely to cost as to gain.
+prefix are held to. Retrieval here already puts the right passage first most
+of the time, so a change that is not measured is as likely to cost as to gain.
 """
 
 from __future__ import annotations

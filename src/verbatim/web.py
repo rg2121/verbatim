@@ -283,6 +283,10 @@ def create_app(
             matches = hybrid_search(
                 corpus(), embedder(), q, limit=limit, arxiv_id=arxiv_id,
                 max_per_paper=3 if arxiv_id is None else None,
+                # The default every other front end runs. This route alone
+                # searched without it, so a definitional question got a
+                # different answer here than from the CLI or MCP.
+                use_graph=True,
             )
         return {
             "query": q,
@@ -579,10 +583,11 @@ def create_app(
         generator may run on another.
 
         A follow-up is resolved against `history` into a question that stands
-        alone, and only that resolved question reaches retrieval. The history
-        never reaches the model that writes the answer: that model may state
-        only what a retrieved passage supports, and prose from an earlier turn
-        cannot be checked against any paper.
+        alone, and that resolved question is what retrieval runs on and what
+        the answer is written to - as in deep mode, and shown to the reader.
+        The history itself never reaches the model that writes the answer:
+        that model may state only what a retrieved passage supports, and prose
+        from an earlier turn cannot be checked against any paper.
         """
         turns = _turns(history)
         asked = standalone_question(
@@ -622,7 +627,7 @@ def create_app(
                 yield _event(
                     "answer",
                     Answer(
-                        question=q,
+                        question=asked,
                         text="No passages in the corpus match this question.",
                         citations=[], rejected=[], declined=True,
                     ).to_dict(),
@@ -631,18 +636,18 @@ def create_app(
                 return
             collected: list[str] = []
             try:
-                for fragment in answering().stream(SYSTEM_PROMPT, build_prompt(q, matches)):
+                for fragment in answering().stream(SYSTEM_PROMPT, build_prompt(asked, matches)):
                     collected.append(fragment)
                     yield _event("delta", {"text": fragment})
                 payload = parse_line_protocol("".join(collected))
                 if payload is None:
                     raise RuntimeError("The model did not answer in the expected format.")
-                answer = answer_from_payload(q, matches, payload, papers)
+                answer = answer_from_payload(asked, matches, payload, papers)
                 yield _event("answer", answer.to_dict())
                 # After the answer, not before: the check costs a model call,
                 # and the reader should not wait on a warning that usually
                 # does not fire.
-                subject, closeness = subject_check(answering(), embedder(), q, matches)
+                subject, closeness = subject_check(answering(), embedder(), asked, matches)
                 # A model that named no subject leaves nothing to report. The
                 # event is still sent, so the page can stop waiting for it,
                 # but it never carries a warning built on a measurement that

@@ -37,6 +37,7 @@ from verbatim.answers import (
 from verbatim.agent import ToolCaller
 from verbatim.contracts import BudgetGuard, Cost
 from verbatim.corpus import CorpusStore
+from verbatim.critique import critique as run_critique
 from verbatim.embedding import Embedder
 from verbatim.evidence import describe_evidence
 from verbatim.orchestrator import (
@@ -53,7 +54,7 @@ from verbatim.orchestrator import (
 from verbatim.report import ReportSection
 
 MISSING = (
-    "report --supervisor langgraph needs the optional langgraph extra. "
+    "--supervisor langgraph needs the optional langgraph extra. "
     "Install it with: uv sync --extra langgraph"
 )
 
@@ -91,8 +92,15 @@ def build_graph(
     warn_below: float = config.SUBJECT_WARN_BELOW,
     guard: BudgetGuard | None = None,
     on_attempt: Callable[[str, int, int], None] | None = None,
+    complete_text: Callable[[str, str], str] | None = None,
+    critic: bool = False,
 ) -> Any:
-    """Compile the ladder into a graph: route, retrieve, write, verify, repeat."""
+    """Compile the ladder into a graph: route, retrieve, write, verify, repeat.
+
+    Takes every option `work_section` takes. orchestrate passes the critic's
+    two to whichever supervisor it runs, and when this accepted fewer,
+    `report --agents --supervisor langgraph` failed before its first section.
+    """
     try:
         from langgraph.graph import END, START, StateGraph
     except ImportError as error:  # pragma: no cover - exercised by its own test
@@ -168,6 +176,15 @@ def build_graph(
                 completion, embedder, state["heading"], matches
             )
         verdict = verdict_for(answer, closeness, warn_below)
+        found = (
+            run_critique(
+                state["heading"], answer, state["gathered"], complete_text=complete_text
+            )
+            if critic else None
+        )
+        # A critique escalates only where a different retrieval could help,
+        # exactly as in the built-in supervisor.
+        accepted = verdict.accepted and not (found.unaddressed if found else ())
         spent = Cost()
         if usage is not None and state.get("spent_before") is not None:
             delta = usage.since(state["spent_before"])
@@ -181,10 +198,10 @@ def build_graph(
                 strategy=strategy, passages=len(matches),
                 verified=len(answer.citations), rejected=len(answer.rejected),
                 closeness=closeness,
-                verdict=ACCEPTED if verdict.accepted else RETRY,
+                verdict=ACCEPTED if accepted else RETRY,
                 route=state["gathered"].route,
                 papers=state["gathered"].paper_ids,
-                chunks=state["gathered"].chunk_ids, cost=spent,
+                chunks=state["gathered"].chunk_ids, cost=spent, critique=found,
             ),
             ReportSection(
                 heading=state["heading"], answer=answer,

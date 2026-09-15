@@ -13,7 +13,13 @@ import pytest
 
 from verbatim.orchestrator import ACCEPTED, RETRY, work_section
 
-from test_orchestrator import QueueCompletion, StubEmbedder, cite, flux_corpus
+from test_orchestrator import (
+    QueueCompletion,
+    ScriptedAnswers,
+    StubEmbedder,
+    cite,
+    flux_corpus,
+)
 
 langgraph = pytest.importorskip(
     "langgraph.graph",
@@ -153,3 +159,55 @@ def test_a_missing_extra_says_how_to_install_it(monkeypatch, tmp_path: Path) -> 
 
     assert "uv sync --extra langgraph" in str(raised.value)
     assert MISSING in str(raised.value)
+
+
+def test_orchestrate_can_drive_the_graph_with_every_option_it_passes(
+    tmp_path: Path,
+) -> None:
+    """`report --agents --supervisor langgraph` crashed before any section ran.
+
+    orchestrate hands every supervisor the critic's options, and the graph did
+    not accept them - a TypeError on the command the README shows. Each
+    supervisor was tested on its own, so nothing ran the two together.
+    """
+    from verbatim.orchestrator import orchestrate
+
+    with flux_corpus(tmp_path) as corpus:
+        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        completion = ScriptedAnswers({
+            "What is flux?": cite(
+                chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
+            ),
+        })
+        _report, ledger = orchestrate(
+            corpus, StubEmbedder(), completion,
+            lambda system, user: "What is flux?", "electromagnetism",
+            supervisor="langgraph", critic=True,
+        )
+
+    (section,) = ledger.sections
+    assert section.outcome == "accepted"
+    assert section.attempts[0].critique is not None
+
+
+def test_the_critic_escalates_the_same_way_in_both_supervisors(tmp_path: Path) -> None:
+    """A subject no passage covers sends both up the whole ladder."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
+        options = dict(
+            caller=None, critic=True,
+            complete_text=lambda system, user: "superconductivity",
+        )
+        _a, builtin = work_section(
+            corpus, StubEmbedder(), QueueCompletion([payload] * 3), "what is flux?",
+            **options,
+        )
+        _b, graphed = work_section_with_graph(
+            corpus, StubEmbedder(), QueueCompletion([payload] * 3), "what is flux?",
+            **options,
+        )
+
+    assert [a.strategy for a in graphed.attempts] == [a.strategy for a in builtin.attempts]
+    assert [a.verdict for a in graphed.attempts] == [a.verdict for a in builtin.attempts]
+    assert graphed.attempts[0].critique.unaddressed == ("superconductivity",)

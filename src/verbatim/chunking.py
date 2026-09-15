@@ -5,14 +5,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from pathlib import Path
+from collections.abc import Callable, Iterable
 import re
-from typing import Callable, Iterable
 import unicodedata
 
 import multiprocessing
 import pymupdf
 import pymupdf4llm
 
+from verbatim import config
 from verbatim.downloads import DownloadedPaper, file_sha256
 
 CHUNKER_VERSION = "8"
@@ -37,7 +38,8 @@ MAX_HEADING_LENGTH = 80
 # Layout extraction is C code with no progress reporting and no internal
 # limit. One 7.7MB paper in this corpus pinned a core for 46 minutes without
 # returning, which blocked its whole batch and, through that, the ingest.
-EXTRACTION_TIMEOUT_SECONDS = 180
+# Set by VERBATIM_EXTRACTION_TIMEOUT, which this once hard-coded past.
+EXTRACTION_TIMEOUT_SECONDS = config.EXTRACTION_TIMEOUT
 # PDF text extraction can emit lone surrogates, which are valid Python str but
 # cannot be encoded as UTF-8. They reach neither SQLite nor the JSONL export.
 SURROGATES = re.compile(r"[\ud800-\udfff]")

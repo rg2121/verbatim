@@ -15,7 +15,6 @@ from verbatim import config
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
 
-JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 RELEVANT_LINE_PATTERN = re.compile(r"^RELEVANT:\s*(yes|no)\b", re.M | re.I)
 VERDICT_PATTERN = re.compile(r"\b(yes|no)\b", re.I)
@@ -283,7 +282,7 @@ class OllamaToolCaller:
 
 
 class OllamaCompletion:
-    """A local model served by Ollama.
+    """A model served by Ollama - a local one, or a `-cloud` one Ollama hosts.
 
     Structure is elicited with a flat line protocol rather than Ollama's
     `format` parameter or tool calling. See `complete` for the measurements
@@ -333,12 +332,13 @@ class OllamaCompletion:
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         """Elicit the answer as flat lines, then shape it like the JSON schema.
 
-        `schema` is deliberately unused. Measured on this machine's model:
-        tool calling produced the right structure on a one-passage prompt but
-        was ignored on every realistic five-passage prompt, as were both
-        `format: "json"` and a full JSON schema. The flat CITE-line protocol
-        parsed correctly on every attempt, so the backend elicits that and
-        converts it to the shape the caller expects.
+        `schema` is used only by the opt-in tools protocol. Measured on the
+        local 4B model: tool calling produced the right structure on a
+        one-passage prompt but was ignored on every realistic five-passage
+        prompt, as were both `format: "json"` and a full JSON schema. The flat
+        CITE-line protocol parsed correctly on every attempt, so by default
+        the backend elicits that and converts it to the shape the caller
+        expects.
         """
         if self.protocol == "tools":
             payload = self._complete_with_tools(system, user, schema)
@@ -636,18 +636,6 @@ def renumber_markers(
     text = MARKER_PATTERN.sub(rewrite, text)
     # Collapse the runs this can produce, e.g. "[1] [1]" or "[1][1]".
     return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", text)
-
-
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    """Pull a JSON object out of prose, tolerating ``` fences."""
-    match = JSON_OBJECT_PATTERN.search(text)
-    if match is None:
-        return None
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 SUBJECT_SYSTEM = (

@@ -8,7 +8,7 @@ import os
 import time
 from pathlib import Path
 import tempfile
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 from verbatim import config

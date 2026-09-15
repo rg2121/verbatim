@@ -116,3 +116,36 @@ def test_the_passages_used_are_returned_so_the_subject_check_still_runs(tmp_path
 
     assert parts == ["MOND clusters"]
     assert [m.chunk.arxiv_id for m in matches] == ["2608.11111v1"]
+
+
+def test_the_search_flags_reach_every_part(monkeypatch) -> None:
+    """`ask --plan` parsed --arxiv-id, --no-graph and the rest, then dropped them.
+
+    A question scoped to one paper was answered from the whole corpus.
+    """
+    import verbatim.research as module
+
+    seen: list[dict] = []
+
+    def record(corpus, embedder, part, **options):
+        seen.append(options)
+        return []
+
+    monkeypatch.setattr(module, "hybrid_search", record)
+
+    class Silent:
+        def complete(self, system, user, schema):
+            raise AssertionError("nothing was retrieved, so nothing is written")
+
+    module.research(
+        None, None, Silent(), reply("part one\npart two"), "q",
+        max_per_paper=5, arxiv_id="2608.11111v1", include_references=True,
+        use_graph=False, use_compare=True,
+    )
+
+    assert len(seen) == 2
+    for options in seen:
+        assert options["arxiv_id"] == "2608.11111v1"
+        assert options["max_per_paper"] == 5
+        assert options["include_references"] is True
+        assert options["use_graph"] is False and options["use_compare"] is True

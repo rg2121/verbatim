@@ -52,6 +52,9 @@ NO_EVIDENCE = "no evidence"
 THIN = "thinner than asked"
 NO_ADVERSARIAL = "no adversarial search run"
 
+# Recorded as a decision, but no worker runs.
+ABANDON = "abandon"
+
 PLANNER_SYSTEM = """You are given a research question. Break it into the things that must be established before it can be answered.
 
 Rules:
@@ -99,15 +102,19 @@ class TeamReport:
         The number that says whether the board is doing anything. A run where
         every task is satisfied by its first retrieval has a board that
         recorded work rather than directing it, and this reports zero.
+
+        Abandoning a task dispatches nothing, so it is not counted. It used to
+        be, which inflated the number on exactly the runs that gave up.
         """
-        first_pass = {t.task_id for t in self.state.tasks}
         seen: set[str] = set()
         extra = 0
         for decision in self.state.decisions:
+            if decision.action == ABANDON:
+                continue
             if decision.task_id in seen or decision.action != RETRIEVAL:
                 extra += 1
             seen.add(decision.task_id)
-        return extra if first_pass else 0
+        return extra
 
     @property
     def citations_from_adversarial(self) -> tuple[int, int]:
@@ -275,7 +282,7 @@ def run_team(
         if state.attempted(gap.task_id, worker):
             # Every worker this gap implies has already run on this task.
             # Retrying the same one is the blind retry the ledger forbids.
-            state.record("abandon", gap.task_id, f"{gap.kind}; {worker} already ran")
+            state.record(ABANDON, gap.task_id, f"{gap.kind}; {worker} already ran")
             state.close(gap.task_id, ABANDONED)
             continue
         state.record(worker, gap.task_id, f"{gap.kind}: {gap.detail}")

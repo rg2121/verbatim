@@ -349,3 +349,20 @@ def test_a_decline_does_not_claim_work_the_step_limit_prevented(
     assert "Every task it set came back" not in report.final.text
     assert "No task was worked before the team stopped." in report.final.text
     assert all(t.status == "open" for t in report.state.tasks)
+
+
+def test_abandoning_a_task_is_not_counted_as_a_redirection() -> None:
+    """No worker runs when a task is abandoned, so nothing was redirected.
+
+    It was counted, which inflated the number on exactly the runs that gave up.
+    """
+    from verbatim.team import ABANDON, TeamReport
+
+    state, task = board_with()
+    state.record(RETRIEVAL, task, "no evidence: nothing filed yet")
+    state.record(ABANDON, task, "thinner than asked; retrieval already ran")
+
+    assert TeamReport(state=state, answers={}).redirections == 0
+
+    state.record(ADVERSARIAL_SEARCH, task, "no adversarial search run")
+    assert TeamReport(state=state, answers={}).redirections == 1

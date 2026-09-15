@@ -356,3 +356,37 @@ def test_a_batch_clears_only_the_papers_it_covered(tmp_path: Path) -> None:
         assert [c.chunk_id for c in corpus.chunks_for_paper("2608.22222v1")] == [
             c.chunk_id for c in surviving
         ]
+
+
+def test_a_passage_reports_its_papers_licence_however_it_was_chunked(
+    tmp_path: Path,
+) -> None:
+    """A licence found after chunking must still reach every passage and citation.
+
+    Chunks copied a licence only from the download record, HTML chunks never
+    had one, and `licenses` usually runs after both. Measured on the full
+    corpus: 0 of 835,743 passages carried a licence while 7,869 of 7,921
+    papers had one, so every search result and citation said "no licence
+    reported" for papers whose licence was known.
+    """
+    from helpers import chunked_corpus
+    from verbatim.citations import citation_from_chunk
+
+    licence = "http://creativecommons.org/licenses/by/4.0/"
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        assert corpus.all_chunks()[0].license_url is None   # nothing known yet
+        corpus.record_license("2608.11111", licence)
+
+        searched = corpus.search_chunks("flux")[0].chunk
+        loaded = [
+            corpus.all_chunks()[0],
+            corpus.chunks_by_id([searched.chunk_id])[0],
+            corpus.chunks_for_paper("2608.11111v1")[0],
+            corpus.chunks_on_pages("2608.11111v1", [1])[0],
+            next(corpus.iter_chunks()),
+        ]
+        paper_record = corpus.get_paper("2608.11111v1")
+
+    assert searched.license_url == licence
+    assert all(chunk.license_url == licence for chunk in loaded)
+    assert citation_from_chunk(loaded[1], paper_record, "Magnetic flux").license_url == licence

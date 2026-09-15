@@ -4,7 +4,8 @@ Retrieval compares a query to passages it has already turned into vectors, so
 it never reads the two together. A cross-encoder does, which is the usual next
 step after hybrid retrieval.
 
-**Measured worse here, on all three models tried, and therefore off by default:**
+**Measured worse here, on all three models tried, and therefore off by default**
+(over the 42-case development set of the time; the finding did not depend on it):
 
     hybrid (no rerank)          r@1 0.90   mrr 0.940
     ms-marco-MiniLM-L-6-v2      r@1 0.67   mrr 0.752

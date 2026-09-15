@@ -625,3 +625,57 @@ def test_plain_ask_still_streams_tokens(tmp_path: Path) -> None:
     names = [name for name, _ in events]
     assert names.count("delta") == 2
     assert "working" not in names and "ladder" not in names
+
+
+def test_search_runs_the_graph_leg_the_other_front_ends_run(tmp_path: Path) -> None:
+    """The page's search skipped the leg the CLI, MCP and ask all default to.
+
+    A definitional question reached it drowned in usage, so the same corpus
+    answered "what is the Adam optimizer" differently depending on where it
+    was asked.
+    """
+    from test_graph import TermEmbedder, graph_corpus
+    from verbatim.embedding import embed_pending
+
+    with graph_corpus(tmp_path) as corpus:
+        embed_pending(corpus, TermEmbedder())
+
+    hits = TestClient(
+        create_app(tmp_path / "corpus.db", encoder=TermEmbedder())
+    ).get("/api/search", params={"q": "what is the adam optimizer?", "limit": 2}).json()
+
+    assert "1412.6980v1" in {hit["arxiv_id"] for hit in hits["results"]}
+
+
+def test_a_follow_up_is_answered_as_the_question_it_was_resolved_to(
+    tmp_path: Path,
+) -> None:
+    """The writer saw "why does it clip?" while retrieval saw the real question.
+
+    Deep mode already wrote to the resolved question; plain mode handed the
+    model a pronoun it had no way to resolve. The history itself still never
+    reaches the writer - only the standalone question built from it, which the
+    page shows the reader.
+    """
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["PPO clips its objective ratio."]}):
+        pass
+
+    prompts: list[str] = []
+
+    class Recording(StreamingScript):
+        def complete_text(self, system: str, user: str) -> str:
+            return "Why does PPO clip its objective?"
+
+        def stream(self, system, user):
+            prompts.append(user)
+            yield "ANSWER: It clips to bound the update.\n"
+
+    app = create_app(
+        tmp_path / "corpus.db", completion=Recording([]), encoder=StubEncoder()
+    )
+    history = json.dumps([{"question": "what is PPO?", "answer": "A policy method."}])
+    TestClient(app).get("/api/ask", params={"q": "why does it clip?", "history": history})
+
+    (prompt,) = prompts
+    assert "Question: Why does PPO clip its objective?" in prompt
+    assert "A policy method." not in prompt

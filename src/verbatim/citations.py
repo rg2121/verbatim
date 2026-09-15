@@ -61,7 +61,9 @@ def citation_from_chunk(chunk: Chunk, paper: Paper, quoted_text: str) -> Citatio
         source_kind=chunk.source_kind,
         section_path=chunk.section_path,
         source_url=chunk.source_url,
-        license_url=chunk.license_url,
+        # The paper's record is the authority: a chunk's own column is empty
+        # for HTML passages and for any licence looked up after chunking.
+        license_url=paper.license_url or chunk.license_url,
         retrieved_at=datetime.now(UTC).isoformat(),
     )
 

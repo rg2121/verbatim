@@ -17,6 +17,7 @@ needed splitting: three mediocre retrievals in place of one good one.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from verbatim.answers import Answer, Completion, answer_from_matches
 from verbatim.corpus import ChunkMatch, CorpusStore
@@ -77,18 +78,24 @@ def gather_for_parts(
     *,
     per_part: int = 4,
     max_per_paper: int | None = 2,
+    **search_options: Any,
 ) -> list[ChunkMatch]:
     """Retrieve for each part and keep every part's share of the passages.
 
     A quota per part rather than one fused ranking, because fusion lets the
     better-matching half of a compound question crowd out the other, which is
     the failure this exists to avoid.
+
+    `search_options` are hybrid_search's own - scope, filters, the gated legs -
+    and reach every part unchanged, so a question scoped to one paper stays
+    scoped when it is split.
     """
     collected: list[ChunkMatch] = []
     seen: set[str] = set()
     for part in parts:
         for match in hybrid_search(
-            corpus, embedder, part, limit=per_part, max_per_paper=max_per_paper
+            corpus, embedder, part, limit=per_part, max_per_paper=max_per_paper,
+            **search_options,
         ):
             if match.chunk.chunk_id in seen:
                 continue
@@ -106,6 +113,8 @@ def research(
     *,
     max_parts: int = 3,
     per_part: int = 4,
+    max_per_paper: int | None = 2,
+    **search_options: Any,
 ) -> tuple[Answer, list[str], list[ChunkMatch]]:
     """Answer a question by parts: the answer, the plan, and the passages used.
 
@@ -117,5 +126,8 @@ def research(
     that measured any use.
     """
     parts = plan_subquestions(complete_text, question, max_parts=max_parts)
-    matches = gather_for_parts(corpus, embedder, parts, per_part=per_part)
+    matches = gather_for_parts(
+        corpus, embedder, parts,
+        per_part=per_part, max_per_paper=max_per_paper, **search_options,
+    )
     return answer_from_matches(corpus, completion, question, matches), parts, matches

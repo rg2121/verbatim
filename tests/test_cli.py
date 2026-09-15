@@ -124,3 +124,71 @@ def test_breadth_authoring_refuses_to_overwrite_a_frozen_key(monkeypatch, tmp_pa
         run()
 
     assert "already exists" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "mode, flags",
+    [
+        ("--deep", ["--arxiv-id", "2608.11111v1"]),
+        ("--deep", ["--include-references"]),
+        ("--deep", ["--no-graph"]),
+        ("--tools", ["--arxiv-id", "2608.11111v1"]),
+        ("--tools", ["--no-graph"]),
+        ("--tools", ["--use-compare"]),
+        ("--tools", ["--plan"]),
+        ("--tools", ["--passages", "3"]),
+        ("--tools", ["--no-subject-check"]),
+    ],
+)
+def test_a_routed_ask_refuses_retrieval_flags_it_would_drop(
+    monkeypatch, mode: str, flags: list[str]
+) -> None:
+    """The ladder and the tool-choosing model pick their own retrieval.
+
+    Each of these was parsed and then silently ignored on that path - a search
+    the reader scoped to one paper came back from the whole corpus.
+    """
+    monkeypatch.setattr("sys.argv", ["verbatim", "ask", "what is Adam?", mode, *flags])
+
+    with pytest.raises(SystemExit) as raised:
+        run()
+
+    assert f"has no effect with {mode}" in str(raised.value)
+    assert flags[0] in str(raised.value)
+
+
+def test_chunk_reports_the_passages_it_actually_wrote(monkeypatch, capsys, tmp_path) -> None:
+    """The summary added HTML papers where it meant HTML passages.
+
+    A run that read one rendering into two passages reported one, so the line
+    a pipeline driver reads understated every HTML-first ingest.
+    """
+    from helpers import store_paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.downloads import file_sha256
+    from verbatim.html_source import HtmlSource
+
+    database = tmp_path / "corpus.db"
+    page = tmp_path / "paper.html"
+    page.write_text(
+        "<h1>T</h1><p>One passage.</p><h2>2 Method</h2><p>Another passage.</p>",
+        encoding="utf-8",
+    )
+    with CorpusStore(database) as corpus:
+        store_paper(corpus, tmp_path, "2608.11111v1")
+        corpus.record_html_source(HtmlSource(
+            arxiv_id="2608.11111v1", url="https://arxiv.org/html/2608.11111v1",
+            local_path=str(page), sha256=file_sha256(page),
+            byte_count=page.stat().st_size,
+        ))
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "chunk", "--state", str(database),
+        "--output", str(tmp_path / "chunks.jsonl"),
+    ])
+
+    run()
+
+    with CorpusStore(database) as corpus:
+        stored = len(corpus.all_chunks())
+    assert stored == 2
+    assert f"into {stored} new passage" in capsys.readouterr().out
