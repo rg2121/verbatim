@@ -25,11 +25,11 @@ Every passage carries the paper, the version, where in it, and the licence.
 
 ```
 1. arXiv:2305.14314v1  section 1 Introduction  [chars 3792-4991]  score 0.03
-   https://arxiv.org/abs/2305.14314v1  (no licence reported)
+   https://arxiv.org/abs/2305.14314v1  (http://creativecommons.org/licenses/by/4.0/)
    …QLoRA reduces the average memory requirements of finetuning [a] 65B parameter [model] from $>$ 780GB of [GPU]…
 
 2. arXiv:2305.14314v1  section 9 Broader Impacts  [chars 59456-60656]  score 0.03
-   https://arxiv.org/abs/2305.14314v1  (no licence reported)
+   https://arxiv.org/abs/2305.14314v1  (http://creativecommons.org/licenses/by/4.0/)
    …We have demonstrated that our best 33B [model] trained [on] the Open Assistant dataset [can] rival…
 
 ```

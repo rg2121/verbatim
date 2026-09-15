@@ -51,7 +51,10 @@ earns; measured behind a gate it does not. See
 
 ## Answering
 
-Retrieved passages go to a local model through Ollama, which replies in a flat
+Retrieved passages go to a model through Ollama - a local one, or a `-cloud`
+one whose prompts leave the machine
+([decisions/0010](decisions/0010-local-first-and-where-that-boundary-moved.md)) -
+which replies in a flat
 `ANSWER:` / `CITE` line protocol — documented structured-output mechanisms were
 measured unreliable on realistic prompts. Every citation is then checked: the
 quoted words must appear in the passage named, or the citation is rejected and
@@ -64,8 +67,11 @@ question), the evidence account under every answer, and the run ledger.
 
 ## Front ends
 
-CLI, FastAPI web, and an MCP server all call the same functions in `tools.py`,
-so they cannot drift apart. The web page adds streaming (`/api/ask`,
+CLI, FastAPI web and an MCP server share one retrieval and answering path
+(`retrieval.py`, `answers.py`); the MCP server and the tool-choosing agent also
+share the tool layer in `tools.py`. Sharing functions is not sharing defaults -
+the web search route once ran without the graph leg every other front end used -
+so the defaults each route passes are tested too. The web page adds streaming (`/api/ask`,
 `/api/report` over server-sent events) and a conversation whose history is used
 only to resolve a follow-up into a standalone question **before retrieval** —
 never given to the model that writes the answer, because prose from an earlier
@@ -98,6 +104,22 @@ whole run by tokens, seconds or attempts; exhausting it stops further work
 without discarding work already done. See
 [decisions/0007](decisions/0007-a-deterministic-supervisor.md) and
 [decisions/0011](decisions/0011-a-critic-that-describes-rather-than-judges.md).
+
+The same ladder runs in two more places. `ask --deep` climbs it for a single
+question, and `--supervisor langgraph` runs it as a LangGraph state machine
+behind the same contracts, sharing every role and the selection rule.
+
+Two further designs are different in kind, and both are off by default:
+
+- `team` puts workers around a shared evidence board. Workers append typed
+  records; code reads the board for what is structurally missing and that
+  decides which worker runs next, so one worker's findings redirect another's
+  work ([decisions/0013](decisions/0013-the-board-lives-for-one-run.md)).
+- `gaps` sets a Prospector that asserts an absence against a Falsifier rewarded
+  for refuting it with a verified quote, with an effort floor deciding whether a
+  failure to refute counts.
+
+Their measurements, including where they do not pay, are in the README.
 
 ## Testing
 

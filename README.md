@@ -99,7 +99,7 @@ Regenerate it from a full corpus with `verbatim sample --papers 40`.
 ## Daily corpus workflow
 
 ```bash
-uv run verbatim sync --category physics.gen-ph --max-results 5
+uv run verbatim sync --category physics.gen-ph --limit 5
 uv run verbatim download --limit 3
 uv run verbatim chunk
 uv run verbatim embed
@@ -759,7 +759,10 @@ interval alone was misleading.
 
 `--deep` subsumes `--tools` (the agent is its last rung), `--use-compare` (the
 router chooses) and `--plan` (the ladder answers one question rather than
-splitting it), and refuses each rather than ignoring it.
+splitting it), and refuses each rather than ignoring it. It refuses
+`--arxiv-id`, `--include-references` and `--no-graph` too, since each rung sets
+its own retrieval, and `--tools` refuses the retrieval flags its routing model
+decides for itself.
 
 The web page has the same thing as a **dig deeper** checkbox beside the ask
 box, off by default. Unchecked, nothing changes: the answer streams token by
@@ -1694,8 +1697,10 @@ permission:
 | `arxiv-nonexclusive` | arXiv's default: **arXiv** may distribute it, you may not |
 | `unknown` | not looked up yet, or the paper predates the field |
 
-Licence URLs are carried through to every chunk, and `--require-license`
-restricts downloads to papers that report one — but note it accepts
+Every passage and citation reports its paper's licence URL, read from the
+paper's catalogue record whenever the passage is loaded - so a licence looked
+up after chunking still reaches it. `--require-license` restricts downloads to
+papers that report one — but note it accepts
 `arxiv-nonexclusive` too, so it is not yet a reuse gate. The one place the
 policy *is* enforced in code is `distill`, below.
 
@@ -1836,7 +1841,7 @@ Each takes `--help` for its full options: `uv run verbatim <command> --help`.
 | `download` | Download a bounded set of PDFs from a metadata snapshot |
 | `html` | Fetch arXiv HTML renderings, which keep maths as LaTeX |
 | `references` | Read bibliographies from HTML renderings and rank what the corpus lacks |
-| `chunk` | Extract page-aware text chunks from downloaded PDFs |
+| `chunk` | Extract passages from HTML renderings, or from the PDF where there is none |
 | `embed` | Embed chunks that have no vector yet |
 | `index` | Reconcile the vector index |
 | `grow` | Add the papers this corpus cites most and does not hold |
@@ -1849,7 +1854,7 @@ Each takes `--help` for its full options: `uv run verbatim <command> --help`.
 
 | command | what it does |
 |---|---|
-| `search` | Keyword-search the chunked corpus |
+| `search` | Search the corpus: hybrid by default, or keyword or vector only |
 | `ask` | Answer a question from the corpus, with citations |
 | `report` | Write a sectioned literature review with verified citations |
 | `team` | Answer through a shared evidence board that decides what runs next |

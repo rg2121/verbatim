@@ -9,6 +9,8 @@ in this document.
 |---|---|---|---|
 | `evals/retrieval.jsonl` | 87 | alongside the system | development; drove every design decision |
 | `evals/heldout.jsonl` | 93 | blind, frozen before scoring | an unbiased estimate |
+| `evals/heldout-generated.jsonl` | 400 | by a model from title and abstract, frozen before scoring | a larger held-out sample, always reported apart from the hand-written batches |
+| `evals/breadth/questions.jsonl` | 24 | from two linked abstracts, under a pre-registered protocol | whether `team` earns its cost on two-paper questions |
 | `evals/gate.jsonl` | 12 | against the sample corpus | a CI tripwire, not a measurement |
 
 The development key's weakness is structural: a question that retrieved badly
@@ -131,8 +133,8 @@ similarity.
 Which limits the metric as much as the retrieval. Each held-out question names
 one acceptable paper because each was written from one abstract, so a correct
 answer drawn from a neighbouring paper scores as a miss. **0.758 is a floor.**
-Closing the gap needs a judgement about whether an answer is supported — an
-answer-level evaluation this project does not yet have.
+Closing the gap needs a judgement about whether an answer is supported, which
+is what the answer-level evaluation below measures.
 
 ## Scoring the answers, not the arXiv ids
 
@@ -482,6 +484,6 @@ uv run verbatim eval --cases evals/heldout.jsonl   # the honest number
 uv run python evals/paired_bootstrap.py                # the intervals
 uv run python evals/failure_taxonomy.py                # the failure labels
 uv run verbatim eval-answers --cases evals/heldout.jsonl --limit 20 --judge
-uv run python evals/three_arm.py 20 2                  # baseline vs workflow vs critic
+uv run python evals/three_arm.py --questions 20 --runs 2 --arms baseline,workflow,+critic
 uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90
 ```
