@@ -116,7 +116,7 @@ def test_a_limited_run_marks_what_it_took_and_leaves_the_rest_behind(
     sync. The name was also wrong: papers arrive newest-first and the mark only
     moves forward, so everything older than a limited run is behind the mark
     for good and a later, larger run fetches nothing. `--full` is what reaches
-    it. That is a real property of the design and is documented in the README;
+    it. That is a real property of the design and is documented in docs/guide.md;
     it is asserted here so the name cannot drift from the behaviour again.
     """
     feed = FakeArxiv(200)

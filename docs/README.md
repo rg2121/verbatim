@@ -3,6 +3,8 @@
 The README is the narrative: what this is, how to run it, and what was
 measured. These are the reference.
 
+- [guide.md](guide.md) — every ingest stage and front end in depth
+- [findings.md](findings.md) — what was built, measured and rejected, in full
 - [architecture.md](architecture.md) — what the pieces are and how they fit
 - [evaluation.md](evaluation.md) — how retrieval is measured, and what it scores
 - [decisions/](decisions) — why the load-bearing choices are what they are

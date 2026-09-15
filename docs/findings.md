@@ -1,0 +1,1051 @@
+# What was built, measured and rejected
+
+The long form of this project's results. Every feature here was measured
+against something simpler, and most of what is worth reading is what did not
+work. The evaluation keys and how to rerun them are in
+[evaluation.md](evaluation.md), the load-bearing choices in
+[decisions/](decisions), and how to use each feature in [guide.md](guide.md).
+
+What the project has learned is mostly what did *not* work: reranking, query
+rewriting, HyDE, always-on title matching and question decomposition were each
+built, measured, and left off, and a held-out answer key later showed that the
+differences used to rank several of them were inside the noise. Those
+measurements are in [evaluation.md](evaluation.md) and
+[postmortems](postmortems).
+
+- [A team around a shared evidence board](#a-team-around-a-shared-evidence-board)
+- [Saying what the corpus does not contain](#saying-what-the-corpus-does-not-contain)
+- [Two supervisors behind one set of contracts](#two-supervisors-behind-one-set-of-contracts)
+- [Orchestrating specialist roles](#orchestrating-specialist-roles)
+- [Saying what an answer rests on](#saying-what-an-answer-rests-on)
+- [What retrieval measures](#what-retrieval-measures)
+- [What a held-out set measures](#what-a-held-out-set-measures)
+- [What was tried and rejected](#what-was-tried-and-rejected)
+- [Known limitations](#known-limitations)
+- [Principles](#principles)
+
+## A team around a shared evidence board
+
+The ladder is a workflow: roles run in a fixed order and nothing one discovers
+changes what another does next. `team` is the other thing — workers append to a
+shared board, and **what runs next is read off the board**.
+
+```bash
+uv run verbatim team "how do sparse attention methods trade accuracy for memory?"
+```
+
+```
+  [satisfied] t1 Compare the memory usage of sparse attention versus dense attention
+      6 direct, 11 adversarial, 13 paper(s), 6 claim(s)
+
+  what the board made the coordinator do:
+    1. retrieval on t1 - no evidence: nothing filed yet
+    2. adversarial-search on t1 - no adversarial search run: an adversarial
+       search has not run
+
+  the board redirected work 3 time(s)
+  10 of 17 citation(s) rest on a passage only the adversarial search found
+```
+
+Four roles. A **coordinator** turns the question into tasks; a **retrieval
+worker** files supporting passages; an **adversarial worker** searches for
+limitations, failure cases and criticism; a **critic** reports what the board
+shows is missing. The writer may cite only what is on the board.
+
+**That last number is the point.** The board dedupes by passage and retrieval
+runs first, so an `adversarial` row is by definition a passage the supporting search
+never found. Ten of seventeen cited passages came only from the adversarial
+worker — including the limitation that *"sparse attention typically still
+requires maintaining a large KV cache"*, which a supporting-only search does
+not surface. One worker's findings changed what another could write, which is
+the line between a team and a pipeline.
+
+Three things keep it from becoming a place to hide judgements:
+
+- **The coordinator plans with a model and delegates without one.** Writing
+  tasks is writing; choosing what runs next is routing, and routing by model
+  was measured here losing to routing by rule. The same board always produces
+  the same next action.
+- **The critic is arithmetic** — tasks with no evidence, tasks thinner than
+  they asked for, tasks where no adversarial search has run. It does *not*
+  report that a claim rests on a single paper: that check was measured firing
+  on 5 of 14 good answers while catching 2 of 6 bad ones, so it is not raised.
+- **The adversarial worker retrieves; it never judges.** It writes adversarial
+  queries and files what they return. Asking a model whether a passage
+  undermines a claim is the judgement this project has measured failing.
+
+A worker is never sent twice at the same task — blind retry reproduces the
+fault that caused the first failure — and a task whose workers are exhausted is
+abandoned rather than reattempted.
+
+The per-task answers are working notes; a **final synthesis** answers the
+question that was actually asked, and may use only evidence a task answer
+*cited* — so a passage that survived retrieval and nothing else cannot reach
+the final text.
+
+### Measured against the simpler things, and it does not pay
+
+Three arms over 30 held-out questions, scored on the answer a reader gets:
+
+| out of 30 | baseline | ladder | **team** |
+|---|---|---|---|
+| answers with a verified citation | 26 | **28** | 26 |
+| every claim carries a marker | 24 | 24 | **25** |
+| cited the expected paper | 24 | **25** | 23 |
+| citations rejected | 2 | 2 | **1** |
+| **model calls per question** | **1.0** | 2.3 | **5.8** |
+| produced an answer at all | 30 | 30 | **29**\* |
+
+**The team costs 5.8× the baseline and buys nothing measurable here.** Paired
+per question it is better on 2 and worse on 2 for verified citations, and
+better on 2 and worse on 3 for finding the expected paper. It also failed to
+produce a final answer once, where both simpler arms always produced one.
+
+\* Fixed since: when no task answer cites anything, the team now declines in
+words instead of returning nothing, so that question gets an answer saying no
+passage could be cited. The table is the run as measured, before the fix. A
+declined answer carries no citations, so every other row would read the same;
+the cost row would move slightly, because that question's calls were not
+counted in the 5.8.
+
+So `team` is a command you reach for, not a default — the same verdict the
+critic got, on the same grounds.
+
+**But the metric cannot see what the team is for, and that is worth stating
+precisely.** Every held-out question was authored from *one* paper's abstract,
+so "cited the expected paper" asks whether one specific paper was found. A team
+that gathers limitations from thirteen papers earns nothing for it. 63 of its
+144 citations rested on passages *only* the adversarial search found — the
+answers genuinely rest on different, broader evidence, and this key has no
+column for that.
+
+That is an explanation, not a defence. An unmeasured benefit is not a benefit,
+and until there is a question set where breadth and counter-evidence are what
+correctness means, the honest statement is that the team costs six times more
+for no measured gain.
+
+Two limits stated rather than implied. `adversarial` is a **retrieval stance,
+not a proven contradiction**: it means an adversarial query returned this
+passage, and whether it undermines anything is a judgement the board refuses to
+make. And the board **lives for one run** — see
+[decision 13](decisions/0013-the-board-lives-for-one-run.md) for the
+tables that would persist it and the three triggers for building them.
+
+### A test built for what the team is for
+
+The held-out key cannot see breadth, and building a new key after watching the
+team lose is how a benchmark gets rigged. So the second test was fixed before
+it existed: [evals/breadth/PROTOCOL.md](../evals/breadth/PROTOCOL.md) was committed
+on its own before any question, the questions are committed before any arm
+runs, and the scoring script will not read which arm wrote which answer until
+the human scores are committed too.
+
+24 questions, each written blind from the titles and abstracts of two papers
+joined by a citation edge, and each needing both: comparisons, limitations and
+syntheses, eight of each. The three arms run as they ship. Four measures are
+mechanical - whether both papers were cited, how many papers were, rejected
+citations, and cost. Three are scored by a person who is not told which arm
+wrote which answer: coverage, balance, and whether a limitation was surfaced
+with a citation behind it. The decision rule is written down in advance: the
+team earns its cost only by beating **both** simpler arms on a primary measure
+at p < 0.05, without losing significantly on any.
+
+```bash
+uv run verbatim author-cases --breadth   # the frozen questions (written once)
+uv run python evals/breadth_arms.py          # answers -> evals/results/ (gitignored)
+uv run python evals/breadth_sheet.py         # the blind sheet, a local HTML page
+# score every answer, save the download as evals/breadth/labels.json, commit it
+uv run python evals/breadth_score.py         # the verdict, once the scores are committed
+```
+
+Answers and the sheet stay in the gitignored results folder, because they quote
+papers under mixed licences; what gets committed is questions, scores and the
+aggregate result.
+
+**Status: answers in, awaiting blind human scoring - no verdict yet.**
+
+The mechanical measures, computed before any scoring:
+
+| out of 24 | baseline | ladder | team |
+|---|---|---|---|
+| cited both required papers | 3 | 3 | **7** |
+| distinct papers cited, mean | 1.7 | 2.0 | **2.5** |
+| citations rejected | 3 | 2 | 2 |
+| model calls per question | **1.0** | 3.6 | 6.8 |
+
+On the one mechanical primary measure the team is ahead and **not
+significantly so**. Paired per question, it cites both papers where the
+baseline does not on 4 questions and the reverse on none (p = 0.125), and
+against the ladder 5 to 1 (p = 0.219). On 16 of the 24 questions no arm cited
+both papers at all - which says as much about how hard two-paper coverage is
+for retrieval as about any arm.
+
+The team does draw on more papers - more than the baseline on 13 questions and
+fewer on 2 (p = 0.007). That measure was not pre-registered as primary, and
+promoting it now that it came out significant is exactly the move the protocol
+exists to stop. It is context, not a result.
+
+Whether the team earns its cost now rests on the two human primary measures,
+coverage and limitations, which are scored blind.
+
+## Saying what the corpus does not contain
+
+The founding flaw of this project is that it answers questions nothing in the
+corpus can answer. Seven detectors have been measured on that and all seven
+scored zero, always for the same reason: absence is not a property of any
+passage, so looking at passages cannot reveal it.
+
+`gaps` is not an eighth detector. It is two agents with opposing goals.
+
+```bash
+uv run verbatim gaps "sparse attention for long context"
+```
+
+```
+  3 gap(s) proposed, 1 refuted, 1 stood, 1 unproven
+
+  [STANDS]   no paper evaluates sparse attention on multilingual retrieval
+             the falsifier tried 4 queries, 18 papers, 23 passages
+
+  [REFUTED]  no paper evaluates the effect of sparse attention on the accuracy
+             of autonomous agentic systems
+             refuted by 2601.07978v4: "CASK reduces inference-time memory in
+             MAS through a dynamic sparse attention module..."
+
+  [unproven] no paper compares pi-Attention against Compressed Sparse Attention
+             the falsifier reached 7 papers against a floor of 8
+```
+
+A **Prospector** asserts the absence; a **Falsifier**, given only the claim and
+its own retrieval budget, is rewarded for destroying it. One paper is enough.
+A claim that survives a genuine attempt to refute it is evidence in a way that
+"I looked and did not find it" never is — and that asymmetry is why this needs
+two agents rather than a better detector.
+
+Two things keep it honest and both are arithmetic. **A refutation must be a
+verified quote**, through the same check as every citation here. And **the
+referee counts effort**: the third verdict above is the design defending itself
+on its first real run, refusing to confirm a gap from a search that reached
+seven papers.
+
+**Measured by planting gaps whose answer is known** — write a claim a real
+paper refutes, then run the Falsifier with that paper reachable and with it
+hidden:
+
+| out of 25 planted gaps | |
+|---|---|
+| refuted when the paper was reachable | **23 (92%)** |
+| missed evidence that was there | 2 |
+| still refuted with the paper hidden, by a neighbour | 4 |
+
+**Falsifier recall 92%, 95% interval [75%, 98%]** — which is what licenses
+reading a standing gap as **nothing found by an opponent who tried**, rather
+than as a failed search. It is not proof of absence. Both misses
+cleared the effort floor and were wrong anyway, so **about one standing gap in
+twelve is false**; the referee catches a thin search, not a thorough one that
+looked in the wrong place.
+
+The first version of this measured 100%, and that was an artifact: the claims
+were written from each paper's abstract and two-thirds borrowed its phrasing,
+handing the Falsifier the words it needed. The filter that caught it is the one
+already used on the held-out eval key. See
+[docs/evaluation.md](evaluation.md).
+
+## Two supervisors behind one set of contracts
+
+The orchestrator's roles are Protocols — planner, retriever, writer, verifier,
+critic. For as long as one implementation consumed them, that was a claim about
+the design rather than a property of it. There are two now:
+
+```bash
+uv run verbatim report "sparse attention" --agents                        # built-in loop
+uv sync --extra langgraph
+uv run verbatim report "sparse attention" --agents --supervisor langgraph  # LangGraph
+```
+
+The second is the same ladder as a `StateGraph`: the roles are nodes, and the
+escalation the built-in supervisor writes as a `for` loop is a conditional edge
+back to the retriever. Both call the same retrieval, the same verified-answer
+path, the same deterministic verdict and the same selection rule. They differ
+in control flow and nothing else.
+
+Offline, with the model scripted so nothing is left to chance, both are
+asserted to reach the same section by the same route — for an escalation that
+succeeds and one that ends in a gap.
+
+On the real corpus over 60 held-out questions:
+
+| out of 60 | built-in | LangGraph |
+|---|---|---|
+| answered with a verified citation | 55 | **55** |
+| cited the expected paper | 51 | **51** |
+| model calls, total | 138 | 140 |
+| identical route | **57 of 60** | |
+
+Three routed differently — which on its own means nothing, because generation
+is not deterministic. **So the control is the same supervisor run twice: it
+agrees with itself on 55 of 60.** The built-in supervisor disagrees with
+*itself* more often than it disagrees with LangGraph. The divergence between
+the two implementations is below the model's own run-to-run variation.
+
+That is what makes the contracts a boundary rather than a diagram. LangGraph
+stays an **optional extra**: a default install has seven direct dependencies
+and none of it, because a local-first project should not oblige anyone to pull
+a framework tree to answer a question.
+
+## Orchestrating specialist roles
+
+`report --agents` is the multi-agent version of the review, and it was
+designed from what the 2026 literature agrees on rather than from enthusiasm.
+Published orchestrator-workers systems and the LangGraph benchmark both find
+that an orchestrator delegating to parallel specialists beats a single agent
+on breadth-first work, at a cost of 3 to 15 times the tokens; the same systems
+keep citation checking in a separate agent, because one agent both writing
+and checking plays "a game of telephone". Magentic-One's orchestrator keeps a
+ledger of progress and retries on error, and OrchestraBench (arXiv:2608.05263,
+held in this corpus) shows why the ledger matters: blind retry reproduces
+latent faults, and containment needs detection *with attribution*. The
+MAST taxonomy finds most multi-agent failures are design failures - weak
+specification, misaligned roles, missing verification - not model failures.
+And the guidance on when to split at all is to divide by *context*, not by
+problem type: facets that share context belong to one agent.
+
+That last rule explains a result in this file. Splitting one question into
+sub-questions lost on its own compound cases, because the parts share the
+question's context and divide its retrieval budget. A review's *sections*
+share a topic and nothing else, which is exactly the split the literature
+says parallel workers are for.
+
+So the roles here differ in kind, not in subject, and the supervisor is code:
+
+| role | who | what it does |
+|---|---|---|
+| planner | model | one call, section questions as flat lines |
+| router | code | the section's shape picks a ladder of strategies |
+| retrievers | code, and the tool-choosing agent as the last rung | `hybrid` (graph gate inside), `compare`, `titles`, `agent` |
+| writer | model | the existing verified-citation path, unchanged |
+| verifier | code | the quote check, plus the describe-then-compare subject check |
+| critic | code, model-assisted | uncited claims by counting; uncovered subjects and conflicts proposed by a model and then checked |
+| discloser | code | what the section rests on: passages, papers, subject, named-after paper |
+| supervisor | code | ledger, retries, containment, parallel sections, assembly |
+
+The verifier never asks a model whether a section is good: asked that, every
+model tested here says yes. A section is accepted on numbers - at least one
+citation survived verification and the passages are on-subject - and
+otherwise retried with the *next* strategy on its ladder, so a retry is never
+the same retrieval twice. The best attempt is kept, not the last, since an
+escalation can retrieve worse than what it replaced. The supervisor forwards
+each verified answer untouched, because the LangGraph benchmark's dominant
+failure mode was the supervisor's own paraphrasing. Every attempt goes into
+a ledger that the review prints as its final section, so a reader can see
+which strategy each section took, what verified, and what was retried. The
+agent rung records the tools it actually called (`via search_chunks(...) ->
+get_paper(...)`), because it is the only rung whose behaviour varies question
+to question, and a ledger that says a rung ran without saying what it did is
+the attribution OrchestraBench found containment needs.
+
+A rung that *errors* - an unreachable model, a corpus fault - is recorded as a
+failed attempt and the ladder carries on to the next strategy. One dead
+section no longer discards a review that took ten minutes to write, and the
+outcome distinguishes the two cases that matter: a section nothing could
+support is a **gap**, which is a claim about the corpus, while a section whose
+strategies fell over is a **failure**, which is a claim about the machinery
+and says nothing about the corpus at all.
+
+Every section also prints what it rests on - passages, papers, what those
+passages are about - by the same rule the single-answer path follows: always,
+not on a threshold, because the case a threshold would catch is the one no
+threshold sees.
+
+The plain `report` is now this same loop with a single rung and no
+escalation, rather than a second copy of it. The two had already drifted once:
+the orchestrated path gained containment and disclosure and the deterministic
+one did not. `--use-compare` is refused with `--agents` rather than silently
+ignored, since with a shape router there is no section-independent strategy to
+force.
+
+Sections run in parallel with `--workers N`, each thread on its own SQLite
+connection. **Measured, it buys nothing here:** a four-section review took
+424s with one worker and 423s with three. Ollama serves one request to a model
+at a time unless `OLLAMA_NUM_PARALLEL` is raised, so the workers queue behind
+the same server and the wall clock is set by generation either way. The
+orchestration costs nothing measurable, and it earns nothing either.
+
+Both `ask` and `report` now close with what the run cost - model calls, tokens
+in and out, and seconds spent inside the model, which Ollama returns on every
+call and this project was discarding. The orchestrator's entire case is a
+cost/benefit argument, and it was being made without the cost.
+
+That is worth stating plainly because the literature's headline claim for
+multi-agent systems is throughput through parallelism. On a single local model
+server that claim does not transfer: the parallelism has nowhere to go. What
+does transfer here is the *other* half - routing by shape, retrying with a
+different strategy, and refusing to accept a section on a model's say-so -
+and those are measured in the tables above. Raise `OLLAMA_NUM_PARALLEL`, or
+point the writer at a server that batches, and `--workers` becomes worth
+having; until then it is off by default at one worker.
+
+**Measured, three more ways.** First the router: `hybrid+routed` - both
+shape gates on, which is every section's first rung - scores exactly
+`hybrid+graph` on the single-subject table (0.81 / 0.95 / 0.97 / mrr 0.869)
+and exactly `hybrid+compare` on the compound table (cov@10 0.73, all@10
+0.55). The gates compose without touching each other's questions; that was
+predicted, and is now a row.
+
+Second, the orchestrated review against the deterministic one on a topic the
+corpus covers well ("reinforcement learning for reasoning in large language
+models", four sections each): `report` took 343 s; `--agents` took 411 s
+with one worker and 395 s with two, and **every section was accepted on its
+first rung** in both runs. Zero escalations, so on this topic the
+orchestrator bought a ledger and nothing else, at about 20% more time - the
+same conclusion as the timing above, reached again. (The planner is a model,
+so the sections differ between runs; these are not controlled pairs.)
+
+Third, the measurement the ladder exists for: a topic the corpus covers
+unevenly ("comparing MOND and dark matter in galaxy clusters, and what Planck
+2018 constrains"). The deterministic review took 360 s and produced a fluent,
+fully cited section on Planck constraints that never mentions MOND. The
+passages are about Planck, so the subject check passed it at 0.77 - it
+answers a question the section did not ask. The orchestrated review took
+841 s. Its Planck-constrains-MOND section was retrieved three ways -
+`hybrid`, `titles`, then the tool-choosing `agent` - and the writer declined
+to cite anything all three times, so the verifier read zero verified
+citations, the ladder ran out, and the section says so:
+
+> The passages do not contain information regarding the extent to which
+> Planck 2018 cosmological constraints limit the viability of MOND when
+> applied to cluster dynamics.
+
+That reads like the `no_answer` case - subject covered, question unanswered -
+finally being caught. **Measured against the answer key, it is not.** Every
+one of the four labelled `no_answer` questions was *accepted* by the ladder:
+
+| class | gap declared |
+|---|---|
+| `no_answer` | **0 / 4** |
+| `no_coverage` | 6 / 9 |
+| answerable | **0 / 25** |
+
+The four are accepted because the corpus really does hold passages about
+tensors and about cosmology, the writer really can quote them, and the quotes
+really do verify. Verification asks whether the words are there, not whether
+they answer, so a covered-but-unanswered question sails through exactly as it
+always did.
+
+What the verdict does detect is a *coverage* gap, at 6 of 9 with no false
+declaration in 25 answerable questions. That precision is real and the recall
+is not new: all six are cases the subject check already catches, and the three
+it misses - Venus, cuprates, solar panels - are a superset of the subject
+check's two misses. As a detector it is a strict subset of one that costs a
+single call instead of three retrievals and three generations.
+
+So the Planck-and-MOND section above is a narrower thing than it appears: no
+passage supported that specific intersection, which is a local absence rather
+than the `no_answer` class. Worth having, because a review that says "the
+corpus does not answer this" beats one that answers something else - but it is
+a gap declared about one claim, not a solution to the open problem.
+
+So `--agents` stays off by default and is worth turning on when the topic is
+one the corpus might not fully cover - which is when the ledger earns its
+appendix. The keyword router is the known weak point: OrchestraBench found
+flag routers score zero on adversarially phrased tasks, and the tool-choosing
+agent on the last rung is the intent-reasoning fallback for exactly that.
+
+## Saying what an answer rests on
+
+Seven approaches have now tried to *detect* the covered-but-unanswered case,
+and all seven measured 0 on the labelled cases. The reason does not change:
+the passages really are on the subject and the quotes really do verify, so
+nothing in retrieval or verification can separate a question that was answered
+from one that was not.
+
+So `ask` stops trying to decide, and reports instead. Every answer carries a
+short, deterministic account of what it was written from - how many passages,
+in how many papers, what those passages are about, and, for a question asking
+what something *is*, the paper the subject is named after when the corpus holds
+one:
+
+```
+The passages provided do not define what a tensor is.
+  Answered from 8 passages in 8 papers.
+  Those passages are about: Tensor properties and their architectural implications.
+```
+
+The subject line used to appear only when similarity fell below 0.65. It is
+now always shown, because the case it would catch is exactly the case no
+threshold sees.
+
+One line was built, measured and removed: the negative of the named-after
+fact - "no paper here is named after X". It fired on all 4 `no_answer` cases,
+and on **13 of the 19** definition-shaped answerable ones. True every time and
+useless: a line that fires on two thirds of good answers is one readers learn
+to skip, which is the same reason the subject threshold was not raised to
+0.79. Its absence is left to speak for itself.
+
+## What retrieval measures
+
+Over 87 cases - 63 answerable, 9 coverage gaps, 4 covered but unanswered,
+11 compound (scored in their own table below) - across 7,921 papers and
+835,743 vectors:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| keyword-all | 0.38 | 0.40 | 0.40 | 0.389 |
+| keyword-any | 0.62 | 0.81 | 0.86 | 0.705 |
+| vector | 0.76 | 0.89 | 0.92 | 0.818 |
+| hybrid | **0.81** | 0.94 | 0.95 | 0.866 |
+| **hybrid+graph** (default) | **0.81** | **0.95** | **0.97** | **0.869** |
+
+`hybrid+graph` adds a citation-graph leg that fires only on definition-shaped
+questions ("what is X", "define X"), and only when a title-matched paper is
+cited by at least two held papers - the corpus itself testifying that this is
+the paper the subject is named after. Across the 63 answerable cases it
+changes exactly three: "what is the Adam optimizer" goes from found-nothing to
+rank 3, BERT's definitional question from rank 2 to 1, and "what is artificial
+intelligence" from rank 1 to 3. Every other case is untouched, which is what
+separates it from the always-on title leg below.
+
+Eleven further cases are **compound**: "compare the post-training pipelines of
+Qwen3 and Llama 3" is not answered by ten excellent passages about Qwen3.
+These are scored by coverage - the fraction of a question's required papers
+found - and completion, never by first hit, and they are kept out of the table
+above so its numbers stay comparable across measurements.
+
+| mode | cov@5 | all@5 | cov@10 | all@10 |
+|---|---|---|---|---|
+| hybrid | 0.41 | 0.09 | 0.59 | 0.36 |
+| hybrid+graph | 0.41 | 0.09 | 0.59 | 0.36 |
+| hybrid+plan | 0.36 | 0.09 | 0.59 | 0.36 |
+| hybrid+titles | **0.64** | **0.45** | 0.68 | 0.45 |
+| **hybrid+compare** | 0.59 | 0.36 | **0.73** | **0.55** |
+
+Three findings. The default mode fully covers a multi-paper question 36% of
+the time - a failure first-hit metrics cannot see, since ten perfect passages
+about PPO score 1.0 on "how does GRPO differ from PPO". The mode that rescues
+most of it is the title leg that single-subject questions measured off. And
+gating that leg to comparison-shaped questions (`--use-compare`) beats both
+parents at depth while provably not touching the single-subject table -
+though it stays off by default, because the key holds no comparison-shaped
+single-paper questions to measure its cost on. Details, and decomposition's
+loss on its home turf, under *What was tried and rejected*.
+
+An earlier version of this file reported mrr 0.940. That was a 42-case set,
+mostly paper titles, over a corpus chunked from PDFs. Scoring those same 42
+cases on today's corpus gives **mrr 0.917, r@5 0.98** - so reading papers from
+HTML, carrying tables as their own passages and growing the corpus by 370
+papers left retrieval where it was. The headline number is lower because the
+answer key is harder: the 21 cases added since score mrr 0.764, and eight of
+them are definitional questions of the kind this corpus is worst at.
+
+## What a held-out set measures
+
+Everything above was measured on an answer key written alongside the system.
+That is a real weakness and not a small one: a question that retrieved badly
+could be reworded until it did not, and no amount of care rules that out from
+the inside. So a second key was built to be uncontaminated -
+`evals/heldout.jsonl`, 93 cases authored from each paper's title and abstract
+only, with no retrieval run against any question, committed before it was
+scored, and reported at whatever it scored. Papers were picked by a fixed rule
+before any question existed, excluding every paper already in the development
+key and every subject probed by hand while building the system. 88 answerable
+cases over 88 distinct papers in 29 categories. A second file,
+`evals/heldout-generated.jsonl`, adds 400 more under the same rule — see
+[below](#several-hundred-cases-and-what-they-settled), and note that the two
+are kept apart because how a batch was authored moves its score more than any
+retrieval mode does.
+
+| mode | r@1 | r@5 | r@10 | mrr | mrr on the development key |
+|---|---|---|---|---|---|
+| keyword-any | 0.62 | 0.76 | 0.84 | 0.697 | 0.705 |
+| hybrid+titles | 0.65 | 0.85 | 0.92 | 0.737 | 0.822 |
+| hybrid+compare | 0.68 | 0.85 | 0.92 | 0.752 | 0.866 |
+| vector | 0.69 | 0.83 | 0.90 | 0.756 | 0.818 |
+| hybrid | 0.68 | 0.85 | 0.92 | 0.758 | 0.866 |
+| hybrid+graph *(default)* | 0.68 | 0.85 | 0.92 | 0.758 | 0.869 |
+
+**The development numbers are inflated by about an eighth.** The shipped
+default scores mrr 0.869 there and **0.758** here, on questions of the same
+kind over the same corpus. The difference is not the retrieval; it is that one
+set of questions was written while watching the retrieval and the other was
+not. Every figure in the section above should be read with that discount.
+
+**And none of these modes can be told apart.** Reciprocal rank was recorded
+per case and the modes compared pairwise, with a 10,000-round paired bootstrap
+over the 88 cases:
+
+| comparison | difference | 95% interval | |
+|---|---|---|---|
+| graph − hybrid | +0.000 | [+0.000, +0.000] | the gate never fires here |
+| graph − compare | +0.006 | [−0.014, +0.028] | not distinguishable |
+| graph − titles | +0.021 | [−0.034, +0.075] | not distinguishable |
+
+Every interval straddles zero. At this sample size a difference of a few
+hundredths of mrr is indistinguishable from noise, and the differences this
+file has been reporting are smaller than that: `hybrid+graph` was made the
+default over `hybrid` on **0.003** mrr across 63 cases, which the interval
+above says is unmeasurable. That is a fair criticism of the reasoning, and it
+stands whatever the gate's other merits.
+
+The gates are still defensible - just not on aggregate mrr. The graph gate
+exists to fix definitional questions, and it does: "what is the Adam
+optimizer" goes from nothing in the top ten to rank 3, which is visible in the
+case and invisible in a mean over 63. An aggregate cannot see three cases
+move. The honest statement is that a gate targeted at a question shape should
+be judged on that shape, and that the corpus-wide number was never evidence
+either way.
+
+Two things this set cannot decide. It is **silent on the graph gate** by
+construction - it contains no definition-shaped questions, so the leg is inert
+and the difference is exactly 0.000, which at least confirms the scoping does
+what it claims. And it cannot settle whether `hybrid+titles` should be the
+default: the first 36 cases had it winning by 0.052, the next 52 had it losing
+by 0.071, and the pooled interval contains zero. That swing between batches is
+itself the most useful number here, because it is far larger than any
+difference between modes. Deciding this needs several hundred cases, not
+another fifty.
+
+### Several hundred cases, and what they settled
+
+`verbatim author-cases` wrote **400 more**, from titles and abstracts
+only, frozen and committed before being scored. The rule is structural rather
+than promised: `authoring.py` imports nothing that can search, and a test
+parses its imports and fails if that changes. A module that cannot retrieve
+cannot check a question before keeping it.
+
+**A quarter of what a model writes from an abstract borrows its wording.** Of
+536 candidates, 134 were rejected for sharing a five-or-more-word run with
+their abstract — which is a passage in this corpus, so they would have been
+retrieved for that reason alone. The threshold came from the existing set, not
+from taste: the hand-authored cases share a median run of 2 words and at most
+6.
+
+**The batch swing is real, and bigger than first thought.**
+
+| batch | cases | hybrid mrr |
+|---|---|---|
+| hand-authored, first | 36 | 0.675 |
+| hand-authored, second | 52 | 0.816 |
+| generated | 400 | 0.918 |
+
+So **an absolute mrr means nothing without naming its batch**, and figures from
+different batches must never be compared. Every held-out number above is the
+88-case pooled figure and should be read as belonging to those two batches.
+
+**But rankings replicate where absolute scores do not**, and that is what makes
+the set useful. Default against the always-on title leg:
+
+| batch | cases | difference | won–lost | sign test |
+|---|---|---|---|---|
+| hand, first | 36 | −0.052 | 6–7 | p = 1.00 |
+| hand, second | 52 | +0.071 | 13–0 | p = 0.0002 |
+| generated | 400 | +0.019 | 38–19 | p = 0.016 |
+| **all 488** | 488 | **+0.019** | **57–26** | **p = 0.0009** |
+
+**This is the first mode comparison here that says anything.** The title leg is
+reliably worse — it loses twice as often as it wins, replicated in both
+batches that carry any signal, and the batch that disagrees carries none.
+
+Reported as *direction*, not magnitude: the mean difference is 0.019 with an
+interval that still touches zero, so the verdict line reads NOT
+distinguishable. Both halves are true, and the strict verdict is kept on
+purpose — that rule exists to stop a percentile bound being read as a result,
+which is a mistake this project made once and wrote down.
+
+The graph gate still fires on **none of the 488**: `hybrid+graph` returns
+rankings identical to plain `hybrid` on every case, because authoring blind
+cannot produce definitional questions. It remains justified by the shape it
+targets and by nothing in these tables. The comparison gate fires on 6 of 488,
+wins 5, and 5–1 is p = 0.22.
+
+So `hybrid+graph` remains the default — now because the one alternative the
+set can judge is measurably worse on direction, and the rest remain undecided,
+which is a better reason than being the incumbent.
+
+### What the misses actually are
+
+A mean says how often the right paper is found and never what happened the
+rest of the time. `evals/failure_taxonomy.py` labels every held-out case from
+three mechanical signals - where the expected paper ranked, how much of the
+question's vocabulary appears anywhere in that paper, and how similar the
+paper that took first place is to the expected one by abstract vector:
+
+| | share | |
+|---|---|---|
+| ranked first | 60 | 68% |
+| ranked 2-5 | 15 | 17% |
+| ranked 6-10 | 6 | 7% |
+| missed, a near neighbour took first place | 5 | 6% |
+| missed, unexplained | 2 | 2% |
+| **missed because the question's words are not in the paper** | **0** | **0%** |
+
+That last row was the expected answer and it is empty. The guess going in was
+that authoring questions without the title's phrasing had produced questions
+too abstract to match - and it is wrong. Vocabulary coverage across every
+failure runs from 0.67 to 1.00: the words the question uses are in the paper
+already. Nothing here is a lexical gap.
+
+What the failures are instead is competition. The paper that took first place
+is topically adjacent in almost every case - abstract similarity 0.62 to 0.95
+to the paper the question was written from - so the corpus holds several
+papers on the subject and the ranking cannot separate near-equals. For "how do
+graph-based item embeddings compare with identifier-based ones", several
+papers here are about item embeddings, and only one of them is the one the
+question was authored against.
+
+Which exposes a limit of the metric rather than of the retrieval. Each
+held-out question names exactly one acceptable paper, because each was written
+from one abstract, so a genuinely correct answer drawn from a neighbouring
+paper is scored as a miss. The 0.758 is therefore a floor on how often the
+system retrieves something that answers the question, and the gap between that
+floor and the truth is exactly the 6% of cases where a near neighbour won.
+Closing it needs a judgement about whether an answer is supported, not a
+comparison of arXiv ids - which is what `eval-answers` measures:
+
+```bash
+uv run verbatim eval-answers --cases evals/heldout.jsonl evals/heldout-generated.jsonl --sample 120 --runs 2
+```
+
+Over **120 questions drawn evenly from all three authoring batches, answered
+twice** - 240 answers:
+
+| | |
+|---|---|
+| declined outright | 0% |
+| at least one verified citation | **92%** |
+| every claim-carrying sentence has a marker | **88%** |
+| cited the paper the question was written from | **88%** |
+
+Retrieval puts the expected paper first 68% of the time; the *answer* cites it
+88% of the time, because it can draw on any of the eight passages rather than
+only the top one. The floor was a floor.
+
+**And the run-to-run instability turned out to be the sample.** This used to be
+reported as ranges - twenty questions answered twice gave 90% then 80%, and
+that was put down to generation being non-deterministic. At 120 questions both
+runs scored 111/120, exactly. Generation is still non-deterministic and
+individual answers still differ; what was unstable was a 20-case denominator,
+where two answers moving shifts the number ten points. See
+[docs/evaluation.md](evaluation.md) for the per-batch split, which follows
+the same ordering retrieval shows.
+
+The two unexplained misses are worth naming rather than rounding away:
+a cleaning-robot path-planning question and one about the analytic
+continuation of a power series, where the top result is unrelated by abstract
+similarity (0.67 and 0.72) and no signal here accounts for it.
+
+A twelve-question tripwire over the shipped sample corpus runs in CI on every
+push and fails the build below mrr 0.90 (`evals/gate.jsonl`). It is coarse by
+construction - twelve plainly distinct papers out of forty - and it exists to
+catch retrieval breaking, not retrieval slipping. A measurement nothing
+enforces is a claim rather than a guarantee.
+
+## What was tried and rejected
+
+Kept here because the negative results are the useful part.
+
+**Asking a model whether passages are relevant does not work.** Four variants
+were measured against questions the corpus cannot answer. Every one failed the
+same way: the passages were retrieved *because* they matched, and the model
+reads that as evidence they are relevant.
+
+| approach | declines correctly | keeps real answers |
+|---|---|---|
+| no check at all | 2/6 | 14/14 |
+| verdict inside the answering call | 1/6 | 13/14 |
+| separate judging call, 4B model | 2/6 | 14/14 |
+| separate judging call, 13.8GB model | 0/6 | 14/14 |
+| require two supporting papers | 4/6 | 8/14 |
+
+Corroboration also fails as a *warning*, not just as a gate: it fires on 5 of 14
+good answers while catching 2 of 6 bad ones, and catches nothing the subject
+check misses. Combining the two is strictly worse than the subject check alone.
+
+The bigger model was worse, so this is not a matter of model size. What does
+work is not asking the question: ask only what the passages discuss, and compare
+that to the question arithmetically.
+
+**Splitting the label showed the subject check was being scored against a
+question it cannot answer.** Once `expect_none` was separated into "no paper
+is about this" and "the subject is covered and the question still has no
+answer", the same subject check that had scored 3/6 against the mixed label
+turned out to work on one kind and be blind to the other:
+
+| kind | cases | caught | similarity range |
+|---|---|---|---|
+| `no_coverage` | 9 | **7** | 0.431 - 0.782 |
+| `no_answer` | 4 | **0** | 0.769 - 0.853 |
+
+Raising the threshold to close the gap is not worth it, and that is measured
+rather than assumed. Against the 63 answerable cases:
+
+| threshold | gaps caught | false warnings |
+|---|---|---|
+| **0.65** (current) | **7/9** | **1/63 (2%)** |
+| 0.70 | 7/9 | 5/63 (8%) |
+| 0.75 | 8/9 | 16/63 (25%) |
+| 0.79 | 9/9 | 27/63 (43%) |
+
+Catching the last two costs a warning on 43% of correct answers, and a warning
+that fires that often is one people learn to ignore - which would cost the
+seven it already catches. 0.70 buys nothing at four times the false-warning
+rate. The default stays at 0.65 because it was measured, not because it was
+chosen first.
+
+The distributions barely overlap. For six attempts the detector had been asked
+to find something no retrieval signal can see, half the time, and the mixed
+label made a partial success look like a flat failure. The two misses are the
+deliberately hard cases - "surface temperature of Venus" and
+"superconductivity in cuprates", off-domain subjects that sound in-domain -
+while the plainly off-domain gaps warn at 0.43 to 0.48.
+
+**Neither abstract-level nor lexical matching detects an unanswerable
+question.** The reasoning was that a passage says what it mentions while an
+abstract says what a paper is *about*, so a paper that quotes sample text about
+nuclear forces on page 27 would be excluded by its abstract. Measured over
+7,551 abstracts and the 22 natural-language eval questions, it separates no
+better than passages do.
+
+| signal | answerable | unanswerable | separated |
+|---|---|---|---|
+| passage similarity | 0.666-0.799 | 0.628-0.798 | no |
+| abstract similarity | 0.598-0.810 | 0.603-0.785 | no |
+| abstracts containing every question word | 0-235 | 0-177 | no |
+
+The measurement did explain why every attempt fails. The `expect_none` cases
+are two different things wearing one label. "What is the farthest star from
+the earth" has no paper on the topic at all - zero abstracts contain its words.
+"What is a tensor" has **177**: the corpus is saturated with tensors and
+defines none of them. Only the first kind is a retrieval problem. The second is
+a question about whether passages *answer*, which no retrieval signal can see,
+and it sits next to "what is entropy?" - 235 matching papers, labelled
+answerable - with nothing measurable between them.
+
+So the next work here is the answer key, not another detector: the two kinds
+need separating before a detector for either can be honestly scored.
+
+**Embedding a passage with its title and section is still unmeasured.** An A/B
+over 21,414 passages returned mrr 0.982 for both arms, identical to three
+decimals. The inputs did differ; the subset of 259 papers was simply too easy,
+and r@5 saturated at 1.000 with no headroom for a difference to appear in. It
+is recorded here as a failed experiment rather than a negative result, and
+`with_context` stays off because it is unmeasured. Redoing it needs a
+distractor set large enough that r@5 sits well below 1.0.
+
+**Everything that widens the candidate pool trades top precision for deep
+recall.** Four techniques, measured across the same 63 answerable cases:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| **hybrid** | **0.81** | **0.94** | 0.95 | **0.866** |
+| hybrid + titles | 0.75 | 0.94 | 0.97 | 0.822 |
+| hybrid + 3 rewrites | 0.75 | 0.90 | **0.98** | 0.826 |
+| hybrid + HyDE | 0.70 | 0.92 | 0.97 | 0.799 |
+| hybrid + decomposition | 0.76 | 0.87 | 0.92 | 0.816 |
+
+The first three raise recall@10 and lower recall@1. That is not four coincidences,
+it is what widening does to a ranking that is already right most of the time:
+at r@1 0.81 the passage that answers the question is usually first already, and
+new candidates can only displace it. The gain is confined to the 5% of
+questions where hybrid finds nothing in ten, and it is paid for out of the 81%
+where it was already first.
+
+Decomposition is the exception, and it is worse on every measure including
+recall@10. It does not widen the pool, it divides it: each sub-question gets a
+fraction of the result slots, and a fragment of a question retrieves less
+precisely than the whole one. An earlier version of this paragraph noted the
+caveat that nothing in the key was the compound question `ask --plan` was
+built for, and that measuring that needed cases whose answer genuinely spans
+two papers plus a coverage metric. Both now exist - eleven compound cases,
+scored by coverage and completion - and **decomposition lost on its home
+turf**: cov@5 0.36 against plain hybrid's 0.41, identical at depth (all@10
+0.36 both). Splitting still divides the slots, and the sub-questions a model
+writes do not name the papers the way the question's own words already do.
+
+What wins the compound cases instead is the title leg (cov@5 0.64, all@5 and
+all@10 0.45, against hybrid's 0.09 and 0.36): "compare the GPT-4 and Llama 3
+technical reports" names its papers almost by title, and passage search finds
+neither while the title index finds both at ranks 1-2. So the same technique
+has now been measured three ways - harmful always-on, decisive behind the
+definitional gate, and best-in-class on compound questions - and the pattern
+is that question shape decides the tool.
+
+That pattern made a prediction, and the prediction was measured true. A titles
+leg gated to comparison-shaped questions ("compare", "differ from", "versus")
+should keep the title leg's compound wins, skip its one compound loss - the
+DeepSeek-R1 case, where "build on" is not comparison vocabulary and the title
+leg had displaced a right answer - and be provably unable to touch the
+single-subject table, which contains no comparison-shaped question. Measured
+as `hybrid+compare`: cov@10 0.73 and all@10 0.55, better than either parent,
+with the single-subject table byte-identical to hybrid. It ships behind
+`--use-compare`, off by default, for one honest reason: the eval key holds no
+comparison-shaped questions with a *single*-paper answer, so the gate's cost
+on that shape - a "how does X differ from vanilla Y" whose title match is
+wrong - has no number yet. Authoring those cases is the recorded next step;
+until then the leg's benefit is measured and its risk is not, and unmeasured
+risk ships off.
+
+Two of the eleven cases also turned out not to be compound on this corpus at
+all: DeepSeek-R1's appendix compares GRPO and PPO in one place, and RoBERTa
+restates BERT's recipe as its very subject. A corpus that holds surveys and
+technical reports has already done the decomposition for many comparison
+questions, which is both a caveat on these numbers and a finding in its own
+right. The labels were left as the original papers rather than retrofitted to
+what retrieval happened to find.
+
+Which matters depends on what reads the results. An answer is written from the
+first few passages, so `ask` wants r@1 and keeps plain hybrid. A person
+scanning ten results might prefer the wider net, which is why each remains
+available behind a flag rather than being deleted.
+
+**Adding a title-matching leg makes retrieval worse, for the same reason
+reranking does.** It was built to answer the definitional questions passage
+search cannot: "what is the Adam optimizer" finds nothing from the Adam paper
+in ten results, and a title leg puts it at rank 4. Measured across all 63
+answerable cases it costs more than it earns:
+
+| mode | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| hybrid | **0.81** | 0.94 | 0.95 | **0.866** |
+| hybrid+titles | 0.75 | 0.94 | **0.97** | 0.822 |
+
+It rescues a few deep misses and displaces better passage matches at the top,
+which is a bad trade when the answer is written from the first few passages.
+Available behind `--use-titles`, off by default. An earlier version of this
+paragraph guessed that "a version that applies titles only to questions that
+look definitional might get both" - that version is now measured, and it does.
+`hybrid+graph` gates the title leg twice: the question must be shaped like a
+definition, and the matched paper must be cited by held papers, so "why does
+PPO clip its objective" never sees the leg that would hand it CLIP. It is the
+only widening technique measured here that pays no recall@1 for its deep
+recall (0.81 / 0.95 / 0.97 / mrr 0.869), because it widens only the questions
+the baseline was already losing - and it is on by default for exactly that
+reason. The exception proves the widening rule rather than breaking it: the
+cost of widening is paid where the ranking was already right, so a widener
+that can tell those questions apart keeps the gain without the bill.
+
+**Asking the model for structure a different way changes nothing, and asking
+it to cite harder makes things worse.** The flat `ANSWER:`/`CITE` protocol was
+adopted because a 4B local model ignored `format: "json"`, a full JSON schema
+and tool calling on every realistic prompt. Re-probed on `gemma4:31b`, the
+first two are still ignored - and tool calling now works. Whether it is
+*better* is a separate question, measured over 20 held-out questions with
+three runs per arm against identical retrieval:
+
+| out of 20 | line protocol | tool calling |
+|---|---|---|
+| answers with a verified citation | 17.0 | 16.0 |
+| every claim carries a marker | 15.0 | 13.7 |
+| cited the expected paper | 16.7 | 16.0 |
+
+Tool calling is no better and possibly slightly worse, with ranges that
+overlap - so the protocol chosen for a weak model turns out to be the right
+one for a strong model too. It ships behind `VERBATIM_ANSWER_PROTOCOL=tools`, off,
+with these numbers rather than a preference behind it.
+
+The second experiment targeted a measured defect: about a quarter of answers
+contain a sentence that states something and carries no marker. The prompt
+already asks for one on every claim, so the test was whether saying it more
+forcefully - and telling the model that an unmarked sentence is shown as
+unsupported - would help.
+
+| out of 20 | current prompt | stricter instruction |
+|---|---|---|
+| every claim carries a marker | 16.0 | 15.7 |
+| answers with a verified citation | 17.3 | 16.3 |
+| **citations rejected** | **1.3** | **2.7** |
+
+It made everything worse, and doubled the rejected citations. The mechanism is
+visible in that last row: pressed to attach a marker to every sentence, the
+model reaches for quotes it cannot reproduce exactly and paraphrases them, and
+verification throws them out. **Pressuring a model to cite more produces more
+unverifiable citations, not more verified ones.** The uncited-claim rate is
+not something asking harder will fix.
+
+**Cross-encoder reranking makes retrieval worse here**, on all three local
+models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
+set of the time). Reranking pays when the right passage sits at rank 8; at
+r@1 0.86 there is nothing to promote and much to
+demote. Available behind `--rerank` for when that changes.
+
+## Known limitations
+
+**It will answer a question the corpus cannot answer.** This is the largest
+open defect. Retrieval always returns its best matches, and those matches are
+passed to the model whether or not they bear on the question; asked about a
+subject the corpus does not cover, the system produces a fluent answer whose
+citations are all individually genuine. Every quote is verified against the
+stored passage, so nothing is fabricated — but a verified quote proves the
+words exist, not that they answer the question. The subject check catches
+roughly half of these.
+
+"Unanswerable" was one label over two different problems, and separating them
+changed the picture. A question with no paper on its subject is visible to
+retrieval; a question whose subject the corpus covers heavily and answers
+nowhere is not - "what is a tensor" matches 177 abstracts here and sits
+indistinguishably beside "what is entropy", which matches 235 and is
+answerable.
+
+Measured against the split label, the subject check catches **7 of 9** coverage
+gaps and **0 of 4** covered-but-unanswered questions. So the defect is now two
+defects with different prospects: the first is largely handled and its
+remaining misses are subjects that sound in-domain, and the second is not a
+retrieval problem at all. See *What was tried and rejected*.
+
+**Scanned PDFs yield nothing.** Text extraction assumes a text layer; OCR is
+not implemented. Affected papers chunk to little or nothing rather than
+failing loudly.
+
+**The corpus is a slice of recent work.** It was built from the newest papers
+in each category, so it began holding very little of the literature those
+papers rest on. After `grow`, 12,882 of 80,469 resolvable references now point
+at a paper the corpus holds and 43% of papers have at least one such link. `grow` closes this along the citation edges — GPT-4, Adam, BERT, PPO,
+ViT and Planck 2018 were all cited dozens of times and absent until it ran —
+but a corpus assembled this way starts without foundations, and definitional
+questions are the first thing to suffer. Adding the defining paper turned out
+to be necessary and not sufficient: 3,152 papers here mention Adam, so the
+paper that defines it was drowned roughly 60:1 by hyperparameter sections
+until the citation-graph leg learned to ask which title-matched paper the
+corpus itself cites. That handles subjects a held paper is named after;
+"what is a tensor" still has no defining paper to anchor to, and remains
+unanswerable for reasons no ranking can fix.
+
+**Retrieval quality is measured on two sets, and they disagree.** The
+87-case development key was written alongside the system - 63 answerable by
+one paper, 11 compound, 13 unanswerable - and twenty of the answerable cases
+are an auto-seeded floor of paper titles, which retrieve their own paper for
+reasons a real question does not. The 93-case held-out key was authored blind
+and frozen before scoring, and the default scores mrr 0.758 on it against
+0.869 on the development key. Neither set transfers to another corpus without
+re-measuring. Over 488 held-out cases a paired comparison can now tell the
+always-on title leg apart from the default on *direction* (57-26, sign test
+p = 0.0009) and still cannot separate the others - and the score a batch gets
+depends more on how it was authored than on which mode retrieved it. See
+*What a held-out set measures*.
+
+**Vector search is brute force.** sqlite-vec scans every vector: measured at
+**192 ms** for a k=8 query over 835,743 vectors. That is exact rather than
+approximate, which is the trade an ANN index reverses, and it is not the
+bottleneck — a whole hybrid search takes 1.3 s, of which the keyword leg is
+662 ms and the vector leg 330 ms, inside an answer that takes seconds more to
+generate. A corpus tens of times larger wants a real index behind the
+`VectorIndex` protocol; this one does not, and swapping in an approximate
+index today would spend accuracy to speed up a seventh of a seventh of the
+wait.
+
+**Some papers have no PDF at arXiv.** 32 of the papers here return 404 for
+their versioned PDF, most of them also unversioned. They are recorded as
+settled rather than retried, and `stats` reports them apart from real
+outstanding work. No unversioned fallback is attempted: fetching whatever the
+current version happens to be, while the citation claims v2, would break the
+version pinning the rest of the project depends on.
+
+**Licence classification is only as good as arXiv's metadata**, and the
+`unknown` class is large. `unknown` means unknown, not permissive.
+
+## Principles
+
+- Start with a small, inspectable corpus.
+- Preserve source URLs, arXiv IDs, and licence metadata where available.
+- Cite the paper *version* that was read; v1 and v2 can disagree.
+- Require citations for generated claims.
+- Treat model training as a separate, provenance-aware track.
