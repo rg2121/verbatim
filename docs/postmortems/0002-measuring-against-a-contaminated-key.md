@@ -3,7 +3,7 @@
 **Date:** 2026-09-09. **Impact:** every retrieval figure this project
 published was optimistic by about an eighth, and the default retrieval mode was
 chosen on a difference that cannot be distinguished from zero. **Recorded in**
-`e8e2296`, `2bfa8f0`.
+`7379147`, `ceef0f2`.
 
 ## What happened
 

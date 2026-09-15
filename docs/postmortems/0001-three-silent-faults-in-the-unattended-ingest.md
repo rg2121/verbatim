@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-09. **Impact:** papers skipped permanently, stale passages
 citable after their source changed, and searches answered from the wrong
-model's vectors. None raised an error. **Fixed in** `fc16b3b`.
+model's vectors. None raised an error. **Fixed in** `f94113f`.
 
 ## What happened
 
