@@ -407,9 +407,23 @@ so letting it back in would let a claim enter an answer without ever having
 come from one. History decides what is looked up; it never decides what may be
 said.
 
+Measured over 30 two-turn cases, this is the largest effect in the project:
+retrieved as typed, a follow-up finds the right paper 30% of the time; resolved
+against the conversation, 97% - as well as the question that preceded it. See
+[findings.md](findings.md#what-a-conversation-costs), which also records why
+fusing the two rankings is worse and why scoping to the previous turn's papers
+cannot be judged on that key.
+
+A question that already stands on its own is not sent for rewriting at all: it
+costs a model call, and a model asked to rewrite a complete question can narrow
+it. Only a question that points back - a pronoun, "that approach", or too few
+words to carry a subject - consults the conversation.
+
 The resolved question is shown above the answer, because a reader who
 disagrees with how their follow-up was interpreted needs to see the
-interpretation. If the model is unreachable or replies with nothing usable,
+interpretation, and can correct it: "ask it differently" puts it in the box and
+sends it exactly as written, with the conversation left out. If the model is
+unreachable or replies with nothing usable,
 the original question is used unchanged: resolving a follow-up is an
 improvement to retrieval, and an improvement must not be able to stop a
 question being asked.

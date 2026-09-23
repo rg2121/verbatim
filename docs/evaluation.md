@@ -11,6 +11,7 @@ in this document.
 | `evals/heldout.jsonl` | 93 | blind, frozen before scoring | an unbiased estimate |
 | `evals/heldout-generated.jsonl` | 400 | by a model from title and abstract, frozen before scoring | a larger held-out sample, always reported apart from the hand-written batches |
 | `evals/breadth/questions.jsonl` | 24 | from two linked abstracts, under a pre-registered protocol | whether `team` earns its cost on two-paper questions |
+| `evals/conversational.jsonl` | 30 | blind, two turns, frozen before scoring | whether a follow-up still finds the paper its opening question found |
 | `evals/gate.jsonl` | 12 | against the sample corpus | a CI tripwire, not a measurement |
 
 The development key's weakness is structural: a question that retrieved badly
@@ -483,6 +484,7 @@ slipping. A measurement nothing enforces is a claim rather than a guarantee.
 uv run verbatim eval --cases evals/heldout.jsonl   # the honest number
 uv run python evals/paired_bootstrap.py                # the intervals
 uv run python evals/failure_taxonomy.py                # the failure labels
+uv run python evals/conversation_arms.py               # what resolving a follow-up buys
 uv run verbatim eval-answers --cases evals/heldout.jsonl --limit 20 --judge
 uv run python evals/three_arm.py --questions 20 --runs 2 --arms baseline,workflow,+critic
 uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90

@@ -21,6 +21,7 @@ measurements are in [evaluation.md](evaluation.md) and
 - [What retrieval measures](#what-retrieval-measures)
 - [What a held-out set measures](#what-a-held-out-set-measures)
 - [What was tried and rejected](#what-was-tried-and-rejected)
+- [What a conversation costs](#what-a-conversation-costs)
 - [Known limitations](#known-limitations)
 - [Principles](#principles)
 
@@ -966,6 +967,59 @@ models tried (mrr 0.940 → 0.752 / 0.701 / 0.741, measured against the 42-case
 set of the time). Reranking pays when the right passage sits at rank 8; at
 r@1 0.86 there is nothing to promote and much to
 demote. Available behind `--rerank` for when that changes.
+
+## What a conversation costs
+
+A follow-up does not carry its own subject. "Why does it need bias
+correction?" retrieves nothing useful on its own, so the page resolves it
+against the conversation into a question that stands alone before retrieval
+sees it. That had never been measured, because every key here is single-turn.
+
+`evals/conversational.jsonl` is 30 two-turn cases, authored blind from titles
+and abstracts by a module that cannot search: an opening question that stands
+on its own, a follow-up that points back and never names the subject, and one
+paper that answers both. Retrieval for the second turn is therefore scored
+exactly as for the first. `evals/conversation_arms.py` puts four ways of
+handling the second turn through it.
+
+| out of 30 | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| the opening question alone | 0.97 | — | — | 0.973 |
+| the follow-up as typed | 0.30 | 0.43 | 0.43 | 0.357 |
+| **resolved against the conversation** *(ships)* | **0.97** | **1.00** | **1.00** | **0.983** |
+| resolved, fused with the follow-up as typed | 0.50 | 1.00 | 1.00 | 0.704 |
+| resolved, searched within the previous turn's papers | 0.97 | 1.00 | 1.00 | 0.983 |
+
+**Resolving the question is the whole game.** Retrieved as typed, a follow-up
+finds the right paper 30% of the time against 97% for the question that
+preceded it - the conversation is worth two thirds of the system's accuracy.
+Resolved, the second turn scores as well as the first: 0.983 against 0.973.
+Per case it beats the raw follow-up on 21 of 30 and loses on none, p < 0.001.
+This is the largest effect measured anywhere in this project, and the only one
+that needed no argument about intervals.
+
+**Fusing the two rankings is worse, and that is the widening rule again.**
+Merging the resolved ranking with the raw one costs r@1 0.97 → 0.50 (worse on
+15 cases, better on none). The raw follow-up's ranking is close to noise, and
+fusing noise with a good ranking degrades it - the same trade as reranking,
+query rewriting and HyDE, in a place where it looked harmless.
+
+**Scoping to the previous turn's papers changes nothing here, and cannot be
+judged on this key.** It returned the identical ranking on all 30 cases and
+never fell back. That is a ceiling effect, not a result: the resolved question
+already scores 0.983, so nothing could show an improvement, and because every
+case is answered by the paper the opening turn already found, scoping cannot
+be wrong either. The case it would matter for - a follow-up whose answer is in
+a *different* paper - is exactly what this key does not contain. So
+`PaperFilter.include_ids` exists and is measured to be harmless, and nothing
+is wired to it by default.
+
+**What the key cannot say.** Both turns share one paper, there are only two
+turns, and the follow-ups were written by a model rather than by a person
+mid-conversation. Drift over four or five turns, and follow-ups that move to a
+neighbouring paper, are the interesting cases and are unmeasured. A key with
+follow-ups answered by a different paper than their opening is the next honest
+step.
 
 ## Known limitations
 
