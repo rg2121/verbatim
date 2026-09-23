@@ -22,11 +22,29 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import re
 
 # Enough for the subject to survive several turns, short enough that a local
 # model rewrites in about a second rather than re-reading an essay.
 MAX_TURNS = 6
 MAX_TURN_CHARS = 400
+
+# A question that already stands on its own needs no rewrite. The call costs a
+# second, and a model asked to rewrite a complete question can narrow it or
+# drop the term that mattered - so the history is only consulted for a
+# question that actually points back at something. The test is deliberately
+# generous: anything that might refer back is rewritten, because an
+# unnecessary rewrite is shown to the reader and a missed one is not.
+BACK_REFERENCE = re.compile(
+    r"\b(it|its|it's|they|them|their|theirs|this|that|these|those|he|him|his|she|her)\b"
+    r"|\bthe\s+(paper|study|work|method|approach|model|system|authors?|result|results|"
+    r"dataset|experiment|finding|findings)\b"
+    r"|\b(same|above|previous|earlier|latter|former)\b",
+    re.IGNORECASE,
+)
+# Fewer words than this and a question cannot carry its own subject: "why?",
+# "and the cost?" - both need what came before.
+MIN_STANDALONE_WORDS = 5
 
 REWRITE_SYSTEM = (
     "Rewrite the user's latest question so it can be understood on its own, "
@@ -50,6 +68,13 @@ class Turn:
         return f"Q: {self.question.strip()}\nA: {answer}" if answer else f"Q: {self.question.strip()}"
 
 
+def refers_back(question: str) -> bool:
+    """Whether this question needs the conversation to be understood."""
+    if len(question.split()) < MIN_STANDALONE_WORDS:
+        return True
+    return BACK_REFERENCE.search(question) is not None
+
+
 def standalone_question(
     complete: Callable[[str, str], str],
     history: Sequence[Turn],
@@ -57,12 +82,12 @@ def standalone_question(
 ) -> str:
     """Resolve a follow-up against the conversation, for retrieval only.
 
-    Returns the original question whenever there is no history, the model is
-    unreachable, or it replies with nothing usable. A rewrite is an
-    improvement to retrieval, and an improvement must not be able to stop a
-    question being asked at all.
+    Returns the original question whenever there is no history, the question
+    already stands on its own, the model is unreachable, or it replies with
+    nothing usable. A rewrite is an improvement to retrieval, and an
+    improvement must not be able to stop a question being asked at all.
     """
-    if not history:
+    if not history or not refers_back(question):
         return question
     recent = list(history)[-MAX_TURNS:]
     transcript = "\n\n".join(turn.render() for turn in recent)

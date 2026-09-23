@@ -6,7 +6,14 @@ text from an earlier turn cannot be verified against any paper.
 """
 
 
-from verbatim.conversation import MAX_TURNS, Turn, standalone_question
+import pytest
+
+from verbatim.conversation import (
+    MAX_TURNS,
+    Turn,
+    refers_back,
+    standalone_question,
+)
 
 
 def reply(text: str):
@@ -83,3 +90,38 @@ def test_a_long_answer_is_truncated_not_dropped() -> None:
 def test_a_turn_with_no_answer_yet_still_gives_its_question() -> None:
     """The subject usually lives in the question, not the answer."""
     assert Turn("what is PPO?").render() == "Q: what is PPO?"
+
+
+def test_a_question_that_stands_alone_is_not_sent_for_rewriting() -> None:
+    """A rewrite can only damage a question that needed no resolving.
+
+    It also costs a model call per turn, and the conversation is most useful
+    when a follow-up is cheap.
+    """
+    def explode(system: str, user: str) -> str:
+        raise AssertionError("a standalone question must not be rewritten")
+
+    history = [Turn("what is PPO?", "A policy method.")]
+
+    assert standalone_question(
+        explode, history, "what limits transmon coherence times"
+    ) == "what limits transmon coherence times"
+
+
+@pytest.mark.parametrize(
+    "question, needs_history",
+    [
+        ("why does it clip?", True),
+        ("what about the same dataset", True),
+        ("how does that compare with dense attention", True),
+        ("what did the authors measure", True),
+        ("why?", True),                                   # too short to carry a subject
+        ("what limits transmon coherence times", False),
+        ("how does masked pretraining affect retrieval quality", False),
+    ],
+)
+def test_only_a_question_pointing_backwards_needs_the_conversation(
+    question: str, needs_history: bool
+) -> None:
+    """Generous on purpose: an unneeded rewrite is shown, a missed one is not."""
+    assert refers_back(question) is needs_history
