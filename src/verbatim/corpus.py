@@ -73,6 +73,11 @@ class PaperFilter:
     # ineligible papers after the fact: a passage that was never retrieved
     # cannot leak into an example through a path someone forgot to filter.
     license_classes: tuple[str, ...] = ()
+    # Papers to restrict retrieval to, which is the opposite of exclude_ids
+    # and needed for the same kind of reason: a follow-up in a conversation
+    # can be searched within the papers the previous turn rested on, rather
+    # than across a corpus that no longer knows what "it" refers to.
+    include_ids: tuple[str, ...] = ()
     # Papers to pretend the corpus does not hold. Used to plant a known gap:
     # hiding a paper and asking whether anything notices is the only way to
     # give an absence-detector a ground truth, and deleting the paper to do it
@@ -81,7 +86,8 @@ class PaperFilter:
 
     def __bool__(self) -> bool:
         return bool(
-            self.since or self.category or self.license_classes or self.exclude_ids
+            self.since or self.category or self.license_classes
+            or self.include_ids or self.exclude_ids
         )
 
     def conditions(self, table: str = "p") -> tuple[list[str], list[object]]:
@@ -110,6 +116,10 @@ class PaperFilter:
             placeholders = ",".join("?" * len(self.license_classes))
             conditions.append(f"{table}.license_class IN ({placeholders})")
             parameters.extend(self.license_classes)
+        if self.include_ids:
+            placeholders = ",".join("?" * len(self.include_ids))
+            conditions.append(f"{table}.arxiv_id IN ({placeholders})")
+            parameters.extend(self.include_ids)
         if self.exclude_ids:
             placeholders = ",".join("?" * len(self.exclude_ids))
             conditions.append(f"{table}.arxiv_id NOT IN ({placeholders})")

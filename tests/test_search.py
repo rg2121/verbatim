@@ -256,3 +256,32 @@ def test_an_empty_filter_changes_nothing(tmp_path: Path) -> None:
 
     with filtered_corpus(tmp_path) as corpus:
         assert len(corpus.search_chunks("lattice", papers=PaperFilter())) == 2
+
+
+def test_search_can_be_restricted_to_a_list_of_papers(tmp_path: Path) -> None:
+    """The opposite of hiding papers: searching only within known ones.
+
+    A follow-up in a conversation has lost the subject; the papers the
+    previous turn rested on are the obvious place to look for it.
+    """
+    from verbatim.corpus import PaperFilter
+
+    with filtered_corpus(tmp_path) as corpus:
+        kept = corpus.search_chunks(
+            "lattice", papers=PaperFilter(include_ids=("2608.22222v1",))
+        )
+        both = corpus.search_chunks(
+            "lattice",
+            papers=PaperFilter(include_ids=("2601.11111v1", "2608.22222v1")),
+        )
+        # An include list and an exclude list are read together, not fought over.
+        neither = corpus.search_chunks(
+            "lattice",
+            papers=PaperFilter(
+                include_ids=("2608.22222v1",), exclude_ids=("2608.22222v1",)
+            ),
+        )
+
+    assert [m.chunk.arxiv_id for m in kept] == ["2608.22222v1"]
+    assert len(both) == 2
+    assert neither == []

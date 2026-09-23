@@ -93,13 +93,19 @@ def test_papers_already_scored_elsewhere_are_excluded(tmp_path: Path) -> None:
         "# a comment\n"
         '{"question": "q", "expect_papers": ["2608.00001v1"]}\n'
         '{"question": "q2", "expect_none": true}\n'
+        # A two-paper key names its papers under require_papers instead.
+        '{"question": "q3", "require_papers": ["2608.00002v1", "2608.00003v2"]}\n'
         "\n"
     )
 
     excluded = excluded_papers([str(key), str(tmp_path / "missing.jsonl")])
 
     # Both the versioned id and its base, so v1 in a key excludes v2 here.
-    assert excluded == {"2608.00001v1", "2608.00001"}
+    assert excluded == {
+        "2608.00001v1", "2608.00001",
+        "2608.00002v1", "2608.00002",
+        "2608.00003v2", "2608.00003",
+    }
 
 
 def test_candidates_skip_excluded_papers_and_are_reproducible(
@@ -238,3 +244,47 @@ def test_pair_questions_are_filtered_and_every_kind_fills(tmp_path: Path) -> Non
     key.write_text("".join(case.to_row() + "\n" for case in cases))
     loaded = load_cases(key)
     assert all(len(c.require_papers) == 2 for c in loaded)
+
+
+def test_a_follow_up_case_must_depend_on_its_opening(tmp_path: Path) -> None:
+    """A follow-up that names its own subject measures nothing.
+
+    Retrieval would find the paper from that turn alone, and the conversation
+    would never be consulted - which is exactly what these cases exist to
+    test.
+    """
+    import json
+
+    from verbatim.authoring import author_conversations, usable_follow_up
+
+    assert usable_follow_up("why does it need bias correction")
+    assert not usable_follow_up("why does the Adam optimizer need bias correction")
+
+    pages = {f"2608.0000{n}v1": ["Transmon qubits and their losses."] * 30
+             for n in range(1, 5)}
+    replies = iter([
+        # Rejected: the follow-up stands on its own.
+        "Q1: what limits coherence in transmon qubits\nQ2: what reduces the loss tangent of transmon qubits\n",
+        # Rejected: the opening points at the paper instead of naming a subject.
+        "Q1: what does this paper measure\nQ2: why does it matter\n",
+        # Kept.
+        "Q1: what limits coherence in transmon qubits\nQ2: how much does annealing improve it\n",
+    ])
+    with chunked_corpus(tmp_path, pages) as corpus:
+        corpus.connection.execute("UPDATE papers SET summary = ?", (ABSTRACT,))
+        corpus.connection.commit()
+        rejected: dict[str, int] = {}
+        written = list(author_conversations(
+            corpus, lambda system, user: next(replies, "Q1: \nQ2: \n"),
+            cases=1, exclude=set(), rejected=rejected, stride=1,
+        ))
+
+    assert len(written) == 1
+    row = json.loads(written[0].to_row())
+    assert row["question"] == "what limits coherence in transmon qubits"
+    assert row["follow_up"] == "how much does annealing improve it"
+    assert row["expect_papers"] == [written[0].arxiv_id]
+    assert rejected == {
+        "follow-up does not depend on the opening": 1,
+        "opening does not stand alone": 1,
+    }

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import json
 import re
 
+from verbatim.conversation import refers_back
 from verbatim.corpus import CorpusStore, split_arxiv_version
 from verbatim.distill import bibliographic, standalone
 
@@ -130,7 +131,10 @@ def excluded_papers(paths: Iterable[str]) -> set[str]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            for arxiv_id in row.get("expect_papers") or []:
+            # Both shapes of key name their papers: `expect_papers` is "any of
+            # these", `require_papers` "all of these". A paper in either has
+            # been scored already and cannot also be held out.
+            for arxiv_id in (row.get("expect_papers") or []) + (row.get("require_papers") or []):
                 seen.add(str(arxiv_id))
                 seen.add(str(arxiv_id).split("v")[0])
     return seen
@@ -457,4 +461,118 @@ def author_pairs(
             question=question, kind=kind,
             arxiv_ids=(first[0], second[0]), shared_run=run,
         )
+
+
+# --- two-turn questions, for measuring follow-ups -------------------------
+#
+# Every key here is single-turn, so "did the follow-up still find the right
+# paper" has no measurement. These cases are pairs: a question that stands on
+# its own, and a follow-up that only makes sense after it. Both are answered
+# by the same paper, so retrieval for the second turn can be scored exactly as
+# the first - which is the point, since a follow-up is where retrieval loses
+# the subject. Written under the same blind rule: titles and abstracts only,
+# no retrieval, frozen before anything is scored.
+
+CONVERSATION_SYSTEM = """You are given the title and abstract of a research paper.
+
+Write two questions a reader would ask about it, in order, as a short conversation.
+
+Rules:
+- The FIRST question must stand on its own: name the subject concretely, so
+  someone could search for it having read nothing else.
+- The SECOND must be a follow-up that only makes sense after the first. Refer
+  back to the subject with "it", "they", "that approach" and so on, and do NOT
+  name the subject again.
+- Both must be answerable from what the abstract claims.
+- Use your own words. Do not reuse phrases from the abstract.
+- Ask about the research, never about who wrote it, where they work or who
+  funded it.
+
+Reply with exactly two lines, and nothing else:
+
+Q1: <question>
+Q2: <follow-up>"""
+
+FIRST_LINE = re.compile(r"^\s*Q1:\s*(.+?)\s*$", re.MULTILINE)
+FOLLOW_UP_LINE = re.compile(r"^\s*Q2:\s*(.+?)\s*$", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class ConversationCase:
+    """One opening question, one follow-up, and the paper that answers both."""
+
+    question: str
+    follow_up: str
+    arxiv_id: str
+    shared_run: int
+
+    def to_row(self) -> str:
+        return json.dumps({
+            "question": self.question,
+            "follow_up": self.follow_up,
+            "expect_papers": [self.arxiv_id],
+            "note": f"source=conversational; shape=follow-up; shared_run={self.shared_run}",
+        })
+
+
+def usable_follow_up(follow_up: str) -> bool:
+    """Whether a second turn genuinely depends on the first.
+
+    A follow-up that names its own subject measures nothing: retrieval would
+    find the paper from that turn alone and the conversation would never be
+    consulted. So it has to point backwards - which is the same test the web
+    page uses to decide whether to resolve a question at all, and a question
+    naming its subject fails it.
+
+    Not `standalone()`: that rejects a question pointing at *its source* ("what
+    does this paper show"), which is a different fault and says nothing about
+    whether a turn depends on the one before it.
+    """
+    return refers_back(follow_up) and not bibliographic(follow_up)
+
+
+def author_conversations(
+    corpus: CorpusStore,
+    complete: Callable[[str, str], str],
+    *,
+    cases: int,
+    exclude: set[str],
+    rejected: dict[str, int] | None = None,
+    stride: int = 5,
+) -> Iterator[ConversationCase]:
+    """Yield two-turn cases until `cases` are written or candidates run out."""
+    if cases < 1:
+        raise ValueError("cases must be at least 1")
+    counts = rejected if rejected is not None else {}
+    bump = lambda reason: counts.__setitem__(reason, counts.get(reason, 0) + 1)
+    written = 0
+    for arxiv_id, title, abstract in candidate_papers(
+        corpus, exclude=exclude, limit=cases * 3, stride=stride
+    ):
+        reply = complete(CONVERSATION_SYSTEM, f"TITLE: {title}\n\nABSTRACT: {abstract}")
+        opening = FIRST_LINE.search(reply or "")
+        follow_up = FOLLOW_UP_LINE.search(reply or "")
+        if opening is None or follow_up is None:
+            bump("no exchange written")
+            continue
+        question, second = opening.group(1), follow_up.group(1)
+        if not standalone(question) or bibliographic(question):
+            bump("opening does not stand alone")
+            continue
+        if not usable_follow_up(second):
+            bump("follow-up does not depend on the opening")
+            continue
+        run = max(
+            longest_shared_run(question, abstract),
+            longest_shared_run(second, abstract),
+        )
+        if run >= MAX_SHARED_RUN:
+            bump(f"borrowed a {run}-word phrase")
+            continue
+        written += 1
+        yield ConversationCase(
+            question=question, follow_up=second, arxiv_id=arxiv_id, shared_run=run,
+        )
+        if written >= cases:
+            return
 

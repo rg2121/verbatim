@@ -130,6 +130,26 @@ USE_COMPARE_HELP = (
 )
 
 
+CONVERSATION_HEADER = """\
+# Two-turn evaluation cases, written from each paper's TITLE AND ABSTRACT ONLY
+# by `verbatim author-cases --conversational`. No retrieval was run against
+# any question before this file was committed; the authoring module imports
+# nothing that can search, and a test asserts it never will.
+#
+# Each row is an opening question that stands on its own and a follow-up that
+# does not: it points back with "it" or "that approach" and never names the
+# subject again. Both turns are answered by the same paper, so retrieval for
+# the follow-up is scored exactly as retrieval for the opening - which is the
+# comparison every other key here cannot make.
+#
+# Rejected before they were kept: openings that do not name their subject or
+# ask about the paper's cover, follow-ups that stand on their own, and
+# exchanges sharing a run of five or more words with the abstract.
+#
+# NOT YET SCORED. Commit this file before running any arm against it.
+"""
+
+
 BREADTH_HEADER = """\
 # Breadth evaluation questions, written under evals/breadth/PROTOCOL.md, which
 # was committed before this file existed and before any arm ran.
@@ -307,11 +327,18 @@ def run() -> None:
         "--per-kind", type=int, default=8,
         help="With --breadth: questions of each kind (comparison, limitation, synthesis)",
     )
+    author_parser.add_argument(
+        "--conversational", action="store_true",
+        help="Write two-turn cases - an opening question and a follow-up that "
+             "only makes sense after it - for measuring how retrieval handles "
+             "a conversation",
+    )
     author_parser.add_argument("--llm", help="Generation model")
     author_parser.add_argument(
         "--exclude", type=Path, nargs="*",
         default=[Path("evals/retrieval.jsonl"), Path("evals/heldout.jsonl"),
-                 Path("evals/heldout-generated.jsonl"), Path("evals/gate.jsonl")],
+                 Path("evals/heldout-generated.jsonl"), Path("evals/gate.jsonl"),
+                 Path("evals/breadth/questions.jsonl")],
         help="Existing keys whose papers must not be reused",
     )
 
@@ -821,6 +848,55 @@ def run() -> None:
                     f"below the floor of {args.min_mrr:.3f}. Either a change made "
                     f"retrieval worse, or the floor needs re-measuring on purpose."
                 )
+
+    if args.command == "author-cases" and args.conversational:
+        from verbatim.authoring import (
+            author_conversations,
+            excluded_papers,
+            render_rejections,
+        )
+
+        out = (
+            Path("evals/conversational.jsonl")
+            if args.out == Path("evals/heldout-generated.jsonl") else args.out
+        )
+        if out.exists() and out.read_text(encoding="utf-8").strip():
+            # A frozen key is written once, for the same reason the breadth
+            # one is: re-authoring after an arm has run is what freezing rules out.
+            raise SystemExit(
+                f"error: {out} already exists. A frozen key is written once; "
+                "delete it deliberately if you mean to re-author it."
+            )
+        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        exclude = excluded_papers(str(path) for path in args.exclude)
+        rejected: dict[str, int] = {}
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "author-cases", conversational=True, cases=args.cases, llm=args.llm
+        ) as run:
+            try:
+                written = list(author_conversations(
+                    corpus,
+                    lambda system, user: completion.complete_text(system, user),
+                    cases=args.cases, exclude=exclude, rejected=rejected,
+                ))
+            except (RuntimeError, OSError) as error:
+                raise SystemExit(
+                    f"error: authoring stopped ({error}). Nothing was written: a "
+                    "half-written key must never sit on disk looking frozen."
+                ) from error
+            run.record(written=len(written), rejected=sum(rejected.values()))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            CONVERSATION_HEADER + "".join(case.to_row() + "\n" for case in written),
+            encoding="utf-8",
+        )
+        print(f"{out}\n")
+        print(f"  wrote {len(written)}/{args.cases} two-turn case(s)")
+        print(render_rejections(rejected))
+        print("\n  NOT YET SCORED. Commit this file before running any arm against it.")
+        if len(written) < args.cases:
+            raise SystemExit(1)
+        return
 
     if args.command == "author-cases" and args.breadth:
         from verbatim.authoring import (
