@@ -707,136 +707,220 @@ PAGE = """<!doctype html>
 <title>verbatim</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #fbfbfa; --fg: #1a1a18; --muted: #6b6b66;
-    --line: #e0e0dc; --card: #ffffff; --accent: #2f5d8a;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16171a; --fg: #e8e8e6; --muted: #9a9a95;
-      --line: #2c2e33; --card: #1d1f23; --accent: #7fb0e0;
-    }
+    color-scheme: dark;
+    --bg: #0e0f11;
+    --surface: #15171a;
+    --raised: #1b1e22;
+    --line: #23272c;
+    --ink: #e7e9ec;
+    --muted: #8b939c;
+    --faint: #626a73;
+    --accent: #8ab4f8;
+    --warn: #e0b877;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 54rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
-  h1 { font-size: 1.35rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
-  .sub { color: var(--muted); margin: 0 0 1.75rem; font-size: .9rem; }
-  form { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  input[type=search] {
-    flex: 1 1 22rem; padding: .6rem .75rem; font: inherit; color: var(--fg);
-    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
-  }
-  select, button {
-    padding: .6rem .8rem; font: inherit; border-radius: 6px;
-    border: 1px solid var(--line); background: var(--card); color: var(--fg);
-  }
-  button { background: var(--accent); color: #fff; border-color: transparent; cursor: pointer; }
-  button[disabled] { opacity: .55; cursor: default; }
-  .note { color: var(--muted); font-size: .85rem; margin: .75rem 0 1.5rem; }
-  .warn { color: #b45309; font-size: .85rem; margin: .6rem 0 0; }
-  .refs { margin-top: .75rem; border-top: 1px solid var(--line); padding-top: .6rem;
-          font-size: .85rem; }
-  .refs p { margin: .25rem 0; }
-  .refs a { color: var(--accent); text-decoration: none; }
-  .rejected { color: #b45309; }
-  .sec { border-left: 2px solid var(--line); padding: 0 0 0 .85rem; margin: 1.1rem 0; }
-  .sec h3 { font-size: .98rem; margin: 0 0 .4rem; line-height: 1.35; }
-  .trace { color: var(--muted); font-size: .78rem; margin: .45rem 0 0;
-           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .pending { opacity: .55; }
-  details { margin-top: 1rem; }
-  summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
-  pre.md { white-space: pre-wrap; font-size: .8rem; background: var(--card);
-           border: 1px solid var(--line); border-radius: 6px; padding: .8rem;
-           overflow-x: auto; }
-  article {
-    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
-    padding: .9rem 1rem; margin-bottom: .75rem;
-  }
-  .head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
-          font-size: .85rem; margin-bottom: .5rem; }
-  .head a { color: var(--accent); text-decoration: none; font-weight: 600; }
-  .head a:hover { text-decoration: underline; }
-  .meta { color: var(--muted); }
-  .text { margin: 0; white-space: pre-wrap; }
-  mark { background: transparent; color: inherit; font-weight: 700; }
-  footer { color: var(--muted); font-size: .8rem; margin-top: 2rem;
-           border-top: 1px solid var(--line); padding-top: 1rem; }
+  main { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
 
-  /* The conversation. Questions and answers stack, so a reader can see what
-     was asked three turns ago and what it was answered with. */
-  #thread { display: flex; flex-direction: column; gap: .9rem; margin: 1rem 0; }
-  .turn { display: flex; }
-  .turn.you { justify-content: flex-end; }
-  .bubble {
-    max-width: 46rem; border-radius: 10px; padding: .75rem .95rem;
-    border: 1px solid var(--line); background: var(--card);
+  header { margin-bottom: 2.5rem; }
+  h1 { font: 500 1.4rem/1 var(--sans); letter-spacing: -.01em; margin: 0 0 .5rem; }
+  header p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+  .tabs { display: flex; gap: .25rem; margin-bottom: 1.5rem; }
+  .tabs button {
+    font: inherit; font-size: .9rem; color: var(--muted); background: none;
+    border: 0; border-radius: 7px; padding: .4rem .8rem; cursor: pointer;
   }
-  .turn.you .bubble {
-    background: var(--accent); color: #fff; border-color: transparent;
-    max-width: 34rem;
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-selected="true"] { color: var(--ink); background: var(--surface); }
+
+  form { display: flex; gap: .5rem; align-items: center; }
+  input[type=search], input[type=text] {
+    flex: 1; min-width: 0; font: inherit; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: .7rem .9rem;
   }
-  .who { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
-         color: var(--muted); margin-bottom: .3rem; }
-  .turn.you .who { color: rgba(255,255,255,.75); }
-  .thinking { color: var(--muted); font-size: .85rem; }
-  .resolved { color: var(--muted); font-size: .8rem; font-style: italic;
-              margin: 0 0 .45rem; }
-  .askbar { position: sticky; bottom: 0; background: var(--bg);
-            padding: .75rem 0 .25rem; border-top: 1px solid var(--line); }
-  .askbar form { margin: 0; }
-  .cursor::after { content: "\u258c"; animation: blink 1s step-end infinite; }
+  input::placeholder { color: var(--faint); }
+  input:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  form button {
+    font: inherit; border: 1px solid var(--line); background: var(--raised);
+    color: var(--ink); border-radius: 10px; padding: .7rem 1.1rem; cursor: pointer;
+  }
+  form button:hover { border-color: var(--accent); color: var(--accent); }
+  form button[disabled] { opacity: .5; cursor: default; }
+  select {
+    font: inherit; color: var(--muted); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; padding: .7rem .6rem;
+  }
+
+  .opt { display: flex; gap: 1rem; align-items: center;
+         margin-top: .7rem; color: var(--faint); font-size: .85rem; }
+  .opt label { display: flex; gap: .4rem; align-items: center; cursor: pointer; }
+  .note { color: var(--muted); font-size: .85rem; margin: .9rem 0 0; min-height: 1.2em; }
+
+  /* conversation */
+  #thread { display: flex; flex-direction: column; gap: 3rem; margin: 0 0 1.5rem; }
+  #thread:empty { margin: 0; }
+  .turn .who {
+    font: 500 .7rem/1 var(--sans); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 .5rem;
+  }
+  .turn .asked {
+    font: 500 1.15rem/1.45 var(--sans); margin: 0 0 1rem; text-wrap: balance;
+  }
+  /* The composer stays within reach, so a follow-up is always one line away. */
+  .composer {
+    position: sticky; bottom: 0; padding: 1rem 0 .8rem; background: var(--bg);
+    box-shadow: 0 -1.5rem 1rem -1rem var(--bg);
+  }
+  #thread:not(:empty) + .composer { border-top: 1px solid var(--line); }
+  .hint { color: var(--faint); font-size: .82rem; margin: .7rem 0 0; }
+  .resolved { color: var(--faint); font-size: .85rem; margin: -.6rem 0 1rem; }
+  .resolved button {
+    font: inherit; color: var(--accent); background: none; border: 0;
+    padding: 0; cursor: pointer; text-decoration: underline;
+  }
+  .answer { font: 1.02rem/1.75 var(--serif); }
+  .answer p { margin: 0 0 .9rem; }
+  .thinking { color: var(--muted); font-family: var(--sans); font-size: .95rem; }
+  .cursor::after { content: "▌"; animation: blink 1.1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
+
+  a.cite {
+    font: 500 .7rem/1 var(--sans); vertical-align: super; color: var(--accent);
+    text-decoration: none; padding: 0 .12rem;
+  }
+  a.cite:hover { text-decoration: underline; }
+  .unverified {
+    font: .72rem/1 var(--sans); vertical-align: super; color: var(--warn);
+  }
+
+  .sources { margin-top: 1.4rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+  .sources h3 {
+    font: 500 .72rem/1 var(--sans); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 .8rem;
+  }
+  .source { display: flex; gap: .6rem; margin-bottom: .8rem; font-size: .9rem; }
+  .source .n { color: var(--faint); font-family: var(--mono); font-size: .78rem; padding-top: .15rem; }
+  .source a { color: var(--ink); text-decoration: none; }
+  .source a:hover { color: var(--accent); }
+  .source .where { color: var(--faint); font-size: .82rem; }
+  .source blockquote {
+    margin: .4rem 0 0; padding-left: .7rem; border-left: 2px solid var(--line);
+    color: var(--muted); font: .88rem/1.6 var(--serif);
+  }
+  .caution { color: var(--warn); font-size: .87rem; margin: 1rem 0 0; }
+
+  details.how { margin-top: 1rem; }
+  details.how > summary {
+    cursor: pointer; color: var(--faint); font-size: .82rem; list-style: none;
+  }
+  details.how > summary::-webkit-details-marker { display: none; }
+  details.how > summary::before { content: "› "; }
+  details.how[open] > summary::before { content: "˅ "; }
+  details.how .body {
+    margin-top: .6rem; color: var(--muted); font-size: .85rem;
+    border-left: 1px solid var(--line); padding-left: .8rem;
+  }
+  details.how .body p { margin: 0 0 .35rem; }
+
+  /* search results */
+  .hit { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+  .hit:last-child { border-bottom: 0; }
+  .hit .head { display: flex; flex-wrap: wrap; gap: .6rem; align-items: baseline;
+               font-size: .82rem; color: var(--faint); margin-bottom: .45rem; }
+  .hit .head a { color: var(--accent); text-decoration: none; }
+  .hit .text { margin: 0; color: var(--muted); font: .95rem/1.65 var(--serif); }
+  .hit mark { background: none; color: var(--ink); font-weight: 600; }
+
+  /* review */
+  .section { margin: 2rem 0; }
+  .section h3 { font: 500 1.05rem/1.45 var(--sans); margin: 0 0 .6rem; text-wrap: balance; }
+  pre.md {
+    white-space: pre-wrap; font: .82rem/1.6 var(--mono); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; padding: 1rem; overflow-x: auto;
+  }
+
+  footer {
+    margin-top: 5rem; padding-top: 1.2rem; border-top: 1px solid var(--line);
+    color: var(--faint); font-size: .82rem;
+  }
+  @media (max-width: 560px) {
+    main { padding: 2.5rem 1.1rem 4rem; }
+    form { flex-wrap: wrap; }
+    form button { flex: 1; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>verbatim</h1>
-  <p class="sub">Citation-checked search over a local arXiv corpus.</p>
+  <header>
+    <h1>Verbatim</h1>
+    <p>Ask a corpus of papers. Every quote is checked against the passage it comes from.</p>
+  </header>
 
-  <form id="search">
-    <input type="search" id="q" placeholder="Search the corpus" autofocus
-           aria-label="Search the corpus">
-    <select id="mode" aria-label="Retrieval mode">
-      <option value="hybrid">hybrid</option>
-      <option value="keyword">keyword</option>
-    </select>
-    <button type="submit" id="go">Search</button>
-  </form>
+  <nav class="tabs" role="tablist">
+    <button id="tabask" type="button" role="tab" aria-selected="true">Ask</button>
+    <button id="tabsearch" type="button" role="tab" aria-selected="false">Search</button>
+    <button id="tabreview" type="button" role="tab" aria-selected="false">Review</button>
+  </nav>
 
-  <p class="note" id="status"></p>
-  <div id="results"></div>
+  <section id="panelask">
+    <div id="thread"></div>
+    <div class="composer">
+      <form id="askform">
+        <input type="search" id="aq" autocomplete="off" autofocus
+               placeholder="Ask a question" aria-label="Ask a question">
+        <button type="submit" id="askgo">Ask</button>
+      </form>
+      <div class="opt">
+        <label><input type="checkbox" id="askdeep"> Try harder if nothing checks out</label>
+        <button type="button" id="askreset" hidden
+                style="background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:0">
+          Start over
+        </button>
+      </div>
+      <p class="hint" id="askhint">
+        Ask follow-ups in your own words - "why does it do that?" is resolved
+        against what you just asked, and you are shown how it was read.
+      </p>
+      <p class="note" id="askstatus"></p>
+    </div>
+  </section>
 
-  <div id="thread"></div>
-
-  <div class="askbar">
-    <form id="askform">
-      <input type="search" id="aq" autocomplete="off"
-             placeholder="Ask a question, answered with verified citations"
-             aria-label="Ask a question">
-      <button type="submit" id="askgo">Ask</button>
-      <button type="button" id="askreset" hidden>New topic</button>
+  <section id="panelsearch" hidden>
+    <form id="search">
+      <input type="search" id="q" placeholder="Search passages" aria-label="Search passages">
+      <select id="mode" aria-label="How to search">
+        <option value="hybrid">Meaning and words</option>
+        <option value="keyword">Exact words</option>
+      </select>
+      <button type="submit" id="go">Search</button>
     </form>
-    <label class="note" id="deeplabel">
-      <input type="checkbox" id="askdeep"> dig deeper
-      <span class="meta">&mdash; retry with another retrieval when nothing
-      verifies, instead of streaming the first attempt</span>
-    </label>
-    <p class="note" id="askstatus"></p>
-  </div>
+    <p class="note" id="status"></p>
+    <div id="results"></div>
+  </section>
 
-  <form id="reportform">
-    <input type="search" id="rt" placeholder="Or write a review on a topic"
-           aria-label="Topic to review">
-    <label class="meta"><input type="checkbox" id="ragents" checked> orchestrate</label>
-    <button type="submit" id="reportgo">Review</button>
-  </form>
-  <p class="note" id="reportstatus"></p>
-  <div id="reportout"></div>
+  <section id="panelreview" hidden>
+    <form id="reportform">
+      <input type="search" id="rt" placeholder="A topic to review" aria-label="Topic to review">
+      <button type="submit" id="reportgo">Write</button>
+    </form>
+    <div class="opt">
+      <label><input type="checkbox" id="ragents" checked> Retry sections that come back thin</label>
+    </div>
+    <p class="note" id="reportstatus"></p>
+    <div id="reportout"></div>
+  </section>
 
   <footer id="stats"></footer>
 </main>
@@ -849,112 +933,95 @@ function escapeHtml(value) {
   ));
 }
 
-// The API returns FTS5 snippets marked with [ ]; render those as emphasis
-// rather than letting the brackets read as part of the paper.
-function renderSnippet(text) {
-  return escapeHtml(text).replace(/\\[([^\\]]+)\\]/g, "<mark>$1</mark>");
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
 }
 
-function renderResult(hit) {
-  const licence = hit.license_url
-    ? '<a href="' + escapeHtml(hit.license_url) + '">licence</a>'
-    : "no licence reported";
-  return [
-    "<article>",
-    '  <div class="head">',
-    '    <a href="', escapeHtml(hit.source_url), '">arXiv:', escapeHtml(hit.arxiv_id), "</a>",
-    '    <span class="meta">', escapeHtml(hit.locator), "</span>",
-    '    <span class="meta">score ', escapeHtml(hit.score), "</span>",
-    '    <span class="meta">', escapeHtml(hit.source_kind), "</span>",
-    '    <span class="meta">', licence, "</span>",
-    "  </div>",
-    '  <p class="text">', renderSnippet(hit.snippet || hit.text), "</p>",
-    "</article>",
-  ].join("");
-}
-
-async function runSearch(event) {
-  event.preventDefault();
-  const query = $("q").value.trim();
-  if (!query) return;
-  $("go").disabled = true;
-  $("status").textContent = "Searching...";
-  $("results").innerHTML = "";
-  try {
-    const url = "/api/search?q=" + encodeURIComponent(query)
-      + "&mode=" + encodeURIComponent($("mode").value);
-    const response = await fetch(url);
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || ("HTTP " + response.status));
-    }
-    const data = await response.json();
-    $("status").textContent = data.results.length
-      ? data.results.length + " passages, " + data.mode + " retrieval"
-      : "Nothing matched. Keyword search matches whole words: try field* for fields.";
-    $("results").innerHTML = data.results.map(renderResult).join("");
-  } catch (error) {
-    $("status").textContent = "Search failed: " + error.message;
-  } finally {
-    $("go").disabled = false;
+// -- tabs -------------------------------------------------------------
+const PANELS = {tabask: "panelask", tabsearch: "panelsearch", tabreview: "panelreview"};
+function show(tab) {
+  for (const [button, panel] of Object.entries(PANELS)) {
+    const on = button === tab;
+    $(button).setAttribute("aria-selected", on ? "true" : "false");
+    $(panel).hidden = !on;
   }
 }
+for (const tab of Object.keys(PANELS)) $(tab).onclick = () => show(tab);
 
-async function loadStats() {
-  try {
-    const counts = await (await fetch("/api/stats")).json();
-    $("stats").textContent =
-      counts.papers.toLocaleString() + " papers, "
-      + counts.chunks.toLocaleString() + " passages, "
-      + counts.vectors.toLocaleString() + " vectors."
-      + (counts.vectors === 0
-          ? " No vectors yet, so hybrid retrieval falls back to keywords."
-          : "");
-  } catch (error) {
-    $("stats").textContent = "Corpus statistics unavailable.";
-  }
+// -- answers ----------------------------------------------------------
+// Markers point at the sources below, and a claim whose quote failed the
+// check says so rather than looking like a citation.
+function renderAnswer(text, turn) {
+  const marked = escapeHtml(text)
+    .replace(/\\[unverified\\]/g, '<span class="unverified" title="this quote could not be checked">unverified</span>')
+    .replace(/\\[(\\d+)\\]/g, (m, n) => '<a class="cite" href="#ref-' + turn + '-' + n + '">' + n + '</a>');
+  return marked
+    .split(/\\n\\s*\\n/)
+    .map((para) => "<p>" + para.replace(/\\n/g, " ") + "</p>")
+    .join("");
 }
 
-function locatorOf(citation) {
-  if (citation.source_kind !== "html") return "p. " + citation.page_number;
+function whereIn(citation) {
+  if (citation.source_kind !== "html") return "page " + citation.page_number;
   const parts = (citation.section_path || "").split(" > ");
   const heading = parts[parts.length - 1].trim();
-  return heading ? "section " + heading : "section " + citation.page_number;
+  return heading ? heading : "section " + citation.page_number;
 }
 
-function renderReference(citation, index) {
-  return '<p>[' + (index + 1) + '] <a href="' + escapeHtml(citation.source_url) + '">'
-    + escapeHtml(citation.title) + "</a>"
-    + '<span class="meta"> — arXiv:' + escapeHtml(citation.arxiv_id)
-    + ", " + escapeHtml(locatorOf(citation)) + "</span></p>";
+function renderSources(citations, turn) {
+  if (!citations.length) return "";
+  const rows = citations.map((c, i) => [
+    '<div class="source" id="ref-', turn, '-', i + 1, '">',
+    '  <span class="n">', i + 1, "</span>",
+    "  <div>",
+    '    <a href="', escapeHtml(c.source_url), '">', escapeHtml(c.title), "</a>",
+    '    <div class="where">', escapeHtml(c.authors && c.authors.length ? c.authors[0] + " et al. · " : ""),
+    escapeHtml(c.arxiv_id), " · ", escapeHtml(whereIn(c)), "</div>",
+    c.quoted_text ? "<blockquote>" + escapeHtml(c.quoted_text) + "</blockquote>" : "",
+    "  </div>",
+    "</div>",
+  ].join(""));
+  return '<div class="sources"><h3>Sources</h3>' + rows.join("") + "</div>";
+}
+
+// Plain words for the retrieval strategies, so the page does not ask the
+// reader to know what "hybrid" or "titles" mean.
+const PLAIN = {
+  hybrid: "the usual search", titles: "paper titles", compare: "a comparison search",
+  agent: "letting the model pick the tool",
+};
+const SHAPE = {
+  definitional: "a question about what something is", comparison: "a comparison",
+  recency: "a question about what is new", open: "an open question",
+};
+function plain(name) { return PLAIN[name] || name; }
+
+function howBox(lines) {
+  const box = el("details", "how");
+  box.appendChild(el("summary", null, "How this answer was found"));
+  const body = el("div", "body");
+  for (const line of lines) body.appendChild(el("p", null, line));
+  box.appendChild(body);
+  return box;
 }
 
 let asking = null;
-// The conversation lives in the page, not on the server: it exists so a
-// follow-up can be resolved before retrieval, and it is never evidence.
 let thread = [];
+let turns = 0;
+// Set when you edit how a follow-up was read: that question is sent as
+// written, with no history, so nothing rewrites it a second time.
+let exact = false;
 
 function resetThread() {
   thread = [];
-  $("thread").innerHTML = "";
+  $("thread").replaceChildren();
   $("askreset").hidden = true;
   $("askstatus").textContent = "";
+  $("aq").placeholder = "Ask a question";
   $("aq").focus();
-}
-
-function bubble(who, label) {
-  const turn = document.createElement("div");
-  turn.className = "turn " + who;
-  const box = document.createElement("div");
-  box.className = "bubble";
-  const tag = document.createElement("div");
-  tag.className = "who";
-  tag.textContent = label;
-  box.appendChild(tag);
-  turn.appendChild(box);
-  $("thread").appendChild(turn);
-  turn.scrollIntoView({ block: "end", behavior: "smooth" });
-  return box;
 }
 
 function runAsk(event) {
@@ -964,110 +1031,103 @@ function runAsk(event) {
   if (asking) asking.close();
   $("askgo").disabled = true;
   $("aq").value = "";
+  const turn = ++turns;
 
-  // Your question stays on screen, above the answer to it.
-  const yours = bubble("you", "You");
-  const text = document.createElement("p");
-  text.className = "text";
-  text.textContent = question;
-  yours.appendChild(text);
-
-  const reply = bubble("agent", "verbatim");
-  const resolved = document.createElement("p");
-  resolved.className = "resolved";
+  const block = el("article", "turn");
+  block.appendChild(el("p", "who", thread.length ? "You, following up" : "You"));
+  block.appendChild(el("p", "asked", question));
+  const resolved = el("p", "resolved");
   resolved.hidden = true;
-  const body = document.createElement("p");
-  body.className = "text thinking";
-  body.textContent = "Retrieving passages\u2026";
-  const subject = document.createElement("p");
-  subject.className = "warn";
-  subject.hidden = true;
-  const refs = document.createElement("div");
-  refs.className = "refs";
-  refs.hidden = true;
-  reply.append(resolved, body, subject, refs);
+  const body = el("div", "answer thinking");
+  body.textContent = "Looking through the corpus…";
+  const caution = el("p", "caution");
+  caution.hidden = true;
+  const sources = el("div");
+  block.append(resolved, body, caution, sources);
+  $("thread").appendChild(block);
+  block.scrollIntoView({block: "start", behavior: "smooth"});
 
+  const how = [];
   let draft = "";
-  const history = thread.length
+  const history = thread.length && !exact
     ? "&history=" + encodeURIComponent(JSON.stringify(thread))
     : "";
+  exact = false;
   const deep = $("askdeep").checked;
-  // The ladder's trace, built as it climbs. Kept out of the answer paragraph
-  // so an accepted answer replaces the progress rather than appending to it.
-  const rungs = document.createElement("p");
-  rungs.className = "note";
-  rungs.hidden = true;
-  reply.insertBefore(rungs, refs);
-  if (deep) body.textContent = "Routing the question\u2026";
   asking = new EventSource(
-    "/api/ask?q=" + encodeURIComponent(question) + history
-      + (deep ? "&deep=true" : "")
+    "/api/ask?q=" + encodeURIComponent(question) + history + (deep ? "&deep=true" : "")
   );
 
-  asking.addEventListener("working", (e) => {
-    const step = JSON.parse(e.data);
-    body.className = "text thinking";
-    body.textContent =
-      "Trying " + step.strategy + " (attempt " + step.rung
-      + " of at most " + step.rungs + ")\u2026";
-  });
-  asking.addEventListener("ladder", (e) => {
-    const climb = JSON.parse(e.data);
-    rungs.hidden = false;
-    rungs.textContent =
-      climb.shape + " question \u2014 "
-      + climb.attempts.map((a) =>
-          a.strategy + " " + (a.error ? "failed" : a.verdict)).join(", ");
-  });
-
   asking.addEventListener("resolved", (e) => {
+    // The rewrite is one model call and the single point of failure for a
+    // follow-up, so it is shown and can be corrected rather than guessed at.
+    const readAs = JSON.parse(e.data).question;
     resolved.hidden = false;
-    resolved.textContent = "Read as: " + JSON.parse(e.data).question;
+    resolved.replaceChildren(document.createTextNode("Read as: " + readAs + " · "));
+    const fix = el("button", null, "ask it differently");
+    fix.type = "button";
+    fix.onclick = () => {
+      $("aq").value = readAs;
+      exact = true;
+      $("askhint").textContent =
+        "This one is asked exactly as written - the conversation is left out of it.";
+      $("aq").focus();
+    };
+    resolved.appendChild(fix);
   });
   asking.addEventListener("passages", (e) => {
     const got = JSON.parse(e.data).passages;
     const papers = new Set(got.map((p) => p.arxiv_id)).size;
     if (got.length) {
-      body.textContent =
-        "Reading " + got.length + " passages from " + papers + " papers\u2026";
+      body.textContent = "Reading " + got.length + " passages from " + papers + " papers…";
+      how.push("Read " + got.length + " passages from " + papers + " papers.");
     }
+  });
+  asking.addEventListener("working", (e) => {
+    const step = JSON.parse(e.data);
+    body.className = "answer thinking";
+    body.textContent = "Trying " + plain(step.strategy) + "…";
   });
   asking.addEventListener("delta", (e) => {
     draft += JSON.parse(e.data).text;
-    body.className = "text cursor";
+    body.className = "answer cursor";
     body.textContent =
       draft.split(/\\n\\s*CITE\\s*\\[/)[0].replace(/^[\\s\\S]*?ANSWER:\\s*/, "");
-    reply.scrollIntoView({ block: "end" });
+    block.scrollIntoView({block: "end"});
   });
   asking.addEventListener("answer", (e) => {
     const answer = JSON.parse(e.data);
-    body.className = "text";
-    body.textContent = answer.text;
-    thread.push({ question: question, answer: answer.text });
+    body.className = "answer";
+    body.innerHTML = renderAnswer(answer.text, turn);
+    thread.push({question: question, answer: answer.text});
     if (thread.length > 6) thread.shift();
     $("askreset").hidden = false;
-    if (answer.declined) return;
-    let markup = answer.citations.map(renderReference).join("");
+    $("aq").placeholder = "Ask a follow-up";
+    sources.innerHTML = renderSources(answer.citations, turn);
     if (answer.rejected.length) {
-      markup += '<p class="rejected">' + answer.rejected.length
-        + " citation(s) failed verification and are marked [unverified].</p>";
+      how.push(answer.rejected.length + " quote(s) did not match their passage and were dropped.");
     }
-    if (markup) { refs.innerHTML = markup; refs.hidden = false; }
+  });
+  asking.addEventListener("ladder", (e) => {
+    const climb = JSON.parse(e.data);
+    how.push("Read as " + (SHAPE[climb.shape] || climb.shape) + ".");
+    how.push("Tried " + climb.attempts.map((a) => plain(a.strategy)).join(", then ") + ".");
   });
   asking.addEventListener("subject", (e) => {
     const check = JSON.parse(e.data);
+    if (check.subject) how.push("Those passages are about: " + check.subject + ".");
     if (check.warn) {
-      subject.hidden = false;
-      subject.textContent = "These passages are about: " + check.subject
-        + " \u2014 which may not be what you asked ("
-        + check.closeness.toFixed(2) + " similarity).";
+      caution.hidden = false;
+      caution.textContent =
+        "These passages are mostly about " + check.subject + ", which may not be what you asked.";
     }
   });
   asking.addEventListener("failed", (e) => {
-    body.className = "text warn";
-    body.textContent = "Answering failed: " + JSON.parse(e.data).message;
+    body.className = "answer";
+    body.textContent = "That did not work: " + JSON.parse(e.data).message;
   });
   asking.addEventListener("done", () => {
+    if (how.length) block.appendChild(howBox(how));
     asking.close();
     asking = null;
     $("askgo").disabled = false;
@@ -1079,34 +1139,73 @@ function runAsk(event) {
     asking = null;
     $("askgo").disabled = false;
     if (!draft) {
-      body.className = "text warn";
-      body.textContent = "Connection lost while answering.";
+      body.className = "answer";
+      body.textContent = "The connection dropped while answering.";
     }
   };
 }
 
-function renderSectionCard(payload) {
-  const cited = payload.citations.map((c, i) =>
-    '<p>[' + (i + 1) + '] <a href="' + escapeHtml(c.source_url) + '">'
-    + escapeHtml(c.title) + '</a><span class="meta"> — arXiv:'
-    + escapeHtml(c.arxiv_id) + ", " + escapeHtml(c.locator) + "</span></p>").join("");
-  const trace = payload.attempts.map((a) => {
-    if (a.error) return "* " + a.strategy + ": failed — " + escapeHtml(a.error);
-    const route = a.route ? " via " + escapeHtml(a.route) : "";
-    return "* " + escapeHtml(a.strategy) + route + ": " + a.verified + " verified, "
-      + a.rejected + " rejected \u2192 " + escapeHtml(a.verdict);
-  }).join("<br>");
+// -- search -----------------------------------------------------------
+function renderSnippet(text) {
+  return escapeHtml(text).replace(/\\[([^\\]]+)\\]/g, "<mark>$1</mark>");
+}
+
+function renderResult(hit) {
   return [
-    '<div class="sec">',
-    "  <h3>", escapeHtml(payload.heading), "</h3>",
-    '  <p class="text">', escapeHtml(payload.text), "</p>",
-    payload.evidence.length
-      ? '<p class="meta">' + escapeHtml(payload.evidence.join(" ")) + "</p>" : "",
-    cited ? '<div class="refs">' + cited + "</div>" : "",
-    '  <p class="trace">', escapeHtml(payload.shape), " \u2014 ",
-    escapeHtml(payload.outcome), "<br>", trace, "</p>",
-    "</div>",
+    '<article class="hit">',
+    '  <div class="head">',
+    '    <a href="', escapeHtml(hit.source_url), '">', escapeHtml(hit.arxiv_id), "</a>",
+    "    <span>", escapeHtml(hit.locator), "</span>",
+    "  </div>",
+    '  <p class="text">', renderSnippet(hit.snippet || hit.text), "</p>",
+    "</article>",
   ].join("");
+}
+
+async function runSearch(event) {
+  event.preventDefault();
+  const query = $("q").value.trim();
+  if (!query) return;
+  $("go").disabled = true;
+  $("status").textContent = "Searching…";
+  $("results").replaceChildren();
+  try {
+    const url = "/api/search?q=" + encodeURIComponent(query)
+      + "&mode=" + encodeURIComponent($("mode").value);
+    const response = await fetch(url);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || ("HTTP " + response.status));
+    }
+    const data = await response.json();
+    $("status").textContent = data.results.length
+      ? data.results.length + " passages"
+      : "Nothing matched. Exact-word search matches whole words: try field* for fields.";
+    $("results").innerHTML = data.results.map(renderResult).join("");
+  } catch (error) {
+    $("status").textContent = "Search failed: " + error.message;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+// -- review -----------------------------------------------------------
+function renderSectionCard(payload) {
+  const card = el("section", "section");
+  card.appendChild(el("h3", null, payload.heading));
+  const text = el("div", "answer");
+  text.innerHTML = renderAnswer(payload.text, "r" + (++turns));
+  card.appendChild(text);
+  if (payload.citations.length) {
+    const sources = el("div");
+    sources.innerHTML = renderSources(payload.citations, "r" + turns);
+    card.appendChild(sources);
+  }
+  const how = ["Read as " + (SHAPE[payload.shape] || payload.shape) + "."];
+  how.push("Tried " + payload.attempts.map((a) => plain(a.strategy)).join(", then ") + ".");
+  if (payload.rejected) how.push(payload.rejected + " quote(s) were dropped as unverifiable.");
+  card.appendChild(howBox(how));
+  return card;
 }
 
 let reviewing = null;
@@ -1117,41 +1216,35 @@ function runReport(event) {
   if (!topic) return;
   if (reviewing) reviewing.close();
   $("reportgo").disabled = true;
-  $("reportout").innerHTML = "";
-  $("reportstatus").textContent = "Planning the sections\u2026";
+  $("reportout").replaceChildren();
+  $("reportstatus").textContent = "Planning the sections…";
 
-  const url = "/api/report?topic=" + encodeURIComponent(topic)
-    + "&agents=" + ($("ragents").checked ? "true" : "false");
-  reviewing = new EventSource(url);
+  reviewing = new EventSource("/api/report?topic=" + encodeURIComponent(topic)
+    + "&agents=" + ($("ragents").checked ? "true" : "false"));
 
   reviewing.addEventListener("working", (e) => {
     const at = JSON.parse(e.data);
-    $("reportstatus").textContent =
-      "Section " + at.done + " of " + at.total + ": " + at.heading;
+    $("reportstatus").textContent = "Section " + at.done + " of " + at.total + ": " + at.heading;
   });
   reviewing.addEventListener("section", (e) => {
-    $("reportout").insertAdjacentHTML("beforeend", renderSectionCard(JSON.parse(e.data)));
+    $("reportout").appendChild(renderSectionCard(JSON.parse(e.data)));
   });
   reviewing.addEventListener("report", (e) => {
     const done = JSON.parse(e.data);
     const outcomes = done.outcomes || [];
     const accepted = outcomes.filter((o) => o.indexOf("accepted") === 0).length;
-    let note = "Review complete. " + accepted + " of " + outcomes.length
-      + " sections accepted";
-    note += done.escalations
-      ? ", " + done.escalations + " needed another strategy."
-      : ", none needed a second strategy.";
-    $("reportstatus").textContent = note;
-    $("reportout").insertAdjacentHTML("beforeend",
-      "<details><summary>The whole review as markdown</summary>"
-      + '<pre class="md">' + escapeHtml(done.markdown) + "</pre></details>");
+    $("reportstatus").textContent =
+      "Done. " + accepted + " of " + outcomes.length + " sections stood up to checking.";
+    const box = el("details", "how");
+    box.appendChild(el("summary", null, "The whole review as markdown"));
+    const pre = el("pre", "md", done.markdown);
+    box.appendChild(pre);
+    $("reportout").appendChild(box);
   });
   reviewing.addEventListener("failed", (e) => {
-    $("reportstatus").textContent = "Review failed: " + JSON.parse(e.data).message;
+    $("reportstatus").textContent = "That did not work: " + JSON.parse(e.data).message;
   });
-  reviewing.addEventListener("done", (e) => {
-    const cost = JSON.parse(e.data).cost;
-    if (cost) $("reportstatus").textContent += "  (" + cost + ")";
+  reviewing.addEventListener("done", () => {
     reviewing.close();
     reviewing = null;
     $("reportgo").disabled = false;
@@ -1160,13 +1253,26 @@ function runReport(event) {
     if (!reviewing) return;
     reviewing.close();
     reviewing = null;
-    $("reportstatus").textContent = "Connection lost while writing the review.";
+    $("reportstatus").textContent = "The connection dropped while writing the review.";
     $("reportgo").disabled = false;
   };
 }
 
+async function loadStats() {
+  try {
+    const counts = await (await fetch("/api/stats")).json();
+    $("stats").textContent =
+      counts.papers.toLocaleString() + " papers · "
+      + counts.chunks.toLocaleString() + " passages"
+      + (counts.vectors === 0 ? " · no vectors yet, so search falls back to words" : "");
+  } catch (error) {
+    $("stats").textContent = "";
+  }
+}
+
 $("askform").addEventListener("submit", runAsk);
 $("askreset").addEventListener("click", resetThread);
+$("search").addEventListener("submit", runSearch);
 $("reportform").addEventListener("submit", runReport);
 loadStats();
 </script>
