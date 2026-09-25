@@ -1271,15 +1271,22 @@ def run() -> None:
                       f"{index.count()} passage vectors, {papers.count()} paper vectors.")
 
     if args.command == "licenses":
-        with CorpusStore(args.state) as corpus:
+        # In the ledger like every other stage, so a lookup run that failed
+        # reaches `runs` and the health check rather than only a terminal.
+        with CorpusStore(args.state) as corpus, record_run(corpus, "licenses", limit=args.limit) as run:
             pending = corpus.base_ids_missing_license(args.limit)
+            found = failed = 0
             for position, base_id in enumerate(pending):
                 if position:
                     time.sleep(args.delay)  # arXiv asks callers to pace themselves
                 try:
-                    corpus.record_license(base_id, fetch_license(base_id))
+                    licence = fetch_license(base_id)
+                    corpus.record_license(base_id, licence)
+                    found += licence is not None
                 except (OSError, ValueError) as error:
+                    failed += 1
                     print(f"  ! {base_id}: {error}")
+            run.record(looked_up=len(pending), found=found, failed=failed)
             summary = corpus.license_summary()
         print(f"Looked up {len(pending)} papers. Licences across the corpus:")
         for license_url, count in summary.items():

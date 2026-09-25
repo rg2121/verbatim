@@ -237,3 +237,31 @@ def test_pipeline_hands_its_model_to_the_stages_it_runs(monkeypatch, tmp_path) -
 
     for stage in ("embed", "index"):
         assert captured["stage_arguments"][stage] == ("--model", "other/model")
+
+
+def test_the_licence_stage_is_in_the_run_ledger(monkeypatch, tmp_path, capsys) -> None:
+    """Every other stage records its runs; a failing licence lookup never
+    reached `runs` or the health check, because this one recorded nothing."""
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+    from verbatim.runs import recent_runs
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1"), paper("2608.22222v1")])
+
+    def lookup(base_id):
+        if base_id == "2608.22222":
+            raise OSError("arXiv did not answer")
+        return "http://creativecommons.org/licenses/by/4.0/"
+
+    monkeypatch.setattr("verbatim.cli.fetch_license", lookup)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "licenses", "--state", str(tmp_path / "corpus.db"), "--delay", "0"],
+    )
+    run()
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        (recorded,) = recent_runs(corpus, command="licenses")
+    assert recorded["ok"] is True
+    assert recorded["outputs"] == {"looked_up": 2, "found": 1, "failed": 1}
