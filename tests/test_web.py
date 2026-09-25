@@ -870,3 +870,18 @@ def test_a_listing_answer_is_shown_as_a_list() -> None:
 
     assert seen["html"].count("<li>") == 2
     assert "Charge Paper" in seen["html"] and "Flux Paper" in seen["html"]
+
+
+def test_deep_mode_refuses_a_scope_it_cannot_honour(tmp_path: Path) -> None:
+    """The CLI refuses --deep with --arxiv-id; the API searched everything.
+
+    Each rung of the ladder sets its own retrieval, so a question scoped to
+    one paper came back from the whole corpus looking scoped.
+    """
+    client_app, _chunk_id = ask_client(tmp_path, ["ANSWER: unused\n"])
+    response = client_app.get(
+        "/api/ask", params={"q": "qubits", "deep": "true", "arxiv_id": "2608.11111v1"}
+    )
+
+    assert response.status_code == 400
+    assert "arxiv_id" in response.json()["detail"]

@@ -443,7 +443,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"No paper {arxiv_id} in this corpus")
         return found.to_dict()
 
-    def _deep_answer(asked: str, original: str, arxiv_id: str | None) -> Any:
+    def _deep_answer(asked: str, original: str) -> Any:
         """Answer one question by climbing the ladder, streaming each rung.
 
         Rungs rather than tokens: the ladder may write an answer, find no
@@ -470,9 +470,7 @@ def create_app(
                         own, encoder_for_run, model, asked,
                         caller=caller,
                         per_section=config.ASK_PASSAGES,
-                        max_per_paper=(
-                            config.ASK_MAX_PER_PAPER if arxiv_id is None else None
-                        ),
+                        max_per_paper=config.ASK_MAX_PER_PAPER,
                         on_attempt=lambda strategy, rung, rungs: events.put(
                             ("working", {"strategy": strategy, "rung": rung,
                                          "rungs": rungs})
@@ -582,12 +580,20 @@ def create_app(
         that model may state only what a retrieved passage supports, and prose
         from an earlier turn cannot be checked against any paper.
         """
+        if deep and arxiv_id is not None:
+            # Refused rather than ignored, as the CLI refuses it: each rung of
+            # the ladder sets its own retrieval, so the scope could not hold.
+            raise HTTPException(
+                status_code=400,
+                detail="arxiv_id has no effect with deep: each rung of the "
+                "ladder sets its own retrieval. Drop one of the two.",
+            )
         turns = _turns(history)
         asked = standalone_question(
             lambda system, user: answering().complete_text(system, user), turns, q
         ) if turns else q
         if deep:
-            return _deep_answer(asked, q, arxiv_id)
+            return _deep_answer(asked, q)
         matches = hybrid_search(
             corpus(), embedder(), asked,
             limit=config.ASK_PASSAGES,
