@@ -149,3 +149,28 @@ def test_a_stage_that_reports_what_it_did_is_a_success() -> None:
 
     assert ok
     assert detail == "Chunked 12 papers into 900 passages."
+
+
+def test_a_run_can_add_arguments_to_a_stage() -> None:
+    seen = {}
+
+    def execute(name, arguments, state):
+        seen[name] = tuple(arguments)
+        return True, "done"
+
+    counts = {"embedding_pending": 3}
+
+    def pending():
+        return dict(counts)
+
+    def run_embed(name, arguments, state):
+        counts["embedding_pending"] = 0
+        return execute(name, arguments, state)
+
+    run_pipeline(
+        pending, state="x", stages=(("embed", "embedding_pending"),), execute=run_embed,
+        stage_arguments={"embed": ("--model", "other/model")},
+    )
+
+    # The stage's own safety argument is kept, and the run's is added.
+    assert seen["embed"] == ("--only-current", "--model", "other/model")

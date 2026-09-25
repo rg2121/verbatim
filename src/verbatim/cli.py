@@ -788,9 +788,13 @@ def run() -> None:
             print(f"  {len(report.failed)} paper(s) could not be downloaded.")
 
     if args.command == "stats":
+        # Counted under the id `embed` writes, which is the model name plus
+        # "+context" when passages are embedded with their titles. The bare
+        # name counted nothing in that case and reported every passage pending.
+        model_id = FastEmbedEmbedder(model_name=args.model).model_id
         with CorpusStore(args.state) as corpus:
             counts = corpus.pipeline_stats(
-                chunker_fingerprint(args.chunk_size, args.overlap), args.model
+                chunker_fingerprint(args.chunk_size, args.overlap), model_id
             )
             synced = corpus.sync_summary()
         print(format_stats(counts))
@@ -1393,15 +1397,23 @@ def run() -> None:
 
     if args.command == "pipeline":
         fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+        model_id = FastEmbedEmbedder(model_name=args.model).model_id
 
         def pending() -> dict[str, int]:
             with CorpusStore(args.state) as corpus:
-                return corpus.pipeline_stats(fingerprint, args.model)
+                return corpus.pipeline_stats(fingerprint, model_id)
 
         rounds = run_pipeline(
             pending,
             state=str(args.state),
             max_rounds=args.max_rounds,
+            # The stages that make and index vectors are told which model.
+            # Without it they used the default while the count above waited
+            # on this one, and the embedding count never moved.
+            stage_arguments={
+                "embed": ("--model", args.model),
+                "index": ("--model", args.model),
+            },
             on_stage=lambda stage: print(
                 f"  {'ok ' if stage.ok else 'FAILED'} {stage.name:<12}"
                 f" {stage.pending_before:>7,} -> {stage.pending_after:>7,}",

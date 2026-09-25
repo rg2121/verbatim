@@ -103,6 +103,7 @@ def run_pipeline(
     execute: Callable[[str, Sequence[str], str], tuple[bool, str]] | None = None,
     max_rounds: int = MAX_ROUNDS,
     on_stage: Callable[[StageResult], None] | None = None,
+    stage_arguments: dict[str, tuple[str, ...]] | None = None,
 ) -> list[RoundResult]:
     """Run the stages in rounds until nothing is pending or nothing improves.
 
@@ -110,6 +111,9 @@ def run_pipeline(
     completes. Thirty-three papers in this corpus return a truncated PDF every
     time they are asked for, so "pending reaches zero" would loop for ever. A
     round that changes no count is the real signal that the ingest is done.
+
+    `stage_arguments` adds to a stage's own arguments for this run - the
+    embedding model, which the pending counts are taken against too.
     """
     if max_rounds < 1:
         raise ValueError("max_rounds must be at least 1")
@@ -124,7 +128,10 @@ def run_pipeline(
             # settled corpus costs one query per stage instead of a process.
             if counter and before == 0:
                 continue
-            ok, detail = runner(name, STAGE_ARGUMENTS.get(name, ()), state)
+            arguments = (
+                *STAGE_ARGUMENTS.get(name, ()), *(stage_arguments or {}).get(name, ())
+            )
+            ok, detail = runner(name, arguments, state)
             after = pending().get(counter, 0) if counter else 0
             stage = StageResult(name, ok, before, after, detail)
             result.stages.append(stage)

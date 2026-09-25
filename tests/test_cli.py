@@ -192,3 +192,48 @@ def test_chunk_reports_the_passages_it_actually_wrote(monkeypatch, capsys, tmp_p
         stored = len(corpus.all_chunks())
     assert stored == 2
     assert f"into {stored} new passage" in capsys.readouterr().out
+
+
+def test_stats_counts_the_vectors_embed_actually_wrote(monkeypatch, tmp_path, capsys) -> None:
+    """`embed` names its vectors by the embedder's model id - `+context` when
+    passages carry their title - and `stats` counted under the bare model name,
+    so it reported every passage still to embed."""
+    from helpers import chunked_corpus
+    from verbatim.corpus import EmbeddingModel
+    from verbatim.embedding import FastEmbedEmbedder
+
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        chunk_id = corpus.all_chunks()[0].chunk_id
+        corpus.register_embedding_model(EmbeddingModel("stub+context", 3, True, "v0"))
+        corpus.record_embeddings("stub+context", [(chunk_id, [1.0, 0.0, 0.0])])
+
+    monkeypatch.setattr(
+        "verbatim.cli.FastEmbedEmbedder",
+        lambda model_name, **_: FastEmbedEmbedder(model_name=model_name, with_context=True),
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["verbatim", "stats", "--state", str(tmp_path / "corpus.db"), "--model", "stub"]
+    )
+    run()
+
+    assert "0 to embed" in capsys.readouterr().out
+
+
+def test_pipeline_hands_its_model_to_the_stages_it_runs(monkeypatch, tmp_path) -> None:
+    """It counted pending vectors for --model and launched `embed` without it,
+    so the stage embedded with the default and the count never moved."""
+    captured = {}
+
+    def capture(pending, **options):
+        captured.update(options)
+        return []
+
+    monkeypatch.setattr("verbatim.cli.run_pipeline", capture)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "pipeline", "--state", str(tmp_path / "c.db"), "--model", "other/model"],
+    )
+    run()
+
+    for stage in ("embed", "index"):
+        assert captured["stage_arguments"][stage] == ("--model", "other/model")
