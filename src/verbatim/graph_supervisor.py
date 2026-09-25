@@ -34,7 +34,7 @@ from verbatim.answers import (
     subject_check,
 )
 from verbatim.agent import ToolCaller
-from verbatim.contracts import BudgetGuard, Cost
+from verbatim.contracts import BudgetGuard
 from verbatim.corpus import CorpusStore
 from verbatim.critique import critique as run_critique
 from verbatim.embedding import Embedder
@@ -44,6 +44,7 @@ from verbatim.orchestrator import (
     LADDERS,
     RETRY,
     Attempt,
+    Meters,
     SectionLedger,
     answered_from_records,
     choose_best,
@@ -110,7 +111,7 @@ def build_graph(
     except ImportError as error:  # pragma: no cover - exercised by its own test
         raise RuntimeError(MISSING) from error
 
-    usage = getattr(completion, "usage", None)
+    meters = Meters(completion, caller)
 
     def route(state: LadderState) -> dict[str, Any]:
         shape = question_shape(state["heading"])
@@ -130,7 +131,7 @@ def build_graph(
             if stop is not None:
                 return {"error": f"budget: {stop}", "stopped": True}
             guard.take()
-        before = usage.snapshot() if usage is not None else None
+        before = meters.mark()
         try:
             found = retrieve(
                 strategy, corpus, embedder, state["heading"],
@@ -202,11 +203,7 @@ def build_graph(
         # A critique escalates only where a different retrieval could help,
         # exactly as in the built-in supervisor.
         accepted = verdict.accepted and not (found.unaddressed if found else ())
-        spent = Cost()
-        if usage is not None and state.get("spent_before") is not None:
-            delta = usage.since(state["spent_before"])
-            spent = Cost(delta.calls, delta.prompt_tokens, delta.output_tokens,
-                         delta.seconds)
+        spent = meters.since(state.get("spent_before"))
         evidence = describe_evidence(
             corpus, state["heading"], matches, subject=subject, closeness=closeness
         )

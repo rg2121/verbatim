@@ -284,6 +284,34 @@ def write(
     return answer_from_matches(corpus, completion, heading, list(gathered.matches))
 
 
+class Meters:
+    """What an attempt spent, across every client it used.
+
+    The answering model and the tool-choosing one keep separate counters, and
+    an agent rung's routing turns were missing from its cost because only the
+    first was read. Each counter is read once, since the two can be one
+    client. Shared by both supervisors so their ledgers cannot disagree.
+    """
+
+    def __init__(self, *clients: object) -> None:
+        counters = (getattr(client, "usage", None) for client in clients)
+        self.usages = list({id(u): u for u in counters if u is not None}.values())
+
+    def mark(self) -> list[tuple[int, int, int, float]]:
+        return [usage.snapshot() for usage in self.usages]
+
+    def since(self, marks: list[tuple[int, int, int, float]] | None) -> Cost:
+        if not marks:
+            return Cost()
+        deltas = [usage.since(mark) for usage, mark in zip(self.usages, marks, strict=True)]
+        return Cost(
+            sum(d.calls for d in deltas),
+            sum(d.prompt_tokens for d in deltas),
+            sum(d.output_tokens for d in deltas),
+            round(sum(d.seconds for d in deltas), 3),
+        )
+
+
 def work_section(
     corpus: CorpusStore,
     embedder: Embedder,
@@ -327,7 +355,7 @@ def work_section(
     the reader instead of being retried.
     """
     shape = question_shape(heading)
-    usage = getattr(completion, "usage", None)
+    meters = Meters(completion, caller)
     candidates: list[tuple[Attempt, ReportSection]] = []
     rungs = ladder or LADDERS[shape]
     for rung, strategy in enumerate(rungs, start=1):
@@ -350,7 +378,7 @@ def work_section(
                 ))
                 break
             guard.take()
-        spent_before = usage.snapshot() if usage is not None else None
+        spent_before = meters.mark()
         try:
             gathered = retrieve(
                 strategy, corpus, embedder, heading,
@@ -389,11 +417,7 @@ def work_section(
         evidence = describe_evidence(
             corpus, heading, matches, subject=subject, closeness=closeness
         )
-        spent = Cost()
-        if usage is not None and spent_before is not None:
-            delta = usage.since(spent_before)
-            spent = Cost(delta.calls, delta.prompt_tokens, delta.output_tokens,
-                         delta.seconds)
+        spent = meters.since(spent_before)
         candidates.append((
             Attempt(
                 strategy=strategy, passages=len(matches),
@@ -542,7 +566,9 @@ def orchestrate(
     headings = plan_sections(complete_text, topic, max_sections=max_sections)
     shared = _Serialized(embedder) if workers > 1 else embedder
     guard = (
-        BudgetGuard(budget, getattr(completion, "usage", None))
+        BudgetGuard(
+            budget, getattr(completion, "usage", None), getattr(caller, "usage", None)
+        )
         if budget is not None else None
     )
 

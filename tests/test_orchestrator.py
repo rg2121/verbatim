@@ -541,3 +541,33 @@ def test_a_catalogue_record_is_not_an_answer_to_anything_else(tmp_path: Path) ->
 
     assert section.answer.declined
     assert ledger.outcome.startswith("gap")
+
+
+class MeteredCaller(TracingCaller):
+    """A tool-choosing model that counts its own calls, as Ollama's does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from verbatim.answers import Usage
+
+        self.usage = Usage()
+
+    def choose_tool(self, system, messages, tools):
+        self.usage.record({"prompt_eval_count": 50, "eval_count": 5})
+        return super().choose_tool(system, messages, tools)
+
+
+def test_an_attempts_cost_includes_the_routing_turns(tmp_path: Path) -> None:
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        _section, ledger = work_section(
+            corpus, StubEmbedder(),
+            QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")]),
+            "how does flux behave?", caller=MeteredCaller(), ladder=("agent",),
+        )
+
+    (attempt,) = ledger.attempts
+    assert attempt.strategy == "agent"
+    # One routing turn - the agent stops once it has passages - and nothing
+    # else: the scripted writer keeps no meter. It used to read zero.
+    assert attempt.cost.calls == 1 and attempt.cost.tokens == 55

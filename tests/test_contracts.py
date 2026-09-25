@@ -95,3 +95,23 @@ def test_an_unbounded_budget_never_stops_anything() -> None:
         guard.take()
 
     assert guard.exhausted() is None
+
+
+def test_a_budget_counts_every_model_the_run_uses_once() -> None:
+    """Routing turns are model calls too, and --max-tokens did not see them.
+
+    The tool-choosing model keeps a meter of its own, and the guard read only
+    the answering model's - while the cost footer, for exactly this reason,
+    already added both. A meter shared by both clients is counted once.
+    """
+    answering, routing = Usage(), Usage()
+    guard = BudgetGuard(Budget(max_tokens=100), answering, routing)
+    routing.record({"prompt_eval_count": 120})
+
+    assert guard.exhausted() is not None
+
+    shared = Usage()
+    once = BudgetGuard(Budget(max_tokens=100), shared, shared)
+    shared.record({"prompt_eval_count": 60})
+
+    assert once.exhausted() is None

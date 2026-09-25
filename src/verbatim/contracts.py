@@ -184,18 +184,23 @@ def satisfies(role: str, candidate: object) -> bool:
 class BudgetGuard:
     """Tracks a run against its ceiling, and says when to stop.
 
-    Reads spend from the model client rather than accumulating its own count,
+    Reads spend from the model clients rather than accumulating its own count,
     so it cannot drift from what was actually spent. Sections may run in
     parallel, so `attempts` is incremented under a lock; the token and time
     reads are already atomic.
+
+    Every client's meter is read, each once. The answering model and the
+    tool-choosing one keep separate counters, and reading only the first let
+    a run's routing turns spend past its ceiling; they can also be one client
+    with one counter, which must not be counted twice.
     """
 
-    def __init__(self, budget: Budget, usage: object = None, clock=None) -> None:
+    def __init__(self, budget: Budget, *usages: object, clock=None) -> None:
         import threading
         from datetime import UTC, datetime
 
         self.budget = budget
-        self.usage = usage
+        self.usages = list({id(u): u for u in usages if u is not None}.values())
         self._clock = clock or (lambda: datetime.now(UTC).timestamp())
         self._started = self._clock()
         self._attempts = 0
@@ -203,10 +208,10 @@ class BudgetGuard:
         self._spent_at_start = self._tokens()
 
     def _tokens(self) -> int:
-        usage = self.usage
-        if usage is None:
-            return 0
-        return int(getattr(usage, "prompt_tokens", 0)) + int(getattr(usage, "output_tokens", 0))
+        return sum(
+            int(getattr(usage, "prompt_tokens", 0)) + int(getattr(usage, "output_tokens", 0))
+            for usage in self.usages
+        )
 
     def take(self) -> None:
         """Count one attempt against the budget."""
