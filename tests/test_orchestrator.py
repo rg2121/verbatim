@@ -571,3 +571,18 @@ def test_an_attempts_cost_includes_the_routing_turns(tmp_path: Path) -> None:
     # One routing turn - the agent stops once it has passages - and nothing
     # else: the scripted writer keeps no meter. It used to read zero.
     assert attempt.cost.calls == 1 and attempt.cost.tokens == 55
+
+
+def test_a_section_the_critic_held_back_says_why(tmp_path: Path) -> None:
+    """Every verified-but-not-accepted section was labelled a subject warning,
+    including one whose subject was fine and whose gap was coverage."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
+        _section, ledger = work_section(
+            corpus, StubEmbedder(), QueueCompletion([payload] * 3), "what is flux?",
+            caller=None, critic=True,
+            complete_text=lambda system, user: "superconductivity",
+        )
+
+    assert ledger.outcome == "accepted, though no passage covers: superconductivity"

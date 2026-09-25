@@ -461,6 +461,13 @@ def choose_best(
     errored = [attempt for attempt, _ in candidates if attempt.error]
     if best_attempt.verdict == ACCEPTED:
         outcome = "accepted"
+    elif best_attempt.verified and best_attempt.critique and best_attempt.critique.unaddressed:
+        # Held back by the critic, not by the subject check: its subject may
+        # be fine, and calling it a subject warning named the wrong problem.
+        outcome = (
+            "accepted, though no passage covers: "
+            + ", ".join(best_attempt.critique.unaddressed)
+        )
     elif best_attempt.verified:
         outcome = "accepted with a subject warning"
     elif errored:
