@@ -11,8 +11,9 @@ from xml.etree import ElementTree
 from verbatim.fetching import fetch
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
-# Licence lives only here; the query API omits it entirely.
-ARXIV_OAI_URL = "https://export.arxiv.org/oai2"
+# Licence lives only here; the query API omits it entirely. arXiv moved its
+# OAI-PMH service to this host; the old export.arxiv.org/oai2 redirects here.
+ARXIV_OAI_URL = "https://oaipmh.arxiv.org/oai"
 OAI_NAMESPACE = "http://www.openarchives.org/OAI/2.0/"
 ARXIV_OAI_METADATA_NAMESPACE = "http://arxiv.org/OAI/arXiv/"
 ARXIV_HOSTS = frozenset({"arxiv.org", "www.arxiv.org", "export.arxiv.org"})
@@ -239,7 +240,12 @@ def fetch_license(
             "verb": "GetRecord",
             "identifier": f"oai:arXiv.org:{base_arxiv_id}",
             "metadataPrefix": "arXiv",
-        }
+        },
+        # Sent as written. The current service answers 406, with an empty
+        # body, to an identifier whose ':' or '/' is percent-encoded - the
+        # answer it gives an identifier that does not exist - so after the
+        # move every encoded lookup failed. Both are legal in a query.
+        safe=":/",
     )
     get = http_get or _get
     return parse_license(get(f"{ARXIV_OAI_URL}?{query}"))

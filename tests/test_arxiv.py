@@ -114,8 +114,31 @@ def test_license_lookup_uses_the_base_identifier() -> None:
 
     fetch_license("math/0309136", http_get=fake_get)
 
-    assert "identifier=oai%3AarXiv.org%3Amath%2F0309136" in requested[0]
+    assert "identifier=oai:arXiv.org:math/0309136" in requested[0]
     assert "metadataPrefix=arXiv" in requested[0]
+
+
+def test_license_lookup_asks_arxivs_current_oai_service_in_the_form_it_reads() -> None:
+    """arXiv moved OAI-PMH to oaipmh.arxiv.org; the old address redirects there.
+
+    The new service answers 406, with an empty body, to an identifier whose
+    ':' or '/' is percent-encoded - the same answer it gives an identifier
+    that does not exist. Every lookup was encoded, so after the move every
+    lookup failed: measured on 2026-09-25, 50 of 50. Colons and slashes are
+    legal in a query string and are sent as they are.
+    """
+    from verbatim.arxiv import fetch_license
+
+    requested: list[str] = []
+
+    def fake_get(url: str) -> bytes:
+        requested.append(url)
+        return OAI_RECORD
+
+    fetch_license("2607.08561", http_get=fake_get)
+
+    assert requested[0].startswith("https://oaipmh.arxiv.org/oai?")
+    assert "%3A" not in requested[0] and "%2F" not in requested[0]
 
 
 @pytest.mark.parametrize(
