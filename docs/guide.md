@@ -481,10 +481,17 @@ router chooses) and `--plan` (the ladder answers one question rather than
 splitting it), and refuses each rather than ignoring it. It refuses
 `--arxiv-id`, `--include-references` and `--no-graph` too, since each rung sets
 its own retrieval, and `--tools` refuses the retrieval flags its routing model
-decides for itself.
+decides for itself. The HTTP API does the same: `deep=true` with `arxiv_id` is a
+400, not a question quietly answered from the whole corpus.
 
-The web page has the same thing as a **dig deeper** checkbox beside the ask
-box, off by default. Unchecked, nothing changes: the answer streams token by
+A question about what is new starts its ladder on the agent rung, and is
+answered there from the catalogue - the same listing `ask --tools` gives, one
+paper per line with its date. Nothing is generated, so there is nothing to
+verify. `list_papers` filters by date and category, not by topic, so "what is
+new on X" lists what is new, not what is new on X.
+
+The web page has the same thing as a **Try harder if nothing checks out**
+checkbox beside the ask box, off by default. Unchecked, nothing changes: the answer streams token by
 token as before. Checked, `GET /api/ask?deep=true` streams the rungs instead —
 
 ```

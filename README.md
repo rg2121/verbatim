@@ -198,7 +198,7 @@ uv run verbatim serve        # http://127.0.0.1:8000
 ```
 
 A search box, a conversation that streams answers and resolves follow-up
-questions, a "dig deeper" toggle, and a review panel that shows each section as
+questions, a "try harder" toggle, and a review panel that shows each section as
 it is written. The JSON routes are `/api/search`, `/api/ask` and `/api/report`
 (server-sent events), `/api/papers/{arxiv_id}`, `/api/stats` and `/api/health`,
 with OpenAPI docs at `/docs`. It binds to loopback unless `--host` says
