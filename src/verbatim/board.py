@@ -16,7 +16,7 @@ past the verifier, which is the same reason this project's critic describes
 and lets code decide.
 
 **Nothing here judges.** Every question the board answers - which tasks have no
-evidence, which claims rest on a single paper, what has not been attempted -
+evidence, which are thinner than they asked, what has not been attempted -
 is arithmetic over the records. The board says what is missing. It never says
 whether what is present is any good.
 """

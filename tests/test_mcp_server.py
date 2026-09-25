@@ -9,22 +9,29 @@ from pathlib import Path
 
 import pytest
 
-from verbatim.mcp_server import as_mcp_tools, render_result
+from verbatim.mcp_server import render_result
 from verbatim.tools import TOOL_SCHEMAS
 
 
-def test_the_server_offers_exactly_the_tools_the_agent_has() -> None:
-    """Two front ends onto one set of operations, so they cannot drift apart."""
-    assert [tool["name"] for tool in as_mcp_tools()] == [
-        schema["name"] for schema in TOOL_SCHEMAS
-    ]
+@pytest.mark.anyio
+async def test_the_server_offers_exactly_the_tools_the_agent_has(tmp_path: Path) -> None:
+    """Two front ends onto one set of operations, so they cannot drift apart.
 
+    Checked on what the server publishes. These checks used to run against a
+    helper that restated the schemas and that the server never called, so
+    they could only ever agree with themselves.
+    """
+    from helpers import chunked_corpus
+    from verbatim.mcp_server import build_server
 
-def test_parameters_are_restated_as_the_input_schema_mcp_expects() -> None:
-    for tool, schema in zip(as_mcp_tools(), TOOL_SCHEMAS, strict=True):
-        assert tool["inputSchema"] == schema["parameters"]
-        assert tool["description"] == schema["description"]
-        assert "parameters" not in tool
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Body text."]}):
+        pass
+
+    listed = await build_server(tmp_path / "corpus.db", "BAAI/bge-small-en-v1.5").list_tools()
+
+    assert {tool.name: tool.description for tool in listed} == {
+        schema["name"]: schema["description"] for schema in TOOL_SCHEMAS
+    }
 
 
 def test_a_result_keeps_the_fields_a_citation_needs() -> None:

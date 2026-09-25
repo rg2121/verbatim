@@ -15,7 +15,7 @@ from verbatim.authoring import (
     candidate_papers,
     excluded_papers,
     longest_shared_run,
-    usable_case,
+    why_unusable,
 )
 
 ABSTRACT = (
@@ -69,11 +69,41 @@ def test_longest_shared_run_counts_borrowed_phrasing(
 
 
 def test_a_question_that_copies_the_abstract_is_refused() -> None:
-    assert usable_case("what limits coherence in transmon qubits", ABSTRACT)
-    assert not usable_case(
+    assert why_unusable("what limits coherence in transmon qubits", ABSTRACT) is None
+    assert why_unusable(
         "do transmon qubits lose coherence through dielectric loss in the "
         "amorphous oxide", ABSTRACT
+    ) == "borrowed a 11-word phrase"
+
+
+def test_every_authoring_loop_applies_the_one_rule(tmp_path) -> None:
+    """The loops each wrote the rule out again, so its tests checked a copy.
+
+    Driven through the held-out loop itself: a question that copies its
+    abstract is refused there with the reason the rule gives.
+    """
+    from helpers import corpus_with
+
+    corpus = corpus_with(
+        tmp_path, {"2608.11111v1": ("Transmon loss", ["Passage."] * 30)}
     )
+    corpus.connection.execute(
+        "UPDATE papers SET summary = ? WHERE arxiv_id = '2608.11111v1'", (ABSTRACT,)
+    )
+    corpus.connection.commit()
+    copied = (
+        "Q: do transmon qubits lose coherence through dielectric loss in "
+        "the amorphous oxide"
+    )
+    rejected: dict[str, int] = {}
+    with corpus:
+        written = list(author(
+            corpus, lambda system, user: copied, cases=1, exclude=set(),
+            rejected=rejected, stride=1,
+        ))
+
+    assert written == []
+    assert rejected == {why_unusable(copied.removeprefix("Q: "), ABSTRACT): 1}
 
 
 def test_the_threshold_is_the_one_the_hand_authored_set_sets() -> None:

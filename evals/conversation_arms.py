@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from collections import defaultdict
 from math import comb
 from pathlib import Path
 

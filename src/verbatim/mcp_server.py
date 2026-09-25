@@ -26,23 +26,6 @@ from verbatim.tools import TOOL_SCHEMAS, call_tool
 SERVER_NAME = "verbatim"
 
 
-def as_mcp_tools() -> list[dict[str, Any]]:
-    """Restate the existing tool schemas in the shape MCP asks for.
-
-    MCP calls the parameter schema `inputSchema`; the definitions themselves
-    are the ones the agent already uses, so the two front ends cannot drift
-    apart in what they offer or how they describe it.
-    """
-    return [
-        {
-            "name": schema["name"],
-            "description": schema["description"],
-            "inputSchema": schema["parameters"],
-        }
-        for schema in TOOL_SCHEMAS
-    ]
-
-
 def build_server(state: Path, embedding_model: str) -> Any:
     """Create the MCP server, holding the corpus open for its lifetime.
 

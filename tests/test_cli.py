@@ -265,3 +265,22 @@ def test_the_licence_stage_is_in_the_run_ledger(monkeypatch, tmp_path, capsys) -
         (recorded,) = recent_runs(corpus, command="licenses")
     assert recorded["ok"] is True
     assert recorded["outputs"] == {"looked_up": 2, "found": 1, "failed": 1}
+
+
+def test_every_committed_key_is_kept_out_of_new_authoring() -> None:
+    """A paper a key already scores cannot be written about again.
+
+    The two-turn key was committed without joining the list, so the next
+    held-out authoring run could have drawn its thirty papers.
+    """
+    from pathlib import Path
+
+    from verbatim.cli import SCORED_KEYS
+
+    root = Path(__file__).parent.parent
+    on_disk = {
+        path.relative_to(root)
+        for path in [*root.glob("evals/*.jsonl"), *root.glob("evals/*/questions.jsonl")]
+    }
+
+    assert on_disk == set(SCORED_KEYS)

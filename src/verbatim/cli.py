@@ -112,6 +112,20 @@ AUTHORED_HEADER = """\
 """
 
 
+# Every committed key. A paper one of them names has been scored already, so
+# `author-cases` may not write a new question about it. Named once, and tested
+# against what is on disk, because a key added without joining this list let
+# its papers be drawn again.
+SCORED_KEYS = (
+    Path("evals/retrieval.jsonl"),
+    Path("evals/heldout.jsonl"),
+    Path("evals/heldout-generated.jsonl"),
+    Path("evals/gate.jsonl"),
+    Path("evals/breadth/questions.jsonl"),
+    Path("evals/conversational.jsonl"),
+)
+
+
 # Shared by `search` and `ask`, which both offer these legs. The numbers the
 # help once quoted came from the development key, which a held-out key later
 # showed could not separate the modes; the gates are justified by the question
@@ -335,10 +349,7 @@ def run() -> None:
     )
     author_parser.add_argument("--llm", help="Generation model")
     author_parser.add_argument(
-        "--exclude", type=Path, nargs="*",
-        default=[Path("evals/retrieval.jsonl"), Path("evals/heldout.jsonl"),
-                 Path("evals/heldout-generated.jsonl"), Path("evals/gate.jsonl"),
-                 Path("evals/breadth/questions.jsonl")],
+        "--exclude", type=Path, nargs="*", default=list(SCORED_KEYS),
         help="Existing keys whose papers must not be reused",
     )
 

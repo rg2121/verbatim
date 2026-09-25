@@ -105,11 +105,21 @@ def longest_shared_run(question: str, abstract: str) -> int:
     return longest
 
 
-def usable_case(question: str, abstract: str) -> bool:
-    """Whether a generated question may join the frozen set."""
-    if not standalone(question) or bibliographic(question):
-        return False
-    return longest_shared_run(question, abstract) < MAX_SHARED_RUN
+def why_unusable(question: str, *abstracts: str) -> str | None:
+    """Why a generated question may not join a frozen key, or None if it may.
+
+    The rule in one place. Every authoring loop calls this, so the tests that
+    check it check what the loops actually do - they used to test a copy the
+    loops had each written out again for themselves.
+    """
+    if not standalone(question):
+        return "does not stand alone"
+    if bibliographic(question):
+        return "about the paper's cover"
+    run = max(longest_shared_run(question, abstract) for abstract in abstracts)
+    if run >= MAX_SHARED_RUN:
+        return f"borrowed a {run}-word phrase"
+    return None
 
 
 def excluded_papers(paths: Iterable[str]) -> set[str]:
@@ -239,18 +249,15 @@ def author(
         if question is None:
             bump("no question written")
             continue
-        if not standalone(question):
-            bump("does not stand alone")
-            continue
-        if bibliographic(question):
-            bump("about the paper's cover")
-            continue
-        run = longest_shared_run(question, abstract)
-        if run >= MAX_SHARED_RUN:
-            bump(f"borrowed a {run}-word phrase")
+        reason = why_unusable(question, abstract)
+        if reason is not None:
+            bump(reason)
             continue
         written += 1
-        yield Case(question=question, arxiv_id=arxiv_id, shared_run=run)
+        yield Case(
+            question=question, arxiv_id=arxiv_id,
+            shared_run=longest_shared_run(question, abstract),
+        )
         if written >= cases:
             return
 
@@ -443,19 +450,14 @@ def author_pairs(
         if question is None:
             bump("no question written")
             continue
-        if not standalone(question):
-            bump("does not stand alone")
-            continue
-        if bibliographic(question):
-            bump("about the paper's cover")
+        reason = why_unusable(question, first[2], second[2])
+        if reason is not None:
+            bump(reason)
             continue
         run = max(
             longest_shared_run(question, first[2]),
             longest_shared_run(question, second[2]),
         )
-        if run >= MAX_SHARED_RUN:
-            bump(f"borrowed a {run}-word phrase")
-            continue
         wanted[kind] -= 1
         yield PairCase(
             question=question, kind=kind,
@@ -556,12 +558,15 @@ def author_conversations(
             bump("no exchange written")
             continue
         question, second = opening.group(1), follow_up.group(1)
-        if not standalone(question) or bibliographic(question):
-            bump("opening does not stand alone")
+        reason = why_unusable(question, abstract)
+        if reason is not None:
+            bump(f"opening {reason}")
             continue
         if not usable_follow_up(second):
             bump("follow-up does not depend on the opening")
             continue
+        # The follow-up is held to the same leakage bar; standing alone is
+        # exactly what it must not do, so only the shared run applies to it.
         run = max(
             longest_shared_run(question, abstract),
             longest_shared_run(second, abstract),
