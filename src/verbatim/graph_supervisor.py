@@ -77,6 +77,9 @@ class LadderState(TypedDict, total=False):
     subject: str | None
     closeness: float | None
     error: str
+    # Set when the budget refuses a rung: the built-in loop stops there
+    # rather than trying every remaining rung only to be refused again.
+    stopped: bool
     spent_before: Any
     candidates: list[tuple[Attempt, ReportSection]]
 
@@ -125,7 +128,7 @@ def build_graph(
         if guard is not None:
             stop = guard.exhausted()
             if stop is not None:
-                return {"error": f"budget: {stop}"}
+                return {"error": f"budget: {stop}", "stopped": True}
             guard.take()
         before = usage.snapshot() if usage is not None else None
         try:
@@ -150,41 +153,51 @@ def build_graph(
         except (RuntimeError, OSError, sqlite3.Error) as failure:
             return {"error": str(failure)[:200]}
 
+    def failed(heading: str, strategy: str, candidates: list, error: str) -> dict[str, Any]:
+        candidates.append((
+            Attempt(strategy=strategy, passages=0, verified=0, rejected=0,
+                    closeness=None, verdict=RETRY, error=error),
+            ReportSection(
+                heading=heading,
+                answer=Answer(
+                    question=heading,
+                    text=f"This section could not be written: {error}",
+                    citations=[], rejected=[], declined=True,
+                ),
+            ),
+        ))
+        return {"candidates": candidates}
+
     def verify(state: LadderState) -> dict[str, Any]:
         """Record this rung as a candidate, whatever happened to it."""
         strategy = state["ladder"][state["rung"]]
         candidates = list(state.get("candidates") or [])
         if state.get("error"):
-            candidates.append((
-                Attempt(strategy=strategy, passages=0, verified=0, rejected=0,
-                        closeness=None, verdict=RETRY, error=state["error"]),
-                ReportSection(
-                    heading=state["heading"],
-                    answer=Answer(
-                        question=state["heading"],
-                        text=f"This section could not be written: {state['error']}",
-                        citations=[], rejected=[], declined=True,
-                    ),
-                ),
-            ))
-            return {"candidates": candidates}
+            return failed(state["heading"], strategy, candidates, state["error"])
 
         answer = state["answer"]
         matches = list(state["gathered"].matches)
         subject = closeness = None
-        if matches and check_subject:
-            subject, closeness = subject_check(
-                completion, embedder, state["heading"], matches
+        try:
+            if matches and check_subject:
+                subject, closeness = subject_check(
+                    completion, embedder, state["heading"], matches
+                )
+            found = (
+                run_critique(
+                    state["heading"], answer, state["gathered"],
+                    complete_text=complete_text,
+                )
+                if critic else None
             )
+        except (RuntimeError, OSError, sqlite3.Error) as failure:
+            # The checks call the model too. The built-in loop contains a
+            # failure here as a failed rung; this node raised, and one section
+            # losing its model took the whole review down with it.
+            return failed(state["heading"], strategy, candidates, str(failure)[:200])
         verdict = verdict_for(
             answer, closeness, warn_below,
             listed=answered_from_records(state["gathered"], state["shape"]),
-        )
-        found = (
-            run_critique(
-                state["heading"], answer, state["gathered"], complete_text=complete_text
-            )
-            if critic else None
         )
         # A critique escalates only where a different retrieval could help,
         # exactly as in the built-in supervisor.
@@ -228,7 +241,7 @@ def build_graph(
         built-in supervisor.
         """
         last, _section = state["candidates"][-1]
-        if last.verdict == ACCEPTED:
+        if last.verdict == ACCEPTED or state.get("stopped"):
             return "done"
         if state["rung"] + 1 >= len(state["ladder"]):
             return "done"

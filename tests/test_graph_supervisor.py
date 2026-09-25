@@ -233,3 +233,51 @@ def test_both_supervisors_answer_a_recency_question_from_the_catalogue(
         assert ledger.outcome == "accepted"
         assert "2608.22222v1" in section.answer.text
     assert builtin[0].answer.text == graphed[0].answer.text
+
+
+class _JudgeDies(QueueCompletion):
+    """Writes an answer, then goes away before the subject check."""
+
+    def judge(self, system, user):
+        raise RuntimeError("Cannot reach Ollama (subject check)")
+
+
+def test_both_supervisors_contain_a_model_that_fails_while_checking(
+    tmp_path: Path,
+) -> None:
+    """The built-in loop recorded the failure and carried on; the graph raised,
+    which would have taken a whole review down with one section."""
+    with flux_corpus(tmp_path) as corpus:
+        chunk = corpus.all_chunks()[0]
+        payloads = [cite(chunk.chunk_id, chunk.text)]
+        builtin = work_section(
+            corpus, StubEmbedder(), _JudgeDies(list(payloads)), "what threads the ring",
+            ladder=("hybrid",), per_section=4,
+        )
+        graphed = work_section_with_graph(
+            corpus, StubEmbedder(), _JudgeDies(list(payloads)), "what threads the ring",
+            ladder=("hybrid",), per_section=4,
+        )
+
+    assert builtin[1].outcome == graphed[1].outcome
+    assert graphed[1].outcome.startswith("failed")
+
+
+def test_both_supervisors_stop_at_the_first_rung_a_spent_budget_refuses(
+    tmp_path: Path,
+) -> None:
+    from verbatim.contracts import Budget, BudgetGuard
+
+    ladder = ("hybrid", "titles", "compare")
+    with flux_corpus(tmp_path) as corpus:
+        builtin = work_section(
+            corpus, StubEmbedder(), QueueCompletion([]), "what threads the ring",
+            ladder=ladder, per_section=4, guard=BudgetGuard(Budget(max_attempts=0)),
+        )
+        graphed = work_section_with_graph(
+            corpus, StubEmbedder(), QueueCompletion([]), "what threads the ring",
+            ladder=ladder, per_section=4, guard=BudgetGuard(Budget(max_attempts=0)),
+        )
+
+    assert len(builtin[1].attempts) == len(graphed[1].attempts) == 1
+    assert graphed[1].attempts[0].error.startswith("budget")
