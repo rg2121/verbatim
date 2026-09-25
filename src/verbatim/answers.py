@@ -437,6 +437,11 @@ class OllamaCompletion:
         what it saw and parses it with parse_line_protocol, so streaming
         changes when text is shown and nothing about what is accepted:
         verification runs on the finished reply exactly as it always has.
+
+        Failures are read as `_request` reads them - a missing model is named,
+        a refusal is final, a server error is retried - but only until the
+        first line arrives. After that a retry would repeat text the reader
+        has already been shown, so a failure part-way is raised as it is.
         """
         request = Request(
             f"{self.host}/api/chat",
@@ -452,12 +457,32 @@ class OllamaCompletion:
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local host
+        attempts = config.HTTP_RETRIES
+        last: Exception | None = None
+        for attempt in range(attempts + 1):
+            if attempt:
+                time.sleep(config.HTTP_BACKOFF * (2 ** (attempt - 1)))
+            try:
+                response = urlopen(request, timeout=self.timeout)  # noqa: S310 - local host
+            except HTTPError as error:
+                final = self._refusal(error)
+                if final is not None:
+                    raise final from error
+                last = error
+                continue
+            except (URLError, TimeoutError, OSError) as error:
+                last = error
+                continue
+            with response:
                 for line in response:
                     if not line.strip():
                         continue
-                    body = json.loads(line)
+                    try:
+                        body = json.loads(line)
+                    except ValueError as error:
+                        raise RuntimeError(
+                            f"Ollama sent a line that is not JSON: {line[:120]!r}"
+                        ) from error
                     if "error" in body:
                         raise RuntimeError(f"Ollama error: {body['error']}")
                     fragment = body.get("message", {}).get("content", "")
@@ -466,11 +491,8 @@ class OllamaCompletion:
                     if body.get("done"):
                         self.usage.record(body)
                         return
-        except URLError as error:
-            raise RuntimeError(
-                f"Cannot reach Ollama at {self.host} ({error.reason}). "
-                f"Is it running? Start it with 'ollama serve'."
-            ) from error
+            return
+        raise self._unreachable(attempts, last)
 
     def _first_available_model(self) -> str:
         models = [item["name"] for item in self._get("/api/tags").get("models", [])]
@@ -511,17 +533,9 @@ class OllamaCompletion:
                 with urlopen(request, timeout=self.timeout) as response:  # noqa: S310
                     body = json.loads(response.read())
             except HTTPError as error:
-                if error.code == 404:
-                    # Ollama answers 404 when the model is not pulled, which
-                    # is the one 4xx a user can act on - and "refused the
-                    # request (404 Not Found)" does not tell them the model is
-                    # the problem, let alone which models they do have.
-                    raise RuntimeError(self._missing_model_message()) from error
-                if error.code < 500:
-                    raise RuntimeError(
-                        f"Ollama at {self.host} refused the request "
-                        f"({error.code} {error.reason})."
-                    ) from error
+                final = self._refusal(error)
+                if final is not None:
+                    raise final from error
                 last = error
                 continue
             except (URLError, TimeoutError, OSError) as error:
@@ -530,7 +544,30 @@ class OllamaCompletion:
             if "error" in body:
                 raise RuntimeError(f"Ollama error: {body['error']}")
             return body
-        raise RuntimeError(
+        raise self._unreachable(attempts, last)
+
+    def _refusal(self, error: HTTPError) -> RuntimeError | None:
+        """The error to stop on, or None when a retry could fix this one.
+
+        Shared by the streaming and non-streaming calls. They classified
+        failures apart, and the streaming one - HTTPError being a URLError -
+        read a missing model as an unreachable server.
+        """
+        if error.code == 404:
+            # Ollama answers 404 when the model is not pulled, which is the
+            # one 4xx a user can act on - and "refused the request (404 Not
+            # Found)" does not tell them the model is the problem, let alone
+            # which models they do have.
+            return RuntimeError(self._missing_model_message())
+        if error.code < 500:
+            return RuntimeError(
+                f"Ollama at {self.host} refused the request "
+                f"({error.code} {error.reason})."
+            )
+        return None
+
+    def _unreachable(self, attempts: int, last: Exception | None) -> RuntimeError:
+        return RuntimeError(
             f"Cannot reach Ollama at {self.host} after {attempts + 1} attempts "
             f"({last}). Is it running? Start it with 'ollama serve'."
         )

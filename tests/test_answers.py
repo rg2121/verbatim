@@ -670,3 +670,106 @@ def test_listing_the_models_failing_does_not_mask_the_missing_model() -> None:
             completion.complete_text("system", "user")
 
     assert "no model named 'nonesuch:70b'" in str(raised.value)
+
+
+class _Streamed:
+    """An Ollama streaming response: one JSON object per line."""
+
+    def __init__(self, lines: list[bytes], fail_after: int | None = None) -> None:
+        self.lines = lines
+        self.fail_after = fail_after
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def __iter__(self):
+        for position, line in enumerate(self.lines):
+            if self.fail_after is not None and position == self.fail_after:
+                raise ConnectionResetError("connection reset mid-answer")
+            yield line
+
+
+def _chunk(text: str, done: bool = False) -> bytes:
+    import json
+
+    return (json.dumps({"message": {"content": text}, "done": done}) + "\n").encode()
+
+
+def _streaming_client():
+    from verbatim.answers import OllamaCompletion
+
+    return OllamaCompletion("nonesuch:70b", host="http://localhost:11434", timeout=1.0)
+
+
+def test_a_streamed_answer_names_a_missing_model_too() -> None:
+    """The page streams, and said "Is it running?" to someone whose Ollama was.
+
+    HTTPError is a URLError, so the stream's catch-all for an unreachable
+    server swallowed the 404 that the non-streaming path already explains.
+    """
+    from urllib.error import HTTPError
+
+    completion = _streaming_client()
+    completion._get = lambda path: {"models": [{"name": "llama3.1"}]}  # type: ignore[method-assign]
+
+    def refuse(request, timeout=None):
+        raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.answers.urlopen", refuse)
+        with pytest.raises(RuntimeError) as raised:
+            list(completion.stream("system", "user"))
+
+    assert "no model named 'nonesuch:70b'" in str(raised.value)
+    assert "Is it running" not in str(raised.value)
+
+
+def test_a_streamed_answer_retries_a_server_error_before_it_starts() -> None:
+    """A served model drops the odd call, and the page is where people ask."""
+    from urllib.error import HTTPError
+
+    completion = _streaming_client()
+    outcomes = [
+        HTTPError("u", 502, "Bad Gateway", {}, None),
+        _Streamed([_chunk("ANSWER: "), _chunk("flux", done=True)]),
+    ]
+    calls = []
+
+    def serve(request, timeout=None):
+        calls.append(request)
+        outcome = outcomes[len(calls) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.answers.urlopen", serve)
+        patch.setattr("verbatim.answers.time.sleep", lambda seconds: None)
+        fragments = list(completion.stream("system", "user"))
+
+    assert fragments == ["ANSWER: ", "flux"]
+    assert len(calls) == 2
+
+
+def test_a_stream_that_fails_part_way_is_not_retried() -> None:
+    """A retry would repeat text the reader has already been shown."""
+    completion = _streaming_client()
+    calls = []
+
+    def serve(request, timeout=None):
+        calls.append(request)
+        return _Streamed([_chunk("ANSWER: "), _chunk("flux")], fail_after=1)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.answers.urlopen", serve)
+        patch.setattr("verbatim.answers.time.sleep", lambda seconds: None)
+        seen = []
+        with pytest.raises((RuntimeError, OSError)):
+            for fragment in completion.stream("system", "user"):
+                seen.append(fragment)
+
+    assert seen == ["ANSWER: "]
+    assert len(calls) == 1
