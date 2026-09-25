@@ -176,6 +176,41 @@ def test_license_backfill_records_absence_so_it_is_not_retried(tmp_path: Path) -
     assert all(p is not None and p.license_url is not None for p in both_versions)
 
 
+def test_a_licence_survives_the_paper_being_synced_again(tmp_path: Path) -> None:
+    """The query API never returns a licence, so every sync writes none.
+
+    A re-sync used to overwrite the licence `licenses` had found with that
+    nothing - and since the paper was already marked checked, nothing ever
+    looked it up again. A paper cross-listed in two synced categories lost
+    its licence on the second category's sync; 50 in the full corpus had.
+    """
+    licence = "http://creativecommons.org/licenses/by/4.0/"
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.12345v1")])
+        corpus.record_license("2608.12345", licence)
+
+        corpus.upsert_papers([paper("2608.12345v1")])  # seen again by a later sync
+        kept = corpus.get_paper("2608.12345v1")
+        kept_class = corpus.connection.execute(
+            "SELECT license_class FROM papers WHERE arxiv_id = '2608.12345v1'"
+        ).fetchone()[0]
+
+    assert kept is not None and kept.license_url == licence
+    assert kept_class == "open"
+
+
+def test_a_licence_a_sync_does_report_still_replaces_the_old_one(tmp_path: Path) -> None:
+    """Keeping the old value is for a sync that reports nothing, not a veto."""
+    newer = "http://creativecommons.org/licenses/by-sa/4.0/"
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        corpus.upsert_papers([paper("2608.12345v1")])
+        corpus.record_license("2608.12345", "http://arxiv.org/licenses/nonexclusive-distrib/1.0/")
+        corpus.upsert_papers([Paper(**{**paper("2608.12345v1").to_dict(), "license_url": newer})])
+        kept = corpus.get_paper("2608.12345v1")
+
+    assert kept is not None and kept.license_url == newer
+
+
 def test_downloads_can_be_gated_on_what_a_licence_permits(tmp_path: Path) -> None:
     """Having a licence is not the same as being allowed to reuse the paper."""
     from verbatim.arxiv import Paper

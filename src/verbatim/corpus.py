@@ -233,8 +233,16 @@ class CorpusStore:
                         updated = excluded.updated,
                         source_url = excluded.source_url,
                         pdf_url = excluded.pdf_url,
-                        license_url = excluded.license_url,
-                        license_class = excluded.license_class,
+                        -- The query API never returns a licence, so a sync
+                        -- that reports none is saying nothing, not that the
+                        -- paper has none. Overwriting erased what `licenses`
+                        -- had found, and the paper, already marked checked,
+                        -- was never looked up again.
+                        license_url = COALESCE(excluded.license_url, papers.license_url),
+                        license_class = CASE
+                            WHEN excluded.license_url IS NULL THEN papers.license_class
+                            ELSE excluded.license_class
+                        END,
                         is_latest = excluded.is_latest,
                         last_seen_at = excluded.last_seen_at
                     """,
