@@ -859,3 +859,14 @@ def test_start_over_drops_an_answer_still_arriving() -> None:
     assert seen["usable"] is True
     assert seen["sentHistory"] is False
     assert seen["who"] == "You"
+
+
+def test_a_listing_answer_is_shown_as_a_list() -> None:
+    """A recency answer is catalogue rows, one per line, and must read as rows."""
+    seen = run_page(
+        "report({ html: renderAnswer(listing, 1) });",
+        listing="- 2608.22222v1  2026-08-09  Charge Paper\n- 2608.11111v1  2026-08-08  Flux Paper",
+    )
+
+    assert seen["html"].count("<li>") == 2
+    assert "Charge Paper" in seen["html"] and "Flux Paper" in seen["html"]

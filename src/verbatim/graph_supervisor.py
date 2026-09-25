@@ -31,7 +31,6 @@ from verbatim import config
 from verbatim.answers import (
     Answer,
     Completion,
-    answer_from_matches,
     subject_check,
 )
 from verbatim.agent import ToolCaller
@@ -46,10 +45,12 @@ from verbatim.orchestrator import (
     RETRY,
     Attempt,
     SectionLedger,
+    answered_from_records,
     choose_best,
     question_shape,
     retrieve,
     verdict_for,
+    write as write_answer,
 )
 from verbatim.report import ReportSection
 
@@ -141,9 +142,9 @@ def build_graph(
             return {}
         try:
             return {
-                "answer": answer_from_matches(
-                    corpus, completion, state["heading"],
-                    list(state["gathered"].matches),
+                "answer": write_answer(
+                    corpus, completion, state["heading"], state["gathered"],
+                    state["shape"],
                 )
             }
         except (RuntimeError, OSError, sqlite3.Error) as failure:
@@ -175,7 +176,10 @@ def build_graph(
             subject, closeness = subject_check(
                 completion, embedder, state["heading"], matches
             )
-        verdict = verdict_for(answer, closeness, warn_below)
+        verdict = verdict_for(
+            answer, closeness, warn_below,
+            listed=answered_from_records(state["gathered"], state["shape"]),
+        )
         found = (
             run_critique(
                 state["heading"], answer, state["gathered"], complete_text=complete_text

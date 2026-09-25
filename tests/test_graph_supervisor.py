@@ -211,3 +211,25 @@ def test_the_critic_escalates_the_same_way_in_both_supervisors(tmp_path: Path) -
     assert [a.strategy for a in graphed.attempts] == [a.strategy for a in builtin.attempts]
     assert [a.verdict for a in graphed.attempts] == [a.verdict for a in builtin.attempts]
     assert graphed.attempts[0].critique.unaddressed == ("superconductivity",)
+
+
+def test_both_supervisors_answer_a_recency_question_from_the_catalogue(
+    tmp_path: Path,
+) -> None:
+    from test_orchestrator import ListingCaller
+
+    with flux_corpus(tmp_path) as corpus:
+        question = "what came out this week on flux?"
+        builtin = work_section(
+            corpus, StubEmbedder(), QueueCompletion([]), question,
+            caller=ListingCaller(),
+        )
+        graphed = work_section_with_graph(
+            corpus, StubEmbedder(), QueueCompletion([]), question,
+            caller=ListingCaller(),
+        )
+
+    for section, ledger in (builtin, graphed):
+        assert ledger.outcome == "accepted"
+        assert "2608.22222v1" in section.answer.text
+    assert builtin[0].answer.text == graphed[0].answer.text

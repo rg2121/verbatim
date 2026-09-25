@@ -120,19 +120,24 @@ def answer_question(
             trace,
         )
     if not matches and trace.metadata:
-        # A metadata question - "what is new" - has no passages to quote. Report
-        # the records rather than asking a model to narrate them, which would
-        # invite claims nothing supports.
-        return (
-            Answer(
-                question=question,
-                text=_format_metadata(trace.metadata),
-                citations=[],
-                rejected=[],
-            ),
-            trace,
-        )
+        return records_answer(question, trace.metadata), trace
     return answer_from_matches(corpus, completion, question, matches), trace
+
+
+def records_answer(question: str, records: list[dict[str, Any]]) -> Answer:
+    """Answer from catalogue rows, which is how a recency question is answered.
+
+    A metadata question - "what is new" - has no passages to quote. The records
+    are reported rather than handed to a model to narrate, which would invite
+    claims nothing supports. Shared with the orchestrator's agent rung, so a
+    question gets the same answer from `ask --tools` as from the ladder.
+    """
+    return Answer(
+        question=question,
+        text=_format_metadata(records),
+        citations=[],
+        rejected=[],
+    )
 
 
 SYSTEM_PROMPT = (

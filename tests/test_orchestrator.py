@@ -494,3 +494,50 @@ def test_a_run_stops_when_its_budget_is_spent(tmp_path: Path) -> None:
     # rather than the placeholder that recorded the stop.
     assert report.sections[1].answer.text == "Nothing verifiable."
     assert report.sections[1].answer.declined is False
+
+
+class ListingCaller:
+    """A tool-choosing model that makes one call and stops."""
+
+    def __init__(self, tool=("list_papers", {"limit": 5})) -> None:
+        self.script = [tool]
+
+    def choose_tool(self, system, messages, tools):
+        return self.script.pop(0) if self.script else None
+
+
+def test_a_recency_question_is_answered_from_the_catalogue(tmp_path: Path) -> None:
+    """The recency ladder starts with the agent because only it can list what
+    is new - and the list was being thrown away.
+
+    The agent's listing arrived as records, not passages, and the ladder kept
+    passages only: the rung wrote "no passages match", was retried, and a
+    question about what is new was answered by passage search, which has no
+    notion of new. `ask --tools` answered it from the records all along.
+    """
+    with flux_corpus(tmp_path) as corpus:
+        # Empty: nothing may be generated, because a listing is not prose.
+        section, ledger = work_section(
+            corpus, StubEmbedder(), QueueCompletion([]),
+            "what came out this week on flux?", caller=ListingCaller(),
+        )
+
+    assert ledger.shape == "recency"
+    assert [a.strategy for a in ledger.attempts] == ["agent"]
+    assert ledger.outcome == "accepted"
+    assert "2608.11111v1" in section.answer.text
+    assert "2608.22222v1" in section.answer.text
+    assert section.answer.citations == [] and not section.answer.declined
+
+
+def test_a_catalogue_record_is_not_an_answer_to_anything_else(tmp_path: Path) -> None:
+    """A listing answers "what is new". A looked-up paper answers nothing."""
+    with flux_corpus(tmp_path) as corpus:
+        section, ledger = work_section(
+            corpus, StubEmbedder(), QueueCompletion([]), "how does flux behave?",
+            caller=ListingCaller(("get_paper", {"identifier": "2608.11111v1"})),
+            ladder=("agent",),
+        )
+
+    assert section.answer.declined
+    assert ledger.outcome.startswith("gap")

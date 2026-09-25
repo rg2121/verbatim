@@ -50,7 +50,7 @@ import threading
 from typing import Any
 
 from verbatim import config
-from verbatim.agent import ToolCaller, gather
+from verbatim.agent import ToolCaller, gather, records_answer
 from verbatim.answers import (
     Answer,
     Completion,
@@ -208,13 +208,21 @@ class Ledger:
         return "\n".join(lines)
 
 
-def verdict_for(answer: Answer, closeness: float | None, warn_below: float) -> Verdict:
+def verdict_for(
+    answer: Answer, closeness: float | None, warn_below: float, *, listed: bool = False
+) -> Verdict:
     """Accept or retry, from numbers only.
 
     A section is accepted when at least one citation survived verification
     and the passages are about what the section asks. No model is asked
     whether the answer is good: asked that, every model tested says yes.
+
+    `listed` is the one other way to stand: a recency question answered from
+    catalogue rows. Nothing was generated, so there is nothing to verify, and
+    the rows are the answer rather than evidence for one.
     """
+    if listed:
+        return Verdict(True, "listed from the catalogue; nothing was generated")
     if not answer.citations:
         return Verdict(False, "no citation survived verification")
     if closeness is not None and closeness < warn_below:
@@ -242,12 +250,38 @@ def retrieve(
         if caller is None:
             return Gathered(question, (), strategy, "no tool-choosing model available")
         matches, trace = gather(corpus, embedder, caller, question)
-        return Gathered(question, tuple(matches[:limit]), strategy, trace.describe())
+        return Gathered(
+            question, tuple(matches[:limit]), strategy, trace.describe(),
+            records=tuple(trace.metadata),
+        )
     found = hybrid_search(
         corpus, embedder, question,
         limit=limit, max_per_paper=max_per_paper, **STRATEGY_FLAGS[strategy],
     )
     return Gathered(question, tuple(found), strategy)
+
+
+def answered_from_records(gathered: Gathered, shape: str) -> bool:
+    """Whether this attempt answers from catalogue rows rather than passages.
+
+    Only for a recency question. A listing is the answer to "what is new";
+    to any other question a looked-up record with no passage is a lookup
+    that found nothing to quote, and is treated as exactly that.
+    """
+    return shape == "recency" and not gathered.matches and bool(gathered.records)
+
+
+def write(
+    corpus: CorpusStore,
+    completion: Completion,
+    heading: str,
+    gathered: Gathered,
+    shape: str,
+) -> Answer:
+    """The answer one attempt can give. Shared by both supervisors."""
+    if answered_from_records(gathered, shape):
+        return records_answer(heading, list(gathered.records))
+    return answer_from_matches(corpus, completion, heading, list(gathered.matches))
 
 
 def work_section(
@@ -323,7 +357,7 @@ def work_section(
                 limit=per_section, max_per_paper=max_per_paper, caller=caller,
             )
             matches = list(gathered.matches)
-            answer = answer_from_matches(corpus, completion, heading, matches)
+            answer = write(corpus, completion, heading, gathered, shape)
             subject = closeness = None
             if matches and check_subject:
                 subject, closeness = subject_check(
@@ -347,7 +381,9 @@ def work_section(
                 ),
             ))
             continue
-        verdict = verdict_for(answer, closeness, warn_below)
+        verdict = verdict_for(
+            answer, closeness, warn_below, listed=answered_from_records(gathered, shape)
+        )
         # A critique escalates only where a different retrieval could help.
         accepted = verdict.accepted and not (found.unaddressed if found else ())
         evidence = describe_evidence(

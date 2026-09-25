@@ -784,6 +784,8 @@ PAGE = """<!doctype html>
   }
   .answer { font: 1.02rem/1.75 var(--serif); }
   .answer p { margin: 0 0 .9rem; }
+  .answer ul { margin: 0 0 .9rem; padding-left: 1.1rem; font: .92rem/1.6 var(--sans); }
+  .answer li { margin: 0 0 .35rem; }
   .thinking { color: var(--muted); font-family: var(--sans); font-size: .95rem; }
   .cursor::after { content: "▌"; animation: blink 1.1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -953,7 +955,15 @@ function renderAnswer(text, turn) {
     .replace(/\\[(\\d+)\\]/g, (m, n) => '<a class="cite" href="#ref-' + turn + '-' + n + '">' + n + '</a>');
   return marked
     .split(/\\n\\s*\\n/)
-    .map((para) => "<p>" + para.replace(/\\n/g, " ") + "</p>")
+    .map((para) => {
+      const lines = para.split(/\\n/).filter((line) => line.trim());
+      // A catalogue listing - what a question about what is new is answered
+      // with - is rows, one per line, and has to read as rows.
+      if (lines.length && lines.every((line) => /^\\s*- /.test(line))) {
+        return "<ul>" + lines.map((line) => "<li>" + line.replace(/^\\s*- /, "") + "</li>").join("") + "</ul>";
+      }
+      return "<p>" + para.replace(/\\n/g, " ") + "</p>";
+    })
     .join("");
 }
 

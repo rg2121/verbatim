@@ -22,7 +22,7 @@ repository.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from verbatim.answers import Answer
 from verbatim.corpus import ChunkMatch
@@ -47,12 +47,18 @@ class Gathered:
     `strategy` names the retrieval that produced them and `route` records what
     a tool-choosing rung actually called, so the ledger can say what happened
     rather than only that something did.
+
+    `records` are catalogue rows a tool returned instead of passages - what a
+    recency question is answered from. They carry no quotable text, so they
+    are kept apart from `matches` rather than dropped: dropping them is how a
+    question about what is new came to be answered by passage search.
     """
 
     question: str
     matches: tuple[ChunkMatch, ...]
     strategy: str
     route: str = ""
+    records: tuple[dict[str, Any], ...] = ()
 
     @property
     def chunk_ids(self) -> tuple[str, ...]:
