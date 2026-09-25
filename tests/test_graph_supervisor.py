@@ -55,7 +55,7 @@ def test_both_supervisors_reach_the_same_section_by_the_same_route(
     both must keep the same answer.
     """
     with flux_corpus(tmp_path) as corpus:
-        chunk = corpus.all_chunks()[0]
+        chunk = list(corpus.iter_chunks())[0]
         payloads = [
             cite(chunk.chunk_id, "Flux never threads anything."),
             cite(chunk.chunk_id, "Magnetic flux threads the ring."),
@@ -78,7 +78,7 @@ def test_both_supervisors_reach_the_same_section_by_the_same_route(
 def test_both_supervisors_declare_the_same_gap(tmp_path: Path) -> None:
     """Agreement has to hold when nothing works, not only when something does."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = corpus.all_chunks()[0]
+        chunk = list(corpus.iter_chunks())[0]
         payloads = [cite(chunk.chunk_id, "Flux never threads anything.")] * 2
         (_a, ledger_a), (_b, ledger_b) = both_supervisors(
             corpus, payloads, "how does flux behave?", ("hybrid", "titles")
@@ -92,7 +92,7 @@ def test_both_supervisors_declare_the_same_gap(tmp_path: Path) -> None:
 def test_the_graph_stops_at_the_first_accepted_rung(tmp_path: Path) -> None:
     """The conditional edge is the `break`, and must not climb past success."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = corpus.all_chunks()[0]
+        chunk = list(corpus.iter_chunks())[0]
         _section, ledger = work_section_with_graph(
             corpus, StubEmbedder(),
             QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")]),
@@ -173,7 +173,7 @@ def test_orchestrate_can_drive_the_graph_with_every_option_it_passes(
     from verbatim.orchestrator import orchestrate
 
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers({
             "What is flux?": cite(
                 chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
@@ -193,7 +193,7 @@ def test_orchestrate_can_drive_the_graph_with_every_option_it_passes(
 def test_the_critic_escalates_the_same_way_in_both_supervisors(tmp_path: Path) -> None:
     """A subject no passage covers sends both up the whole ladder."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
         options = dict(
             caller=None, critic=True,
@@ -248,7 +248,7 @@ def test_both_supervisors_contain_a_model_that_fails_while_checking(
     """The built-in loop recorded the failure and carried on; the graph raised,
     which would have taken a whole review down with one section."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = corpus.all_chunks()[0]
+        chunk = list(corpus.iter_chunks())[0]
         payloads = [cite(chunk.chunk_id, chunk.text)]
         builtin = work_section(
             corpus, StubEmbedder(), _JudgeDies(list(payloads)), "what threads the ring",

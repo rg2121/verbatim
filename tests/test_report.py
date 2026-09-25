@@ -103,7 +103,7 @@ def test_build_report_writes_each_section_from_its_own_retrieval(tmp_path: Path)
         },
     ) as corpus:
         embed_pending(corpus, StubEmbedder())
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers(
             {
                 "What is flux?": {

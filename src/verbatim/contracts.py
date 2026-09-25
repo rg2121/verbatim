@@ -1,43 +1,19 @@
-"""What each role in the orchestrator promises, stated as types.
+"""The data the orchestrator's roles pass between them.
 
-The roles were functions that happened to fit together. That is enough to run
-and not enough to reason about: nothing said what a retriever must return, so
-nothing could check that a new one behaved like the old, and "bounded roles
-with explicit contracts" was a description of the intent rather than of the
-code.
-
-Each role below is a Protocol over frozen dataclasses. Two things follow. A
-role can be replaced - a different retriever, a critic that is a model instead
-of arithmetic - without its caller changing, because the caller depends on the
-contract rather than on the implementation. And a role can be tested against
-its contract alone, with no orchestrator present, which is what makes them
-independently testable rather than only jointly.
-
-Nothing here validates at runtime. These are static contracts and a cheap
-assertion helper for tests; a schema validator on every call would cost more
-than it catches in a single process where the only callers are in this
-repository.
+The roles - planner, retriever, writer, verifier, critic - are plain
+functions, and these frozen dataclasses are what they hand each other: what
+was gathered and how, what a step cost, what a run may spend, and what the
+verifier and critic concluded. Both supervisors, the built-in loop and the
+LangGraph one, work in these types and nothing else, which is what lets their
+ledgers be compared.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from verbatim.answers import Answer
 from verbatim.corpus import ChunkMatch
-
-
-@dataclass(frozen=True)
-class Plan:
-    """What a review will cover, one question per section."""
-
-    topic: str
-    sections: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if not self.sections:
-            raise ValueError("a plan with no sections is not a plan")
 
 
 @dataclass(frozen=True)
@@ -128,57 +104,6 @@ class Critique:
     @property
     def clean(self) -> bool:
         return not (self.unsupported or self.unaddressed or self.conflicts)
-
-
-@runtime_checkable
-class Planner(Protocol):
-    """Turns a topic into the questions a review will answer."""
-
-    def __call__(self, topic: str, *, max_sections: int) -> Plan: ...
-
-
-@runtime_checkable
-class Retriever(Protocol):
-    """Finds candidate evidence for one question, by one strategy."""
-
-    def __call__(self, question: str, *, strategy: str, limit: int) -> Gathered: ...
-
-
-@runtime_checkable
-class Writer(Protocol):
-    """Writes an answer that may cite only what it was given."""
-
-    def __call__(self, question: str, gathered: Gathered) -> Answer: ...
-
-
-@runtime_checkable
-class Verifier(Protocol):
-    """Decides whether a section stands. Deterministic, by contract."""
-
-    def __call__(self, answer: Answer, closeness: float | None) -> Verdict: ...
-
-
-@runtime_checkable
-class Critic(Protocol):
-    """Says what is unsupported or unaddressed. Never whether it is good."""
-
-    def __call__(self, question: str, answer: Answer, gathered: Gathered) -> Critique: ...
-
-
-ROLES: dict[str, type] = {
-    "planner": Planner,
-    "retriever": Retriever,
-    "writer": Writer,
-    "verifier": Verifier,
-    "critic": Critic,
-}
-
-
-def satisfies(role: str, candidate: object) -> bool:
-    """Whether something can stand in for a role. For tests, not for calls."""
-    if role not in ROLES:
-        raise ValueError(f"unknown role {role!r}; known: {', '.join(sorted(ROLES))}")
-    return isinstance(candidate, ROLES[role])
 
 
 class BudgetGuard:

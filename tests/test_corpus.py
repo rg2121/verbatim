@@ -74,12 +74,12 @@ def test_corpus_stores_chunks_and_replaces_them_when_a_pdf_is_rechunked(tmp_path
 
         first = extract_pdf_chunks([record], extract_pages=lambda _: ["alpha beta gamma"])
         corpus.record_chunks(first)
-        after_first = corpus.chunk_count()
+        after_first = corpus.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
         second = extract_pdf_chunks([record], extract_pages=lambda _: ["alpha beta gamma"])
         corpus.record_chunks(second)
 
-        stored = corpus.all_chunks()
+        stored = list(corpus.iter_chunks())
 
     assert after_first == 1
     assert corpus_chunk_texts(stored) == ["alpha beta gamma"]
@@ -144,7 +144,7 @@ def test_corpus_marks_chunking_done_even_when_a_pdf_yields_no_text(tmp_path: Pat
         corpus.mark_chunked(pending, fingerprint)
 
         retried = corpus.pending_chunking(fingerprint)
-        stored = corpus.chunk_count()
+        stored = corpus.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
     assert stored == 0
     assert retried == []
@@ -287,7 +287,7 @@ def test_reading_a_paper_from_html_supersedes_its_pdf_chunks(tmp_path: Path) -> 
         corpus.record_chunks(
             extract_pdf_chunks([record], extract_pages=lambda _: ["From the PDF."])
         )
-        assert len(corpus.all_chunks()) == 1
+        assert len(list(corpus.iter_chunks())) == 1
 
         corpus.record_chunks([
             Chunk(
@@ -298,7 +298,7 @@ def test_reading_a_paper_from_html_supersedes_its_pdf_chunks(tmp_path: Path) -> 
                 chunker_version=chunker_fingerprint(1200, 200), source_kind="html",
             )
         ])
-        remaining = corpus.all_chunks()
+        remaining = list(corpus.iter_chunks())
         stale = corpus.search_chunks("PDF")
 
     assert [c.source_kind for c in remaining] == ["html"]
@@ -409,12 +409,12 @@ def test_a_passage_reports_its_papers_licence_however_it_was_chunked(
 
     licence = "http://creativecommons.org/licenses/by/4.0/"
     with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
-        assert corpus.all_chunks()[0].license_url is None   # nothing known yet
+        assert list(corpus.iter_chunks())[0].license_url is None   # nothing known yet
         corpus.record_license("2608.11111", licence)
 
         searched = corpus.search_chunks("flux")[0].chunk
         loaded = [
-            corpus.all_chunks()[0],
+            list(corpus.iter_chunks())[0],
             corpus.chunks_by_id([searched.chunk_id])[0],
             corpus.chunks_for_paper("2608.11111v1")[0],
             corpus.chunks_on_pages("2608.11111v1", [1])[0],

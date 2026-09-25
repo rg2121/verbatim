@@ -267,7 +267,7 @@ def test_a_chunk_from_an_older_chunker_can_be_left_unembedded(tmp_path: Path) ->
     from verbatim.embedding import embed_pending
 
     with chunked_corpus(tmp_path, ["alpha", "beta"]) as corpus:
-        stored = corpus.all_chunks()
+        stored = list(corpus.iter_chunks())
         current = stored[0].chunker_version
         corpus.connection.execute(
             "UPDATE chunks SET chunker_version = '1:1200:200' WHERE chunk_id = ?",

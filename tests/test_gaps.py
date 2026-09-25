@@ -99,7 +99,7 @@ def test_a_refutation_has_to_be_a_verified_quote(tmp_path: Path) -> None:
     if the words are genuinely in the passage.
     """
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
 
         class Invents:
             def complete(self, system, user, schema):
@@ -152,7 +152,7 @@ def test_a_hidden_paper_is_out_of_the_falsifiers_reach(tmp_path: Path) -> None:
     succeed. Deleting the paper would be destructive and unrepeatable.
     """
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
 
         class Quotes:
             def complete(self, system, user, schema):

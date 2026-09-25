@@ -26,10 +26,6 @@ class SyncReport:
     total_available: int
     stopped_because: str
 
-    @property
-    def caught_up(self) -> bool:
-        return self.stopped_because in {"reached the watermark", "exhausted the category"}
-
 
 def sync_category(
     corpus: CorpusStore,

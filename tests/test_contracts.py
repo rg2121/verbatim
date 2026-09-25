@@ -1,4 +1,4 @@
-"""The roles, as contracts rather than as functions that happen to fit."""
+"""The data the orchestrator's roles pass between them."""
 
 from verbatim.answers import Usage
 from verbatim.contracts import (
@@ -6,17 +6,7 @@ from verbatim.contracts import (
     BudgetGuard,
     Cost,
     Gathered,
-    Plan,
-    satisfies,
 )
-
-
-def test_a_plan_with_no_sections_is_refused() -> None:
-    import pytest
-
-    assert Plan("topic", ("what is it?",)).sections == ("what is it?",)
-    with pytest.raises(ValueError, match="not a plan"):
-        Plan("topic", ())
 
 
 def test_gathered_names_the_sources_it_holds(matched=None) -> None:
@@ -39,24 +29,6 @@ def test_gathered_names_the_sources_it_holds(matched=None) -> None:
     assert gathered.chunk_ids == ("a", "b", "c")
     # Papers are deduplicated in order, so a ledger line stays readable.
     assert gathered.paper_ids == ("2608.1v1", "2608.2v1")
-
-
-def test_a_role_can_be_checked_against_its_contract() -> None:
-    """What makes the roles independently testable rather than only jointly."""
-
-    class Verifier:
-        def __call__(self, answer, closeness):
-            from verbatim.contracts import Verdict
-
-            return Verdict(True, "fine")
-
-    assert satisfies("verifier", Verifier()) is True
-    assert satisfies("verifier", "not callable") is False
-
-    import pytest
-
-    with pytest.raises(ValueError, match="unknown role"):
-        satisfies("nonesuch", Verifier())
 
 
 def test_a_step_is_costed_as_a_difference_not_a_total() -> None:

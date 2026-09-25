@@ -161,7 +161,8 @@ are the answer, so nothing is generated or needs verifying. Every attempt goes
 into a ledger printed with the review, including which tools the agent called,
 which papers it stood on and what it cost; a budget caps a run by tokens,
 seconds or attempts. `--supervisor langgraph` runs the same ladder as a
-LangGraph state machine behind the same role contracts (`contracts.py`).
+LangGraph state machine, sharing every role and the data types in
+`contracts.py`, so only the control flow differs.
 
 Three designs around it are off by default, each with its measurement in
 [findings.md](findings.md):

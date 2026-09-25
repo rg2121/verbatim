@@ -177,8 +177,8 @@ def test_the_board_redirects_work_and_says_how_often(tmp_path: Path) -> None:
 def test_the_writer_may_use_only_what_is_on_the_board(tmp_path: Path) -> None:
     """The synthesis role cannot reach for a passage no worker filed."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
-        other = next(c for c in corpus.all_chunks() if c.arxiv_id != "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
+        other = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id != "2608.11111v1")
 
         seen: dict[str, str] = {}
 
@@ -218,7 +218,7 @@ def test_the_report_says_whether_the_adversarial_search_was_used(
     from verbatim.team import TeamReport
 
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
 
         class CitesTheAdversarialRow:
             def complete(self, system, user, schema):
@@ -255,8 +255,8 @@ def test_the_final_answer_uses_only_evidence_a_task_answer_cited(
     from verbatim.team import write_final
 
     with flux_corpus(tmp_path) as corpus:
-        cited = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
-        filed_only = next(c for c in corpus.all_chunks() if c.chunk_id != cited.chunk_id)
+        cited = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
+        filed_only = next(c for c in list(corpus.iter_chunks()) if c.chunk_id != cited.chunk_id)
 
         seen: dict[str, str] = {}
 
@@ -297,7 +297,7 @@ def test_nothing_approved_declines_in_words_rather_than_returning_nothing(tmp_pa
             return "flux"
 
     with flux_corpus(tmp_path) as corpus:
-        chunk = corpus.all_chunks()[0]
+        chunk = list(corpus.iter_chunks())[0]
         state = ResearchState(question="q")
         task = state.add_task("something")
         state.add_evidence(

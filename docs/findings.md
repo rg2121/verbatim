@@ -293,11 +293,11 @@ the one it replaced. The critic stays off, useful as a report, not as a loop.
 declared a gap on 0 of 4 such questions, 6 of 9 coverage gaps, and 0 of 25
 answerable ones - a subset of what the one-call subject check already catches.
 
-**Two supervisors, one set of contracts.** The built-in loop and the LangGraph
+**Two supervisors, the same roles.** The built-in loop and the LangGraph
 version gave the same route on 57 of 60 held-out questions; the built-in one
 run twice agreed with *itself* on only 55. The difference between the
-implementations is below the model's own run-to-run variation, which is what
-makes the role contracts a real boundary. Running sections in parallel buys
+implementations is below the model's own run-to-run variation, so the roles
+really are separable from the loop that drives them. Running sections in parallel buys
 nothing against one Ollama server: a four-section review took 424 s with one
 worker and 423 s with three.
 

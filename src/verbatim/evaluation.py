@@ -57,11 +57,6 @@ class EvalCase:
     require_papers: tuple[str, ...] = ()
 
     @property
-    def is_coverage_gap(self) -> bool:
-        """Whether the corpus holds nothing on this subject at all."""
-        return self.expect_none and self.unanswerable_kind == NO_COVERAGE
-
-    @property
     def is_compound(self) -> bool:
         """Whether this question needs every listed paper, not any one of them.
 

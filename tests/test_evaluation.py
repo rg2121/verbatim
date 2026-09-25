@@ -206,7 +206,7 @@ def test_an_unanswerable_case_loads(tmp_path: Path) -> None:
     (case,) = load_cases(path)
 
     assert case.expect_none and case.expect_papers == ()
-    assert case.is_coverage_gap
+    assert case.unanswerable_kind == "no_coverage"
 
 
 def test_an_unanswerable_case_must_say_which_kind_it_is(tmp_path: Path) -> None:
@@ -232,7 +232,7 @@ def test_a_covered_but_unanswered_case_is_not_a_coverage_gap(tmp_path: Path) -> 
 
     (case,) = load_cases(path)
 
-    assert case.expect_none and not case.is_coverage_gap
+    assert case.expect_none and case.unanswerable_kind == "no_answer"
 
 
 def test_the_report_separates_the_two_unanswerable_kinds() -> None:

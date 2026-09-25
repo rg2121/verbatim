@@ -167,8 +167,8 @@ def test_cap_per_paper_keeps_rank_order_and_promotes_other_papers(tmp_path: Path
         tmp_path,
         {"2608.11111v1": ["flux one", "flux two", "flux three"], "2608.22222v1": ["charge one"]},
     ) as corpus:
-        chunks = {c.arxiv_id: [] for c in corpus.all_chunks()}
-        for c in corpus.all_chunks():
+        chunks = {c.arxiv_id: [] for c in list(corpus.iter_chunks())}
+        for c in list(corpus.iter_chunks()):
             chunks[c.arxiv_id].append(c)
         ranked = [
             ChunkMatch(chunk=chunks["2608.11111v1"][0], score=0.9, snippet=""),

@@ -43,11 +43,6 @@ class Evidence:
     definitional_subject: str | None = None
     named_after: tuple[str, ...] = ()
 
-    @property
-    def mentions_without_defining(self) -> bool:
-        """A definitional question whose subject no held paper is named after."""
-        return bool(self.definitional_subject) and not self.named_after
-
     def lines(self) -> list[str]:
         """The disclosure, as lines to print under an answer."""
         if not self.passages:

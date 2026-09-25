@@ -16,22 +16,6 @@ from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
 
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
-RELEVANT_LINE_PATTERN = re.compile(r"^RELEVANT:\s*(yes|no)\b", re.M | re.I)
-VERDICT_PATTERN = re.compile(r"\b(yes|no)\b", re.I)
-
-RELEVANCE_SYSTEM = """You judge one thing only: are these passages about the \
-subject the question asks about?
-
-You are not answering the question. Do not try.
-
-Search returns its closest passages even when the corpus contains nothing on the
-subject, so the passages you see may simply be the least unrelated ones. Sharing
-a word is not being about a subject:
-- passages on tensor slicing in deep learning are NOT about what a tensor is
-- passages on AI in peer review are NOT about AI in cosmology
-- passages on detectable neutron stars are NOT about the farthest star
-
-Reply with exactly one word: yes or no."""
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
 # The same line with the chunk id inside the brackets and no number:
 # `CITE [dc83e954...] :: quoted words`. gemma4:31b writes it this way every
@@ -616,11 +600,7 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
             CITE_ID_LINE_PATTERN.findall(content), start=len(citations) + 1
         )
     )
-    verdict = RELEVANT_LINE_PATTERN.search(content)
     return {
-        # Absent verdict is treated as relevant, so a model that ignores the
-        # line behaves as it did before rather than falling silent.
-        "relevant": verdict is None or verdict.group(1).lower() == "yes",
         "answer": answer.group(1).strip(),
         "citations": citations,
     }
@@ -727,35 +707,6 @@ def subject_check(
     if not subject:
         return None, None
     return subject, subject_similarity(embedder, question, subject)
-
-
-def judge_relevance(
-    completion: Completion, question: str, matches: list[ChunkMatch]
-) -> bool | None:
-    """Ask, in a call of its own, whether the passages are on-subject.
-
-    **Not wired into answering, because it does not work on the local model.**
-    Measured over twenty questions it answered "yes" eighteen times, catching
-    two of six unanswerable ones - the same as no check at all, at the cost of
-    an extra call. An inline verdict in the answering call did worse still,
-    catching one of six and refusing one real question, because a call asked to
-    both judge and answer lets the answering instinct win.
-
-    Kept because the remaining hypothesis is that this is a small-model limit
-    rather than a prompt-design one, and testing that needs only a stronger
-    model behind the same function.
-
-    Returns None when the model gives no usable verdict, so a caller can carry
-    on rather than decline on a parsing failure.
-    """
-    passages = "\n\n".join(
-        f"<passage>{m.chunk.text[:600]}</passage>" for m in matches[:6]
-    )
-    reply = completion.judge(
-        RELEVANCE_SYSTEM, f"Question: {question}\n\n{passages}\n\nOn subject? yes or no:"
-    )
-    verdict = VERDICT_PATTERN.search(reply or "")
-    return None if verdict is None else verdict.group(1).lower() == "yes"
 
 
 def build_prompt(question: str, matches: list[ChunkMatch]) -> str:

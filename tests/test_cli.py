@@ -189,7 +189,7 @@ def test_chunk_reports_the_passages_it_actually_wrote(monkeypatch, capsys, tmp_p
     run()
 
     with CorpusStore(database) as corpus:
-        stored = len(corpus.all_chunks())
+        stored = len(list(corpus.iter_chunks()))
     assert stored == 2
     assert f"into {stored} new passage" in capsys.readouterr().out
 
@@ -203,7 +203,7 @@ def test_stats_counts_the_vectors_embed_actually_wrote(monkeypatch, tmp_path, ca
     from verbatim.embedding import FastEmbedEmbedder
 
     with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
-        chunk_id = corpus.all_chunks()[0].chunk_id
+        chunk_id = list(corpus.iter_chunks())[0].chunk_id
         corpus.register_embedding_model(EmbeddingModel("stub+context", 3, True, "v0"))
         corpus.record_embeddings("stub+context", [(chunk_id, [1.0, 0.0, 0.0])])
 

@@ -19,7 +19,7 @@ def seeded(tmp_path: Path, papers: int = 3) -> Path:
             EmbeddingModel(model_id="stub", dimensions=4, normalized=True, revision="v0")
         )
         corpus.record_embeddings(
-            "stub", [(c.chunk_id, [1.0, 0.0, 0.0, 0.0]) for c in corpus.all_chunks()]
+            "stub", [(c.chunk_id, [1.0, 0.0, 0.0, 0.0]) for c in list(corpus.iter_chunks())]
         )
         # Only an open licence may be redistributed, and a sample redistributes
         # the text, so a sample can hold nothing else.
@@ -46,7 +46,7 @@ def test_a_sample_claims_no_files_it_does_not_ship(tmp_path: Path) -> None:
 
     with CorpusStore(tmp_path / "sample.db") as sample:
         downloads = sample.connection.execute("SELECT COUNT(*) FROM downloads").fetchone()[0]
-        chunks = sample.all_chunks()
+        chunks = list(sample.iter_chunks())
 
     assert downloads == 0
     # The passages still carry everything a citation needs.
@@ -124,7 +124,7 @@ def test_columns_are_copied_by_name_not_position(tmp_path: Path) -> None:
     export_sample(source, tmp_path / "sample.db", papers=1, model_id="stub")
 
     with CorpusStore(tmp_path / "sample.db") as sample:
-        chunk = sample.all_chunks()[0]
+        chunk = list(sample.iter_chunks())[0]
 
     assert chunk.arxiv_id.startswith("2608.")
     assert len(chunk.source_sha256) == 64

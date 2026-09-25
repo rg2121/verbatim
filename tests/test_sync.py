@@ -65,7 +65,6 @@ def test_a_repeat_sync_stops_at_the_watermark(tmp_path: Path) -> None:
     assert second.fetched == 0
     assert second.requests == 1  # one request to discover there is nothing new
     assert second.stopped_because == "reached the watermark"
-    assert second.caught_up
 
 
 def test_only_papers_newer_than_the_watermark_are_ingested(tmp_path: Path) -> None:
@@ -209,7 +208,6 @@ def test_a_failing_page_keeps_the_papers_already_ingested(tmp_path: Path) -> Non
     assert report.fetched == 200  # two pages committed before the failure
     assert stored == 200
     assert "failed after" in report.stopped_because
-    assert not report.caught_up
     # The watermark stays where it was. This assertion used to read
     # `is not None`, on the reasoning that a recorded mark lets the next run
     # resume - but the mark is the *newest* paper seen, and papers arrive

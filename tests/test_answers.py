@@ -29,7 +29,7 @@ class ScriptedCompletion:
 
 def matches_for(corpus) -> list[ChunkMatch]:
     return [
-        ChunkMatch(chunk=chunk, score=1.0, snippet=chunk.text) for chunk in corpus.all_chunks()
+        ChunkMatch(chunk=chunk, score=1.0, snippet=chunk.text) for chunk in list(corpus.iter_chunks())
     ]
 
 
@@ -260,7 +260,6 @@ def test_line_protocol_parses_into_the_answer_payload() -> None:
     )
 
     assert payload == {
-        "relevant": True,
         "answer": "Flux moves [1] and charge moves [2].",
         "citations": [
             {"marker": 1, "chunk_id": "aaa111", "quoted_text": "flux can move"},
@@ -420,12 +419,12 @@ def test_supporting_papers_counts_distinct_sources(tmp_path: Path) -> None:
     assert corroborated.supporting_papers == 2
 
 
-def test_the_line_protocol_still_reads_a_verdict_when_one_is_given() -> None:
+def test_an_answer_with_no_cite_lines_parses_with_no_citations() -> None:
     from verbatim.answers import parse_line_protocol
 
-    payload = parse_line_protocol("RELEVANT: no\nANSWER: The corpus is about something else.")
+    payload = parse_line_protocol("ANSWER: The corpus is about something else.")
 
-    assert payload["relevant"] is False
+    assert payload["answer"] == "The corpus is about something else."
     assert payload["citations"] == []
 
 

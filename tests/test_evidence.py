@@ -48,7 +48,8 @@ def test_the_absence_of_a_named_paper_is_left_unsaid() -> None:
     same reason the subject threshold was not raised to 0.79."""
     evidence = Evidence(passages=6, papers=4, definitional_subject="nuclear fusion")
 
-    assert evidence.mentions_without_defining  # the fact is still available
+    # The fact is still available to a caller, just not printed.
+    assert evidence.definitional_subject and not evidence.named_after
     assert not any("named after" in line.lower() for line in evidence.lines())
 
 

@@ -122,7 +122,7 @@ def test_a_section_whose_citation_fails_is_retried_with_a_different_strategy(
     tmp_path: Path,
 ) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         completion = QueueCompletion(
             [
                 cite(chunk.chunk_id, "Flux never threads anything."),   # rejected
@@ -160,7 +160,7 @@ def test_a_section_no_strategy_can_support_is_declared_a_gap(tmp_path: Path) -> 
 
 def test_orchestrate_works_sections_in_parallel_and_keeps_their_order(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers(
             {
                 "What is flux?": cite(
@@ -251,7 +251,7 @@ def test_one_dead_section_does_not_discard_the_rest_of_the_review(tmp_path: Path
 
 def test_the_agent_rung_records_the_tools_it_called(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         # Two rungs decline to cite, so the ladder reaches the agent, which
         # cites correctly and is accepted.
         nothing = {"relevant": True, "answer": "The passages do not say.", "citations": []}
@@ -271,7 +271,7 @@ def test_the_agent_rung_records_the_tools_it_called(tmp_path: Path) -> None:
 
 def test_every_section_says_what_it_rests_on(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers({
             "What is flux?": cite(chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."),
         })
@@ -289,7 +289,7 @@ def test_every_section_says_what_it_rests_on(tmp_path: Path) -> None:
 def test_the_plain_report_is_the_orchestrator_with_one_rung(tmp_path: Path) -> None:
     """build_report is no longer a second copy of the loop."""
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         payload = cite(chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring.")
         plain = build_report(
             corpus, StubEmbedder(), ScriptedAnswers({"What is flux?": payload}),
@@ -330,7 +330,7 @@ def test_a_finished_section_is_handed_over_before_the_next_one_starts(
             return super().complete(system, user, schema)
 
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = Gated({
             "What is flux?": cite(
                 chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
@@ -362,7 +362,7 @@ def test_sections_are_handed_over_from_parallel_workers_too(tmp_path: Path) -> N
     guard = threading.Lock()
 
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers({
             "What is flux?": cite(
                 chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
@@ -403,7 +403,7 @@ def test_the_critic_escalates_a_coverage_gap_but_not_an_uncited_sentence(
     the whole ladder for nothing.
     """
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
         # The answer carries one properly cited sentence and one loose one.
         payload["answer"] = "Flux threads the ring [1]. Charge behaves quite differently here."
@@ -430,7 +430,7 @@ def test_a_subject_no_passage_covers_sends_the_section_up_the_ladder(
     tmp_path: Path,
 ) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
         completion = QueueCompletion([payload, payload, payload])
 
@@ -450,7 +450,7 @@ def test_a_subject_no_passage_covers_sends_the_section_up_the_ladder(
 
 def test_the_ledger_names_the_papers_an_attempt_stood_on(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         completion = QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")])
         _section, ledger = work_section(
             corpus, StubEmbedder(), completion, "what is flux?", caller=None,
@@ -467,7 +467,7 @@ def test_a_run_stops_when_its_budget_is_spent(tmp_path: Path) -> None:
     from verbatim.contracts import Budget
 
     with flux_corpus(tmp_path) as corpus:
-        chunk_of = {c.arxiv_id: c for c in corpus.all_chunks()}
+        chunk_of = {c.arxiv_id: c for c in list(corpus.iter_chunks())}
         completion = ScriptedAnswers({
             "What is flux?": cite(
                 chunk_of["2608.11111v1"].chunk_id, "Magnetic flux threads the ring."
@@ -559,7 +559,7 @@ class MeteredCaller(TracingCaller):
 
 def test_an_attempts_cost_includes_the_routing_turns(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         _section, ledger = work_section(
             corpus, StubEmbedder(),
             QueueCompletion([cite(chunk.chunk_id, "Magnetic flux threads the ring.")]),
@@ -577,7 +577,7 @@ def test_a_section_the_critic_held_back_says_why(tmp_path: Path) -> None:
     """Every verified-but-not-accepted section was labelled a subject warning,
     including one whose subject was fine and whose gap was coverage."""
     with flux_corpus(tmp_path) as corpus:
-        chunk = next(c for c in corpus.all_chunks() if c.arxiv_id == "2608.11111v1")
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
         _section, ledger = work_section(
             corpus, StubEmbedder(), QueueCompletion([payload] * 3), "what is flux?",

@@ -64,7 +64,7 @@ def ask_client(tmp_path: Path, fragments: list[str]) -> tuple[TestClient, str]:
     with chunked_corpus(
         tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
     ) as store:
-        chunk_id = store.all_chunks()[0].chunk_id
+        chunk_id = list(store.iter_chunks())[0].chunk_id
     app = create_app(
         tmp_path / "corpus.db",
         completion=StreamingScript(fragments),
@@ -374,7 +374,7 @@ def report_client(tmp_path: Path, fail_on: str | None = None) -> TestClient:
     with chunked_corpus(
         tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
     ) as store:
-        chunk_id = store.all_chunks()[0].chunk_id
+        chunk_id = list(store.iter_chunks())[0].chunk_id
     return TestClient(create_app(
         tmp_path / "corpus.db",
         completion=ReportScript(chunk_id, fail_on),
@@ -438,7 +438,7 @@ def test_an_injected_model_is_never_supplemented_by_a_real_one(tmp_path: Path) -
     with chunked_corpus(
         tmp_path, {"2608.22222v1": ["Superconducting qubits decohere quickly."]}
     ) as store:
-        chunk_id = store.all_chunks()[0].chunk_id
+        chunk_id = list(store.iter_chunks())[0].chunk_id
     app = create_app(
         tmp_path / "corpus.db",
         completion=ReportScript(chunk_id),
@@ -550,7 +550,7 @@ def deep_client(tmp_path: Path) -> tuple[TestClient, LadderScript]:
     with chunked_corpus(
         tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
     ) as store:
-        chunk_id = store.all_chunks()[0].chunk_id
+        chunk_id = list(store.iter_chunks())[0].chunk_id
     model = LadderScript(chunk_id)
     app = create_app(
         tmp_path / "corpus.db", completion=model, encoder=StubEncoder()

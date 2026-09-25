@@ -584,17 +584,6 @@ class CorpusStore:
         ).fetchone()
         return 0 if row is None else int(row["value"])
 
-    def all_chunks(self) -> list[Chunk]:
-        """Return every stored chunk in a stable, citable order."""
-        rows = self.connection.execute(
-            """
-            SELECT c.*, p.license_url AS paper_license_url FROM chunks AS c
-            JOIN papers AS p ON p.arxiv_id = c.arxiv_id
-            ORDER BY p.updated DESC, c.arxiv_id ASC, c.page_number ASC, c.chunk_index ASC
-            """
-        ).fetchall()
-        return [_chunk_from_row(row) for row in rows]
-
     def base_ids_missing_license(self, limit: int) -> list[str]:
         """Base identifiers whose licence has never been looked up.
 
@@ -811,10 +800,10 @@ class CorpusStore:
         return [_chunk_from_row(row) for row in rows]
 
     def iter_chunks(self):
-        """Yield every chunk without holding the corpus in memory.
+        """Yield every chunk in a stable, citable order, one at a time.
 
-        all_chunks() materialises a list, which is fine for inspection and
-        wrong for exporting a corpus of hundreds of thousands of passages.
+        A generator because the corpus is hundreds of thousands of passages,
+        and exporting it must not hold them all in memory.
         """
         cursor = self.connection.execute(
             """
@@ -825,9 +814,6 @@ class CorpusStore:
         )
         for row in cursor:
             yield _chunk_from_row(row)
-
-    def chunk_count(self) -> int:
-        return int(self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
     def sync_watermark(self, category: str) -> str | None:
         """The newest `updated` timestamp already ingested for a category.

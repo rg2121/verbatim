@@ -77,7 +77,7 @@ def test_bibliography_numbers_entries_from_one() -> None:
 
 def test_citation_can_be_built_from_a_stored_chunk(tmp_path: Path) -> None:
     with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
-        stored = corpus.all_chunks()[0]
+        stored = list(corpus.iter_chunks())[0]
         found = corpus.get_paper(stored.arxiv_id)
         assert found is not None
         citation = citation_from_chunk(stored, found, "Magnetic flux")

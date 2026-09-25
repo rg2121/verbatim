@@ -48,7 +48,7 @@ def test_a_recency_question_is_answered_from_records_not_prose(tmp_path: Path) -
 
 def test_gathered_passages_become_citable_evidence(tmp_path: Path) -> None:
     with corpus(tmp_path) as c:
-        chunk_id = c.all_chunks()[0].chunk_id
+        chunk_id = list(c.iter_chunks())[0].chunk_id
         caller = ScriptedCaller([("read_pages", {"arxiv_id": "2608.11111v1", "pages": [1]})])
         matches, trace = gather(c, None, caller, "what threads the ring?")
 
@@ -58,7 +58,7 @@ def test_gathered_passages_become_citable_evidence(tmp_path: Path) -> None:
 
 def test_citations_are_still_verified_after_tool_use(tmp_path: Path) -> None:
     with corpus(tmp_path) as c:
-        chunk_id = c.all_chunks()[0].chunk_id
+        chunk_id = list(c.iter_chunks())[0].chunk_id
         caller = ScriptedCaller([("read_pages", {"arxiv_id": "2608.11111v1", "pages": [1]})])
         completion = ScriptedCompletion({
             "answer": "It is threaded by something invented [1].",
