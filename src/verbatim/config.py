@@ -93,7 +93,7 @@ LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 # Answer generation goes through Ollama and nothing else. A local model keeps
 # the corpus - 26 GB of other people's papers - on this machine; a model whose
 # name ends `-cloud` sends each prompt's passages to Ollama's servers. Which
-# one runs is the user's visible choice, not a default (decision 10).
+# one runs is the user's visible choice, not a default (docs/architecture.md).
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))

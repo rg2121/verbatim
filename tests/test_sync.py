@@ -116,7 +116,7 @@ def test_a_limited_run_marks_what_it_took_and_leaves_the_rest_behind(
     sync. The name was also wrong: papers arrive newest-first and the mark only
     moves forward, so everything older than a limited run is behind the mark
     for good and a later, larger run fetches nothing. `--full` is what reaches
-    it. That is a real property of the design and is documented in docs/guide.md;
+    it. That is a real property of the design and is documented in docs/architecture.md;
     it is asserted here so the name cannot drift from the behaviour again.
     """
     feed = FakeArxiv(200)
@@ -261,8 +261,8 @@ def test_a_failed_deep_walk_starts_from_the_newest_paper_again(
     walk reached, so the next one pages from the newest paper again and
     re-requests what is already held before it reaches anything new.
 
-    Asserted rather than fixed: decision 12 specifies the backfill cursor that
-    would fix it and says why it is not built yet. If that changes, this test
+    Asserted rather than fixed: docs/architecture.md describes the backfill
+    cursor that would fix it and says why it is not built yet. If that changes, this test
     is where the old behaviour is written down.
     """
     feed = FakeArxiv(300)
