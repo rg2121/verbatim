@@ -1356,7 +1356,7 @@ def run() -> None:
                 except OSError as error:
                     print(f"  ! {arxiv_id}: {error}")
                     continue
-                corpus.record_references(found, row["sha256"])
+                corpus.record_references(found, row["sha256"], for_papers=[arxiv_id])
                 read += 1
                 entries += len(found)
                 print(f"  read {read}/{len(pending)}", end="\r", flush=True)

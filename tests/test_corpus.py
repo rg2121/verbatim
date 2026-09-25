@@ -425,3 +425,72 @@ def test_a_passage_reports_its_papers_licence_however_it_was_chunked(
     assert searched.license_url == licence
     assert all(chunk.license_url == licence for chunk in loaded)
     assert citation_from_chunk(loaded[1], paper_record, "Magnetic flux").license_url == licence
+
+
+def _held_rendering(corpus: CorpusStore, tmp_path: Path, arxiv_id: str):
+    from verbatim.html_source import HtmlSource
+
+    corpus.upsert_papers([paper(arxiv_id)])
+    path = tmp_path / f"{arxiv_id}.html"
+    path.write_text("<html><body>No bibliography here.</body></html>")
+    source = HtmlSource(
+        arxiv_id=arxiv_id, url=f"https://arxiv.org/html/{arxiv_id}",
+        local_path=str(path), sha256="c" * 64, byte_count=path.stat().st_size,
+    )
+    corpus.record_html_source(source)
+    return source
+
+
+def test_a_bibliography_that_yields_nothing_is_not_read_again(tmp_path: Path) -> None:
+    """Reading it and finding nothing is an answer, and it has to be kept.
+
+    Only reference rows marked a paper read, so a rendering whose
+    bibliography parses to nothing was pending for ever: re-parsed on every
+    run, and `stats` never reached zero. The full corpus had 69 such papers.
+    """
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        source = _held_rendering(corpus, tmp_path, "2608.12345v1")
+        before = corpus.papers_without_references(10)
+
+        corpus.record_references([], source.sha256, for_papers=[source.arxiv_id])
+        after = corpus.papers_without_references(10)
+        counted = corpus.pipeline_stats("fingerprint", "model")["references_pending"]
+
+    assert before == ["2608.12345v1"]
+    assert after == [] and counted == 0
+
+
+def test_a_reread_that_finds_nothing_clears_the_old_entries(tmp_path: Path) -> None:
+    """The record_chunks lesson: replace what was attempted, not what was found."""
+    from verbatim.references import Reference
+
+    with CorpusStore(tmp_path / "corpus.db") as corpus:
+        source = _held_rendering(corpus, tmp_path, "2608.12345v1")
+        corpus.record_references(
+            [Reference(citing_arxiv_id=source.arxiv_id, ordinal=1, raw_text="An old entry.")],
+            "an-older-rendering",
+        )
+        corpus.record_references([], source.sha256, for_papers=[source.arxiv_id])
+        left = corpus.reference_count()
+
+    assert left == 0
+
+
+def test_opening_the_committed_sample_does_not_change_it(tmp_path: Path) -> None:
+    """A clone that searches the sample must not find it modified afterwards.
+
+    Schema that only some stages need is created by those stages, not on
+    open, for exactly this reason: every command opens the corpus, and the
+    sample is a committed file.
+    """
+    import shutil
+
+    copy = tmp_path / "sample.db"
+    shutil.copy(Path(__file__).parent.parent / "sample" / "corpus.db", copy)
+    before = file_sha256(copy)
+
+    with CorpusStore(copy) as corpus:
+        corpus.papers_without_references(5)
+        corpus.pipeline_stats("fingerprint", "model")
+
+    assert file_sha256(copy) == before

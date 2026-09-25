@@ -47,6 +47,9 @@ ADDED_COLUMNS: dict[str, dict[str, str]] = {
 CHUNK_COLUMNS = "c.*, lic.license_url AS paper_license_url"
 PAPER_LICENCE_JOIN = "LEFT JOIN papers AS lic ON lic.arxiv_id = c.arxiv_id"
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
+# Bibliographies that were read, at the checksum they were read from. Needed
+# for the ones that yield no entries, which otherwise look unread for ever.
+BIBLIOGRAPHIES_READ = "bibliographies_read"
 # Long enough for one stage's write to finish while another stage waits.
 # Chunking commits in large batches and holds the write lock for a long time
 # while its FTS triggers run. A minute was not enough: it killed a six-hour
@@ -659,9 +662,8 @@ class CorpusStore:
             ),
             "references": scalar("SELECT COUNT(*) FROM paper_references"),
             "references_pending": scalar(
-                "SELECT COUNT(*) FROM html_sources AS h WHERE h.usable = 1"
-                " AND NOT EXISTS (SELECT 1 FROM paper_references AS r"
-                "   WHERE r.citing_arxiv_id = h.arxiv_id AND r.source_sha256 = h.sha256)"
+                "SELECT COUNT(*) FROM html_sources AS h"
+                f" WHERE {self._unread_bibliography('h')}"
             ),
             "chunks": scalar("SELECT COUNT(*) FROM chunks"),
             "chunks_html": scalar("SELECT COUNT(*) FROM chunks WHERE source_kind = 'html'"),
@@ -960,13 +962,49 @@ class CorpusStore:
                 [(arxiv_id, url, reason, now) for arxiv_id, url, reason in failures],
             )
 
-    def record_references(self, references: list[Reference], source_sha256: str) -> None:
-        """Replace the stored bibliography of every paper represented here."""
+    def record_references(
+        self,
+        references: list[Reference],
+        source_sha256: str,
+        *,
+        for_papers: Sequence[str] | None = None,
+    ) -> None:
+        """Replace the stored bibliography of every paper this pass covered.
+
+        `for_papers` is the papers that were *read*, which is not the same as
+        the papers that produced entries - the lesson `record_chunks` learned
+        first. Derived from the entries alone, a bibliography that parses to
+        nothing recorded nothing: the paper stayed pending and was re-read on
+        every run, and a re-read that found nothing left the old entries in
+        place. A read is also written down, at the checksum it read, so
+        finding nothing is an answer that is kept.
+        """
         now = _timestamp()
+        covered = set(for_papers or ()) | {r.citing_arxiv_id for r in references}
         with self.connection:
-            for citing in {reference.citing_arxiv_id for reference in references}:
+            for citing in covered:
                 self.connection.execute(
                     "DELETE FROM paper_references WHERE citing_arxiv_id = ?", (citing,)
+                )
+            if for_papers:
+                # Created on first use rather than with the schema, like the
+                # run ledger: opening a corpus must not change it, and the
+                # committed sample would otherwise be rewritten the first time
+                # anyone searched it.
+                self.connection.execute(
+                    f"CREATE TABLE IF NOT EXISTS {BIBLIOGRAPHIES_READ} ("
+                    " arxiv_id TEXT PRIMARY KEY, source_sha256 TEXT NOT NULL,"
+                    " read_at TEXT NOT NULL)"
+                )
+                self.connection.executemany(
+                    f"""
+                    INSERT INTO {BIBLIOGRAPHIES_READ} (arxiv_id, source_sha256, read_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(arxiv_id) DO UPDATE SET
+                        source_sha256 = excluded.source_sha256,
+                        read_at = excluded.read_at
+                    """,
+                    [(arxiv_id, source_sha256, now) for arxiv_id in for_papers],
                 )
             self.connection.executemany(
                 """
@@ -985,19 +1023,37 @@ class CorpusStore:
     def papers_without_references(self, limit: int) -> list[str]:
         """Papers with a usable HTML rendering whose bibliography is unread."""
         rows = self.connection.execute(
-            """
+            f"""
             SELECT h.arxiv_id FROM html_sources AS h
-            WHERE h.usable = 1
-              AND NOT EXISTS (
-                  SELECT 1 FROM paper_references AS r
-                  WHERE r.citing_arxiv_id = h.arxiv_id
-                    AND r.source_sha256 = h.sha256
-              )
+            WHERE {self._unread_bibliography("h")}
             ORDER BY h.arxiv_id LIMIT ?
             """,
             (limit,),
         ).fetchall()
         return [row["arxiv_id"] for row in rows]
+
+    def _unread_bibliography(self, alias: str) -> str:
+        """The condition for a rendering whose bibliography has not been read.
+
+        Read means either entries stored from this rendering, or a recorded
+        read of it that found none. The second is checked only where the
+        record exists, because a corpus that has never run `references` since
+        it was introduced has no such table - and entries alone still say
+        which bibliographies were read before it was.
+        """
+        condition = (
+            f"{alias}.usable = 1 AND NOT EXISTS ("
+            f" SELECT 1 FROM paper_references AS r"
+            f" WHERE r.citing_arxiv_id = {alias}.arxiv_id"
+            f" AND r.source_sha256 = {alias}.sha256)"
+        )
+        if self._table_exists(BIBLIOGRAPHIES_READ):
+            condition += (
+                f" AND NOT EXISTS (SELECT 1 FROM {BIBLIOGRAPHIES_READ} AS b"
+                f" WHERE b.arxiv_id = {alias}.arxiv_id"
+                f" AND b.source_sha256 = {alias}.sha256)"
+            )
+        return condition
 
     def most_cited_absent_papers(self, *, limit: int = 50) -> list[tuple[str, int]]:
         """arXiv papers this corpus cites often and does not hold.

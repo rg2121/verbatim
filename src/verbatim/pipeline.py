@@ -5,7 +5,10 @@ to download, downloading leaves renderings to fetch, fetching leaves papers to
 chunk, and chunking leaves passages to embed. Running each stage once, in
 order, therefore does not finish the job - it leaves behind whatever arrived
 after its stage had already run. Done by hand overnight, that stranded 81
-papers unchecked, 350 unchunked and 69 bibliographies unread.
+papers unchecked and 350 unchunked. (It also appeared to strand 69
+bibliographies, but those were not an ordering problem: they parse to no
+entries, and until a read was recorded as such they stayed pending however
+often the stage ran.)
 
 So the stages are run in rounds until the pending counts stop falling. Stages
 run as separate processes for two reasons: chunking is memory-hungry and is
