@@ -10,6 +10,8 @@ import re
 import unicodedata
 
 import multiprocessing
+from queue import Empty
+import time
 import pymupdf
 import pymupdf4llm
 
@@ -40,6 +42,8 @@ MAX_HEADING_LENGTH = 80
 # returning, which blocked its whole batch and, through that, the ingest.
 # Set by VERBATIM_EXTRACTION_TIMEOUT, which this once hard-coded past.
 EXTRACTION_TIMEOUT_SECONDS = config.EXTRACTION_TIMEOUT
+# How often a waiting extraction checks that its worker is still alive.
+POLL_SECONDS = 0.5
 # PDF text extraction can emit lone surrogates, which are valid Python str but
 # cannot be encoded as UTF-8. They reach neither SQLite nor the JSONL export.
 SURROGATES = re.compile(r"[\ud800-\udfff]")
@@ -127,7 +131,7 @@ def extract_pdf_chunks(
             )
         try:
             pages = list(page_extractor(pdf_path))
-        except ExtractionTimeout as error:
+        except ExtractionFailed as error:
             # One unextractable paper must not cost the batch it is in. The
             # caller still marks it chunked, so it is not retried for ever;
             # it simply contributes nothing.
@@ -189,7 +193,11 @@ def is_bibliography(section_path: str) -> bool:
     return any(REFERENCES_TITLE.match(part.strip()) for part in section_path.split(" > "))
 
 
-class ExtractionTimeout(RuntimeError):
+class ExtractionFailed(RuntimeError):
+    """Layout extraction produced nothing for this paper."""
+
+
+class ExtractionTimeout(ExtractionFailed):
     """Layout extraction did not finish within the time allowed."""
 
 
@@ -219,19 +227,34 @@ def extract_pages_from_pdf(
     queue: multiprocessing.Queue = context.Queue()
     worker = context.Process(target=_extract_into, args=(queue, str(pdf_path)), daemon=True)
     worker.start()
+    deadline = time.monotonic() + timeout
     try:
-        pages = queue.get(timeout=timeout)
-    except Exception as error:  # queue.Empty, and anything the child died of
-        worker.terminate()
-        worker.join(5)
-        raise ExtractionTimeout(
-            f"Layout extraction of {pdf_path.name} exceeded {timeout:.0f}s"
-        ) from error
+        # Polled rather than waited on once: a child that dies on a corrupt
+        # file puts nothing on the queue, and a single wait sat out the whole
+        # timeout before reporting a crash as slowness.
+        while True:
+            try:
+                return queue.get(timeout=max(min(POLL_SECONDS, deadline - time.monotonic()), 0))
+            except Empty:
+                pass
+            if not worker.is_alive():
+                try:
+                    # A child that answered and then exited has flushed its
+                    # answer; take it rather than calling that a crash.
+                    return queue.get(timeout=POLL_SECONDS)
+                except Empty:
+                    raise ExtractionFailed(
+                        f"Layout extraction of {pdf_path.name} exited with code "
+                        f"{worker.exitcode} and produced nothing"
+                    ) from None
+            if time.monotonic() >= deadline:
+                raise ExtractionTimeout(
+                    f"Layout extraction of {pdf_path.name} exceeded {timeout:.0f}s"
+                )
     finally:
         if worker.is_alive():
             worker.terminate()
         worker.join(5)
-    return pages
 
 
 def extract_plain_pages_from_pdf(pdf_path: Path) -> list[str]:

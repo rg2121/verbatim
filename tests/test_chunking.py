@@ -261,3 +261,23 @@ def test_a_paper_that_cannot_be_extracted_does_not_lose_its_batch(tmp_path: Path
 
     assert [chunk.arxiv_id for chunk in chunks] == ["2401.99999v1"]
     assert "second paper" in chunks[0].text
+
+
+def test_an_extraction_that_crashes_says_so_without_waiting_out_the_timeout(
+    tmp_path: Path,
+) -> None:
+    """A child that died on a corrupt file put nothing on the queue, and the
+    parent waited the full timeout - three minutes by default - before calling
+    it slow. A crash is reported as a crash, as soon as it happens."""
+    import time
+
+    from verbatim.chunking import ExtractionFailed, extract_pages_from_pdf
+
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"this is not a pdf at all")
+
+    started = time.monotonic()
+    with pytest.raises(ExtractionFailed, match="exited"):
+        extract_pages_from_pdf(broken, timeout=120)
+
+    assert time.monotonic() - started < 60
