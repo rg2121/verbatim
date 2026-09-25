@@ -114,15 +114,20 @@ def download_papers(
         assert paper.pdf_url is not None  # guaranteed by the candidate filter
         try:
             prior = existing_by_id.get(paper.arxiv_id)
-            # Pace only actual requests: arXiv asks callers not to hammer it,
-            # and thousands of downloads without a gap is exactly that.
-            if requested and not _matches_prior_manifest(
+            cached = _matches_prior_manifest(
                 destination / f"{_filename_stem(paper.arxiv_id)}.pdf", paper, prior
-            ):
+            )
+            # Pace only actual requests: arXiv asks callers not to hammer it,
+            # and thousands of downloads without a gap is exactly that. A
+            # request counts when it is made, not when it succeeds - a 404 is
+            # still one arXiv served, and counting only successes sent a run of
+            # withdrawn papers back to back.
+            if requested and not cached:
                 sleep(pause)
+            if not cached:
+                requested += 1
             record = _download_one(paper, destination, get, prior)
             downloaded.append(record)
-            requested += 1
             if on_download is not None:
                 on_download(record)
         except (OSError, ValueError) as error:

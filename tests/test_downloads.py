@@ -222,3 +222,20 @@ def test_a_busy_server_is_not_recorded_as_settled(tmp_path: Path) -> None:
     )
 
     assert not report.failed[0].permanent
+
+
+def test_a_failed_request_still_counts_toward_the_pause(tmp_path: Path) -> None:
+    """A 404 is a request arXiv served. Only successes counted, so a run of
+    withdrawn papers was fetched back to back with no pause at all."""
+    pauses: list[float] = []
+
+    def withdrawn(url: str) -> bytes:
+        raise HTTPError(url, 404, "Not Found", {}, None)
+
+    report = download_papers(
+        [make_paper(arxiv_id=f"2401.1234{n}v1") for n in range(3)],
+        tmp_path, 3, fetch_pdf=withdrawn, delay=3.0, sleep=pauses.append,
+    )
+
+    assert len(report.failed) == 3
+    assert pauses == [3.0, 3.0]
