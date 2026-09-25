@@ -136,7 +136,10 @@ tables here use rowspan and 29% colspan, and ignoring a span shifts every later
 cell left so the table states something the paper does not. Display equations
 are laid out as tables too and are deliberately not read as such: their LaTeX
 already comes from each `<math>` element. Measured over 1,547 renderings: 9,343
-tables, 84,829 data rows.
+tables, 84,829 data rows. A table is searched like any other passage; only a
+bibliography is held out, unless `--include-references` asks for it. (Until
+2026-09-25 tables were held out too, by a filter written before they existed -
+see [findings.md](findings.md#tables-that-were-never-searched).)
 
 Layout extraction runs in a child process with a timeout. It is C code with no
 internal limit, and one 7.7 MB paper in this corpus held a core for 46 minutes

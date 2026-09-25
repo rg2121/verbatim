@@ -22,6 +22,7 @@ measurements are in [evaluation.md](evaluation.md) and
 - [What a held-out set measures](#what-a-held-out-set-measures)
 - [What was tried and rejected](#what-was-tried-and-rejected)
 - [What a conversation costs](#what-a-conversation-costs)
+- [Tables that were never searched](#tables-that-were-never-searched)
 - [Known limitations](#known-limitations)
 - [Principles](#principles)
 
@@ -1020,6 +1021,41 @@ mid-conversation. Drift over four or five turns, and follow-ups that move to a
 neighbouring paper, are the interesting cases and are unmeasured. A key with
 follow-ups answered by a different paper than their opening is the next honest
 step.
+
+## Tables that were never searched
+
+Tables have been read as tables since HTML ingest learned to: a results table
+is a passage of its own, cells in their real columns, 64,742 of them in the
+full corpus. None was ever returned. The filter that keeps bibliographies out
+of retrieval was written as "body passages only" three weeks before tables
+existed, so when they arrived as a third kind of passage they were stored,
+embedded and silently excluded - from `search`, `ask`, the page and MCP. An
+audit found it by searching for words copied out of a table: no hits, unless
+`--include-references` let bibliographies in too.
+
+The filter now names what it keeps out. Letting 64,742 passages back into
+retrieval could crowd out the ones that answer, so it was measured first, with
+the rule fixed in `evals/tables_ab.py` before either arm ran: tables ship
+unless the held-out key gets worse by a sign test at p < 0.05.
+
+| held-out, hybrid+graph, top 10 | r@1 | r@5 | r@10 | mrr |
+|---|---|---|---|---|
+| before (tables excluded) | 0.85 | 0.94 | 0.97 | 0.889 |
+| after (tables searched) | 0.85 | 0.94 | 0.97 | 0.889 |
+
+Per case: better on none, worse on one, p = 1.000 - one hand-written question
+moved from rank 2 to rank 3 when a table outranked the right paper's first
+passage. By batch, the 88 hand-written cases went 0.758 to 0.756 and the 400
+generated ones stayed at 0.918; the hand-written arm reproduces the held-out
+table above exactly, which is the check that the baseline was sound. A table
+reached the top ten on 18 of 488 questions and was never the first hit from
+the right paper.
+
+So tables cost nothing measurable here, and they ship. They also gain nothing
+measurable, and that is expected rather than disappointing: every question in
+this key was written from a title and an abstract, and abstracts do not quote
+tables. Whether a question about a reported number is now answerable is a
+different key's question.
 
 ## Known limitations
 

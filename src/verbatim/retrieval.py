@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable
 import re
 
-from verbatim.chunking import BODY
+from verbatim.chunking import REFERENCES
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
 from verbatim.graph import anchored_matches
@@ -88,7 +88,7 @@ def vector_search(
         embedder.embed_query(query),
         limit=fetch,
         arxiv_id=arxiv_id,
-        kind=None if include_references else BODY,
+        exclude_kind=None if include_references else REFERENCES,
     )
     if not hits:
         return []

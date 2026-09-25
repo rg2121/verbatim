@@ -485,6 +485,9 @@ uv run verbatim eval --cases evals/heldout.jsonl   # the honest number
 uv run python evals/paired_bootstrap.py                # the intervals
 uv run python evals/failure_taxonomy.py                # the failure labels
 uv run python evals/conversation_arms.py               # what resolving a follow-up buys
+uv run python evals/tables_ab.py --arm before         # on code that keeps tables out
+uv run python evals/tables_ab.py --arm after          # on code that searches them
+uv run python evals/tables_ab.py --compare
 uv run verbatim eval-answers --cases evals/heldout.jsonl --limit 20 --judge
 uv run python evals/three_arm.py --questions 20 --runs 2 --arms baseline,workflow,+critic
 uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90

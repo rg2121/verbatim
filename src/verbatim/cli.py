@@ -2067,7 +2067,8 @@ def format_stats(counts: dict[str, int]) -> str:
         ("references", f"{counts['references']:,}",
          f"{counts['references_pending']:,} papers to read", "verbatim references"),
         ("chunks", f"{counts['chunks']:,} "
-                   f"({counts['chunks_body']:,} body / {counts['chunks_references']:,} refs)",
+                   f"({counts['chunks_body']:,} body / {counts.get('chunks_tables', 0):,} tables"
+                   f" / {counts['chunks_references']:,} refs)",
          f"{counts['chunking_pending']:,} papers to chunk", "verbatim chunk"),
         ("vectors", f"{counts['vectors']:,}",
          f"{counts['embedding_pending']:,} to embed", "verbatim embed"),

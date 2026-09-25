@@ -497,3 +497,47 @@ def test_an_index_run_leaves_nothing_for_the_next_search_to_reconcile(
         assert ensure_current(
             index, corpus.embedding_count("stub"), "stub", generation
         ) is True
+
+
+def test_a_table_is_searched_and_a_bibliography_is_not(tmp_path: Path) -> None:
+    """The filter exists to keep bibliographies out, and it kept tables out too.
+
+    It was written as "body only" when body and bibliography were the only
+    kinds. Tables arrived three weeks later as a third kind, so every table
+    in the corpus - 64,742 of them - was stored, embedded and never returned
+    by search, ask, the page or MCP.
+    """
+    from verbatim.chunking import REFERENCES, TABLE
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.11111v1": ["Magnetic flux threads the ring."],
+            "2608.22222v1": ["| Setup | Flux |\n| --- | --- |\n| ring | 3.2 |"],
+            "2608.33333v1": ["Flux, A. (2020). Magnetic rings. Journal of Flux."],
+        },
+    ) as corpus:
+        corpus.connection.execute(
+            "UPDATE chunks SET kind = ? WHERE arxiv_id = ?", (TABLE, "2608.22222v1")
+        )
+        corpus.connection.execute(
+            "UPDATE chunks SET kind = ? WHERE arxiv_id = ?", (REFERENCES, "2608.33333v1")
+        )
+        corpus.connection.commit()
+        SqliteVecIndex(corpus.connection, 3).rebuild("stub", corpus.chunk_generation())
+        embedder = WordCountEmbedder()
+
+        def papers(matches):
+            return {m.chunk.arxiv_id for m in matches}
+
+        keyword = papers(corpus.search_chunks("flux", limit=10))
+        vector = papers(vector_search(corpus, embedder, "flux", limit=10))
+        hybrid = papers(hybrid_search(corpus, embedder, "flux", limit=10))
+        everything = papers(
+            hybrid_search(corpus, embedder, "flux", limit=10, include_references=True)
+        )
+
+    searched = {"2608.11111v1", "2608.22222v1"}
+    assert keyword == vector == hybrid == searched
+    assert everything == searched | {"2608.33333v1"}

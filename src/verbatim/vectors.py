@@ -105,6 +105,7 @@ class VectorIndex(Protocol):
         limit: int,
         arxiv_id: str | None = None,
         kind: str | None = None,
+        exclude_kind: str | None = None,
     ) -> list[tuple[str, float]]: ...
 
 
@@ -231,11 +232,14 @@ class SqliteVecIndex:
         limit: int,
         arxiv_id: str | None = None,
         kind: str | None = None,
+        exclude_kind: str | None = None,
     ) -> list[tuple[str, float]]:
         """Return (chunk_id, distance) nearest first; smaller distance is closer.
 
         Filters are applied inside the KNN query, so a restricted search costs
-        the same as an unrestricted one and stays exact.
+        the same as an unrestricted one and stays exact. `exclude_kind` is
+        what retrieval uses: it names the one kind to keep out, so a kind
+        added later is searched rather than silently dropped.
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -251,6 +255,9 @@ class SqliteVecIndex:
         if kind is not None:
             clauses.append("kind = ?")
             parameters.append(kind)
+        if exclude_kind is not None:
+            clauses.append("kind != ?")
+            parameters.append(exclude_kind)
         rows = self.connection.execute(
             f"SELECT chunk_id, distance FROM {VECTOR_TABLE}"
             f" WHERE {' AND '.join(clauses)} ORDER BY distance",

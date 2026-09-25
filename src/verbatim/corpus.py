@@ -12,7 +12,7 @@ import sqlite3
 import struct
 
 from verbatim.arxiv import Paper, license_class
-from verbatim.chunking import Chunk
+from verbatim.chunking import REFERENCES, Chunk
 from verbatim.downloads import DownloadedPaper
 from verbatim.html_source import HtmlSource
 from verbatim.references import Reference
@@ -668,6 +668,7 @@ class CorpusStore:
             "chunks": scalar("SELECT COUNT(*) FROM chunks"),
             "chunks_html": scalar("SELECT COUNT(*) FROM chunks WHERE source_kind = 'html'"),
             "chunks_body": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'body'"),
+            "chunks_tables": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'table'"),
             "chunks_references": scalar("SELECT COUNT(*) FROM chunks WHERE kind = 'references'"),
             "chunking_pending": scalar(
                 "SELECT ("
@@ -1299,7 +1300,11 @@ class CorpusStore:
             clauses.append("c.arxiv_id = ?")
             parameters.append(arxiv_id)
         if not include_references:
-            clauses.append("c.kind = 'body'")
+            # Named as what is kept out, not what is let in. Written as "body
+            # only" when body and bibliography were the only kinds, it kept
+            # tables out too once they arrived, and none was ever returned.
+            clauses.append("c.kind != ?")
+            parameters.append(REFERENCES)
         if papers:
             clause, filter_parameters = papers.clause("c")
             clauses.append(clause)
