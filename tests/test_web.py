@@ -679,3 +679,183 @@ def test_a_follow_up_is_answered_as_the_question_it_was_resolved_to(
     (prompt,) = prompts
     assert "Question: Why does PPO clip its objective?" in prompt
     assert "A policy method." not in prompt
+
+
+# -- the page's own behaviour ----------------------------------------------
+#
+# The Python suite reaches the API and never the script that renders it, which
+# is how a review's sources read "page undefined" and a reset conversation
+# kept a stale turn without a test noticing. These run the page's real script
+# in node against a small stand-in for the browser: enough DOM to render into,
+# and an EventSource the test drives by hand. Skipped where node is absent.
+
+PAGE_HARNESS = r"""
+class El {
+  constructor(tag) {
+    this.tag = tag; this.children = []; this.listeners = {}; this.attrs = {};
+    this.className = ""; this.textContent = ""; this.innerHTML = "";
+    this.hidden = false; this.value = ""; this.placeholder = "";
+    this.disabled = false; this.checked = false;
+  }
+  appendChild(child) { this.children.push(child); return child; }
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = children; }
+  addEventListener(type, fn) { this.listeners[type] = fn; }
+  setAttribute(key, value) { this.attrs[key] = value; }
+  scrollIntoView() {}
+  focus() {}
+}
+const byId = {};
+globalThis.document = {
+  getElementById: (id) => byId[id] || (byId[id] = new El("#" + id)),
+  createElement: (tag) => new El(tag),
+  createTextNode: (text) => ({ textContent: text }),
+};
+document.getElementById("askhint").textContent = "DEFAULT HINT";
+const streams = [];
+globalThis.EventSource = class {
+  constructor(url) { this.url = url; this.listeners = {}; this.closed = false; streams.push(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  close() { this.closed = true; }
+  // A closed EventSource delivers nothing more, which is what a reset relies on.
+  emit(name, data) {
+    if (!this.closed && this.listeners[name]) this.listeners[name]({ data: JSON.stringify(data) });
+  }
+};
+globalThis.fetch = async () => { throw new Error("offline"); };
+"""
+
+SCENARIO_HELPERS = r"""
+const submit = (question) => {
+  document.getElementById("aq").value = question;
+  runAsk({ preventDefault() {} });
+  return streams[streams.length - 1];
+};
+const answer = (stream, text) => {
+  stream.emit("answer", { text: text, citations: [], rejected: [] });
+  stream.emit("done", {});
+};
+const text = (html) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const report = (value) => console.log(JSON.stringify(value));
+"""
+
+
+def run_page(scenario: str, **data: object) -> dict:
+    """Run the page's script, then a scenario against it, and read its report."""
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = "\n".join(re.findall(r"<script>(.*?)</script>", PAGE, re.S))
+    given = "".join(f"const {name} = {json.dumps(value)};\n" for name, value in data.items())
+    program = PAGE_HARNESS + script + SCENARIO_HELPERS + given + scenario
+    finished = subprocess.run(
+        [node, "-"], input=program, capture_output=True, text=True, timeout=60
+    )
+    assert finished.returncode == 0, finished.stderr
+    return json.loads(finished.stdout.strip().splitlines()[-1])
+
+
+def test_a_review_section_cites_in_the_same_shape_as_an_answer(tmp_path: Path) -> None:
+    """One renderer draws both, so both must send what it reads.
+
+    A section sent four fields of its own choosing and the page read the
+    answer's, so every source in a review said "page undefined".
+    """
+    fragments = ["ANSWER: They decohere quickly [1].\n", ""]
+    client_app, chunk_id = ask_client(tmp_path / "ask", fragments)
+    fragments[1] = f"CITE [1] {chunk_id} :: Superconducting qubits decohere quickly."
+    asked = sse_events(client_app.get("/api/ask", params={"q": "qubits decohere"}).text)
+    answered = next(payload for name, payload in asked if name == "answer")
+
+    reviewed = sse_events(
+        report_client(tmp_path / "report").get(
+            "/api/report", params={"topic": "decoherence"}
+        ).text
+    )
+    section = next(payload for name, payload in reviewed if name == "section")
+
+    assert set(section["citations"][0]) == set(answered["citations"][0])
+
+
+def test_the_page_renders_a_reviews_sources_in_full(tmp_path: Path) -> None:
+    reviewed = sse_events(
+        report_client(tmp_path).get("/api/report", params={"topic": "decoherence"}).text
+    )
+    section = next(payload for name, payload in reviewed if name == "section")
+
+    seen = run_page(
+        "report({ shown: text(renderSources(section.citations, 'r1')) });",
+        section=section,
+    )
+
+    assert "undefined" not in seen["shown"]
+    assert "Superconducting qubits decohere quickly." in seen["shown"]
+
+
+def test_the_page_names_authors_the_way_the_bibliography_does() -> None:
+    """Surnames, and "et al." only past three - as `format_authors` prints them."""
+    def citation(authors: list[str]) -> dict:
+        return {
+            "arxiv_id": "2305.14314v1", "title": "QLoRA", "authors": authors,
+            "source_kind": "html", "page_number": 1, "section_path": "Introduction",
+            "source_url": "https://arxiv.org/abs/2305.14314v1", "quoted_text": "q",
+        }
+
+    seen = run_page(
+        "report({ one: text(renderSources([single], 1)), many: text(renderSources([five], 1)) });",
+        single=citation(["Tim Dettmers"]),
+        five=citation(["Tim Dettmers", "Artidoro Pagnoni", "Ari Holtzman",
+                       "Luke Zettlemoyer", "Someone Else"]),
+    )
+
+    assert "Dettmers ·" in seen["one"] and "et al." not in seen["one"]
+    assert "Tim " not in seen["one"]
+    assert "Dettmers et al. ·" in seen["many"]
+
+
+def test_the_follow_up_hint_comes_back_after_an_exact_question() -> None:
+    """"Asked exactly as written" describes one question, not every one after."""
+    seen = run_page(r"""
+        answer(submit("what is flux?"), "Flux threads the ring [1].");
+        const second = submit("why does it do that?");
+        second.emit("resolved", { question: "why does flux thread the ring?" });
+        answer(second, "Because [1].");
+        const block = document.getElementById("thread").children[1];
+        const readAs = block.children.find((child) => child.className === "resolved");
+        readAs.children.find((child) => child.tag === "button").onclick();
+        const during = document.getElementById("askhint").textContent;
+        const asWritten = submit(document.getElementById("aq").value);
+        const after = document.getElementById("askhint").textContent;
+        answer(asWritten, "Because [1].");
+        const next = submit("and what does it cost?");
+        report({ during, after, exactSentHistory: asWritten.url.includes("history="),
+                 nextSentHistory: next.url.includes("history=") });
+    """)
+
+    assert seen["during"] != "DEFAULT HINT"
+    assert seen["exactSentHistory"] is False
+    assert seen["after"] == "DEFAULT HINT"
+    assert seen["nextSentHistory"] is True
+
+
+def test_start_over_drops_an_answer_still_arriving() -> None:
+    """A reset conversation must not inherit the turn it interrupted."""
+    seen = run_page(r"""
+        answer(submit("what is flux?"), "Flux threads the ring [1].");
+        const interrupted = submit("why does it do that?");
+        document.getElementById("askreset").listeners.click();
+        const usable = !document.getElementById("askgo").disabled;
+        answer(interrupted, "A late answer to the old conversation.");
+        const fresh = submit("what is charge?");
+        const first = document.getElementById("thread").children[0];
+        report({ usable, sentHistory: fresh.url.includes("history="),
+                 who: first.children[0].textContent });
+    """)
+
+    assert seen["usable"] is True
+    assert seen["sentHistory"] is False
+    assert seen["who"] == "You"

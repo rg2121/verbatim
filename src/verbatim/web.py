@@ -54,17 +54,10 @@ def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
         "text": section.answer.text,
         "declined": section.answer.declined,
         "evidence": list(section.evidence_lines),
-        "citations": [
-            {
-                "arxiv_id": citation.arxiv_id,
-                "title": citation.title,
-                "locator": render_locator(
-                    citation.source_kind, citation.page_number, citation.section_path
-                ),
-                "source_url": citation.source_url,
-            }
-            for citation in section.answer.citations
-        ],
+        # The whole citation, as an answer sends it: the page draws both with
+        # one renderer, and four hand-picked fields left every review source
+        # reading "page undefined", with no quote and no authors.
+        "citations": [citation.to_dict() for citation in section.answer.citations],
         "rejected": len(section.answer.rejected),
         "shape": entry.shape,
         "outcome": entry.outcome,
@@ -971,6 +964,14 @@ function whereIn(citation) {
   return heading ? heading : "section " + citation.page_number;
 }
 
+// Surnames, and "et al." only past three: how the CLI's bibliography names
+// them, so a source reads the same wherever it is shown.
+function formatAuthors(authors) {
+  const surname = (name) => name.trim().split(/\\s+/).pop();
+  if (authors.length > 3) return surname(authors[0]) + " et al.";
+  return authors.map(surname).join(", ");
+}
+
 function renderSources(citations, turn) {
   if (!citations.length) return "";
   const rows = citations.map((c, i) => [
@@ -978,7 +979,7 @@ function renderSources(citations, turn) {
     '  <span class="n">', i + 1, "</span>",
     "  <div>",
     '    <a href="', escapeHtml(c.source_url), '">', escapeHtml(c.title), "</a>",
-    '    <div class="where">', escapeHtml(c.authors && c.authors.length ? c.authors[0] + " et al. · " : ""),
+    '    <div class="where">', escapeHtml(c.authors && c.authors.length ? formatAuthors(c.authors) + " · " : ""),
     escapeHtml(c.arxiv_id), " · ", escapeHtml(whereIn(c)), "</div>",
     c.quoted_text ? "<blockquote>" + escapeHtml(c.quoted_text) + "</blockquote>" : "",
     "  </div>",
@@ -1014,8 +1015,18 @@ let turns = 0;
 // Set when you edit how a follow-up was read: that question is sent as
 // written, with no history, so nothing rewrites it a second time.
 let exact = false;
+const HINT = $("askhint").textContent;
 
 function resetThread() {
+  // An answer still arriving belongs to the conversation being thrown away.
+  // Left open, it landed in the new one as its first turn.
+  if (asking) {
+    asking.close();
+    asking = null;
+    $("askgo").disabled = false;
+  }
+  exact = false;
+  $("askhint").textContent = HINT;
   thread = [];
   $("thread").replaceChildren();
   $("askreset").hidden = true;
@@ -1052,7 +1063,10 @@ function runAsk(event) {
   const history = thread.length && !exact
     ? "&history=" + encodeURIComponent(JSON.stringify(thread))
     : "";
+  // "Asked exactly as written" described this one question; the next is a
+  // follow-up again.
   exact = false;
+  $("askhint").textContent = HINT;
   const deep = $("askdeep").checked;
   asking = new EventSource(
     "/api/ask?q=" + encodeURIComponent(question) + history + (deep ? "&deep=true" : "")
