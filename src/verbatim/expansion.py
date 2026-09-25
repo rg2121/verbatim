@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Sequence
+import re
 
 from verbatim.corpus import ChunkMatch
 
@@ -23,6 +24,11 @@ from verbatim.corpus import ChunkMatch
 # enough that the top few ranks do not dominate.
 RRF_SMOOTHING = 60
 MAX_VARIANTS = 5
+# What a model puts in front of a list item: a bullet, or a number followed by
+# "." or ")" - bolded or not - and then a space. Only that. A line can itself
+# begin with a number, and stripping every leading digit turned "4-bit
+# quantization" into "bit quantization" and "3D" into "D".
+LIST_MARKER = re.compile(r"^\s*(?:[-*•+]|\**\d+[.)]\**)\s+")
 
 REWRITE_SYSTEM = (
     "You rewrite a search query for a corpus of arXiv papers. "
@@ -92,11 +98,21 @@ def fuse_rankings(
     ]
 
 
+def strip_list_marker(line: str) -> str:
+    """One line of a model's list, without the bullet or number in front.
+
+    Shared by every reader of one-item-per-line replies - rewrites, plans,
+    report sections, the critic's subjects - so none of them can strip
+    differently from the others.
+    """
+    return LIST_MARKER.sub("", line, count=1).strip()
+
+
 def _lines(reply: str) -> list[str]:
     """Read one rewrite per line, dropping list markers and empty lines."""
     found = []
     for line in reply.splitlines():
-        cleaned = line.strip().lstrip("-*0123456789.) ").strip()
+        cleaned = strip_list_marker(line)
         if cleaned:
             found.append(cleaned)
     return found[:MAX_VARIANTS]

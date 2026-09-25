@@ -22,6 +22,7 @@ from typing import Any
 from verbatim.answers import Answer, Completion, answer_from_matches
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
+from verbatim.expansion import strip_list_marker
 from verbatim.retrieval import hybrid_search
 
 MAX_PARTS = 4
@@ -63,7 +64,7 @@ def parse_plan_lines(reply: str, limit: int) -> list[str]:
     lines: list[str] = []
     seen: set[str] = set()
     for line in reply.splitlines():
-        cleaned = line.strip().lstrip("-*0123456789.) ").strip()
+        cleaned = strip_list_marker(line)
         key = " ".join(cleaned.lower().split())
         if cleaned and key not in seen:
             seen.add(key)

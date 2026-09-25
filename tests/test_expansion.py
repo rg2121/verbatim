@@ -34,6 +34,12 @@ def test_list_markers_are_stripped_from_a_models_reply() -> None:
     assert queries == ["entropy?", "Shannon entropy", "information content"]
 
 
+def test_a_rewrite_that_starts_with_a_number_keeps_it() -> None:
+    queries = rewrite_query(reply("- 3D point cloud segmentation\n2) 8-bit optimizers"), "q")
+
+    assert queries == ["q", "3D point cloud segmentation", "8-bit optimizers"]
+
+
 def test_a_repeated_phrasing_is_not_retrieved_for_twice() -> None:
     assert dedupe_queries(["what is entropy?", "What is  entropy?", "other"]) == [
         "what is entropy?",

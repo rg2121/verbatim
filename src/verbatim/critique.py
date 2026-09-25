@@ -33,12 +33,12 @@ import re
 
 from verbatim.answers import Answer
 from verbatim.contracts import Critique, Gathered
+from verbatim.expansion import strip_list_marker
 
 # A sentence ends at punctuation followed by a space and a capital, which is
 # imperfect on "e.g." and exact enough to count markers by.
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(])")
 MARKER = re.compile(r"\[(?:\d+|unverified)\]")
-SUBJECT_LINE = re.compile(r"^[-*\d.)\s]*(.+?)\s*$", re.M)
 # A sentence too short to carry a claim - "In summary.", "This has two
 # consequences." - is not evidence of anything missing. Five words keeps
 # "It was published in 2014" and drops the connectives; the cost of going
@@ -102,8 +102,8 @@ def unaddressed_subjects(
         return ()
     haystack = " ".join(match.chunk.text.lower() for match in gathered.matches)
     missing = []
-    for line in SUBJECT_LINE.findall(reply or ""):
-        subject = line.strip().strip(".").strip()
+    for line in (reply or "").splitlines():
+        subject = strip_list_marker(line).strip(".").strip()
         if not subject or len(subject.split()) > 4:
             continue
         words = [w for w in re.findall(r"[a-z0-9']+", subject.lower()) if len(w) > 2]

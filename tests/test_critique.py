@@ -61,6 +61,19 @@ def test_a_subject_the_passages_never_mention_is_reported() -> None:
     assert found.action.startswith("retrieve again")
 
 
+def test_a_subject_that_starts_with_a_number_is_reported_whole() -> None:
+    gathered = Gathered(
+        "how is 3D reconstruction evaluated?",
+        (match("Evaluation uses held-out views of each scene."),),
+        strategy="hybrid",
+    )
+
+    found = critique(gathered.question, answer_with("Held-out views are used [1]."),
+                     gathered, complete_text=lambda s, u: "1. 3D reconstruction")
+
+    assert found.unaddressed == ("3D reconstruction",)
+
+
 def test_a_subject_the_model_invents_cannot_survive_the_check() -> None:
     """The whole reason this critic can be trusted at all."""
     gathered = Gathered(
