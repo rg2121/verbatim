@@ -95,7 +95,7 @@ LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 # name ends `-cloud` sends each prompt's passages to Ollama's servers. Which
 # one runs is the user's visible choice, not a default (docs/architecture.md).
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
-OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled model"
+OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled local model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
 
 # arXiv's API is variable: identical queries have taken 2s and 61s, and it

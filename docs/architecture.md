@@ -110,9 +110,9 @@ row count still matched. Search over the index is brute force and exact: about
 Passages go to a model through **Ollama**, the only backend - no API key, no
 second client. A local model keeps the corpus on the machine; a model whose
 name ends `-cloud` sends each prompt's passages to Ollama's servers. The choice
-is the user's, visible in `OLLAMA_MODEL`. The model replies in a flat
-`ANSWER:` / `CITE` line protocol, because JSON output and tool calling were
-unreliable on realistic prompts.
+is the user's, visible in `OLLAMA_MODEL`; left unset, only a local model is
+picked. The model replies in a flat `ANSWER:` / `CITE` line protocol, because
+JSON output and tool calling were unreliable on realistic prompts.
 
 **Every citation is then verified**: the quoted words must appear in the
 passage named, forgiving only whitespace and the quotation marks a model wraps

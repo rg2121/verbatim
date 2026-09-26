@@ -479,12 +479,25 @@ class OllamaCompletion:
         raise self._unreachable(attempts, last)
 
     def _first_available_model(self) -> str:
+        """The first local model pulled. A `-cloud` one is used only when named.
+
+        A cloud model sends every prompt's passages to Ollama's servers, so it
+        is the user's choice to make in OLLAMA_MODEL, never a default - even
+        when Ollama happens to list it first.
+        """
         models = [item["name"] for item in self._get("/api/tags").get("models", [])]
         if not models:
             raise RuntimeError(
                 "Ollama has no models pulled. Run 'ollama pull <model>' first."
             )
-        return models[0]
+        local = [name for name in models if not name.endswith("-cloud")]
+        if not local:
+            raise RuntimeError(
+                "Only cloud models are pulled, and a cloud model sends the passages "
+                "to Ollama's servers. Pull a local model, or set OLLAMA_MODEL to one "
+                f"of: {', '.join(models)}."
+            )
+        return local[0]
 
     def _get(self, path: str) -> dict[str, Any]:
         return self._request(Request(f"{self.host}{path}"))

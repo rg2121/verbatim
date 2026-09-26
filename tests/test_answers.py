@@ -648,6 +648,40 @@ def test_a_missing_model_says_which_one_and_what_is_pulled() -> None:
     assert "llama3.1, phi4" in message
 
 
+def test_left_to_choose_it_picks_a_local_model_over_a_cloud_one() -> None:
+    """A `-cloud` model sends every passage to Ollama's servers.
+
+    Which model runs is the user's visible choice, so an unset OLLAMA_MODEL
+    must never land on one - even when Ollama lists it first.
+    """
+    from verbatim.answers import OllamaCompletion
+
+    def tags(self, path):
+        return {"models": [{"name": "gemma4:31b-cloud"}, {"name": "gemma4:e4b"}]}
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.config.OLLAMA_MODEL", None)
+        patch.setattr(OllamaCompletion, "_get", tags)
+        assert OllamaCompletion().model == "gemma4:e4b"
+
+
+def test_with_only_cloud_models_pulled_one_must_be_named() -> None:
+    from verbatim.answers import OllamaCompletion
+
+    def tags(self, path):
+        return {"models": [{"name": "gpt-oss:120b-cloud"}]}
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("verbatim.config.OLLAMA_MODEL", None)
+        patch.setattr(OllamaCompletion, "_get", tags)
+        with pytest.raises(RuntimeError) as raised:
+            OllamaCompletion()
+
+    message = str(raised.value)
+    assert "OLLAMA_MODEL" in message
+    assert "gpt-oss:120b-cloud" in message
+
+
 def test_listing_the_models_failing_does_not_mask_the_missing_model() -> None:
     """The useful half of the message survives a second failure."""
     from urllib.error import HTTPError
