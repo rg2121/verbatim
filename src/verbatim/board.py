@@ -143,14 +143,17 @@ class ResearchState:
     def add_claim(
         self, task_id: str, statement: str, evidence_ids: Sequence[str]
     ) -> Claim | None:
-        """Append a claim. Refused if it cites evidence that is not on the board.
+        """Append a claim. Refused unless every evidence id was filed for its task.
 
         The one place the board enforces rather than records: a claim resting
         on an evidence id nobody filed is unfalsifiable by construction, and
         the whole point of the board is that a statement can be traced to the
-        rows it came from.
+        rows it came from. The evidence must also belong to the claim's own
+        task - a passage gathered while looking for something else is not
+        evidence for this claim. The one caller passes same-task rows; this
+        makes sure no future worker can mix them.
         """
-        known = {e.evidence_id for e in self.evidence}
+        known = {e.evidence_id for e in self.evidence if e.task_id == task_id}
         if not evidence_ids or not set(evidence_ids) <= known:
             return None
         claim = Claim(

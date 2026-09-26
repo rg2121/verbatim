@@ -43,6 +43,28 @@ def test_the_board_refuses_a_claim_resting_on_evidence_nobody_filed() -> None:
     assert state.add_claim(task, "flux improves charge", [row.evidence_id]) is not None
 
 
+def test_a_claim_may_rest_only_on_its_own_tasks_evidence() -> None:
+    """Evidence filed for one task cannot support a claim made for another.
+
+    The board checked only that an evidence id existed somewhere on it, so a
+    claim for task two could cite a passage gathered for task one - evidence
+    found looking for something else. The one caller happens to pass
+    same-task rows; the board now enforces it rather than trusting that.
+    """
+    state, first = board_with()
+    second = state.add_task("establish that charge moves along the wire").task_id
+    theirs = state.add_evidence(
+        first, chunk_id="a", arxiv_id="p1", quote="q", found_by=RETRIEVAL
+    )
+    ours = state.add_evidence(
+        second, chunk_id="b", arxiv_id="p2", quote="q", found_by=RETRIEVAL
+    )
+
+    assert state.add_claim(second, "charge moves", [theirs.evidence_id]) is None
+    assert state.add_claim(second, "charge moves", [ours.evidence_id, theirs.evidence_id]) is None
+    assert state.add_claim(second, "charge moves", [ours.evidence_id]) is not None
+
+
 def test_two_workers_finding_the_same_passage_file_it_once() -> None:
     """A task's evidence count decides whether it is done.
 
