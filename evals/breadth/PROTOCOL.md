@@ -103,3 +103,35 @@ not show an effect this size, not that it has none. One run per arm means
 generation noise is in every comparison. And questions written from two
 abstracts are only as good as those abstracts: a pair whose papers do not
 really bear on each other produces a question no arm can answer well.
+
+## Amendment, 2026-09-26
+
+Made before any score existed. Nothing above is edited; this section says what
+changed and why.
+
+**Blinding.** The fixed seed was written in the code, so anyone with the
+repository could rebuild which arm wrote which answer - the blind was not
+blind. Instead:
+
+- Each blinding shuffles with a secret random seed, and the mapping is kept
+  outside the repository.
+- `evals/breadth/blind_manifest.json` holds the SHA-256 of the mapping and of
+  the answers, and is committed before any score.
+- The scores name the sheet they were made on. `breadth_score.py` refuses to
+  unblind unless they come from that sheet, were committed after the manifest,
+  and the mapping and answers still match its hashes. The commits it checked
+  are recorded in the result.
+- The mapping joins the repository only after unblinding, where anyone can
+  check its hash against the manifest.
+
+**Secondary statistics.** The result also reports the team's mean difference
+from each simpler arm with a 95% paired bootstrap interval, and - if a second
+blind rater scores the same sheet - how far the two agree (exact agreement and
+weighted kappa). These describe; they do not decide. The verdict is still the
+decision rule above, on the first rater's scores.
+
+**Unchanged:** the questions, the arms, the measures, the 0 / 1 / 2 scale and
+the decision rule.
+
+**Limit.** Whoever generates the mapping can open it. The blind is strongest
+when the person scoring is not the person holding the mapping.
