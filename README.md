@@ -33,21 +33,24 @@ against its source, and writes literature reviews the same way.
 ## Quick start
 
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/), and - for answering -
-[Ollama](https://ollama.com) with any model pulled.
+[Ollama](https://ollama.com) with a local model pulled.
 
 ```bash
 git clone https://github.com/rg2121/verbatim.git
 cd verbatim
-uv run verbatim search "how can a model be finetuned on one GPU" --state sample/corpus.db
-uv run verbatim ask "what is QLoRA?" --state sample/corpus.db
-uv run verbatim graph --state sample/corpus.db
+mkdir -p data && cp sample/corpus.db data/sample.db
+uv run verbatim search "how can a model be finetuned on one GPU" --state data/sample.db
+uv run verbatim ask "what is QLoRA?" --state data/sample.db
+uv run verbatim graph --state data/sample.db
 ```
 
 The repository ships a sample corpus - 40 openly licensed papers, 3,139
 passages with their vectors, 2,230 bibliography entries, 23 MB - so this works
-on a fresh clone. The first search downloads the embedding model (about
-130 MB). `search` and `graph` need no language model; `ask` needs Ollama, and
-uses `OLLAMA_MODEL` or the first model you have pulled.
+on a fresh clone. It is used from a copy because commands record their runs in
+the corpus, and `data/` is ignored by git. The first search downloads the
+embedding model (about 130 MB). `search` and `graph` need no language model;
+`ask` needs Ollama, and uses `OLLAMA_MODEL` or the first local model you have
+pulled - a `-cloud` model only when you name it.
 
 Real output from the `ask` above, with the answer shortened:
 
@@ -184,7 +187,7 @@ leave it - which one you use is your choice, visible in `OLLAMA_MODEL`.
 
 ```bash
 uv run --extra langgraph pytest    # the whole suite, offline, in a few seconds
-uv run verbatim eval --cases evals/gate.jsonl --state sample/corpus.db --min-mrr 0.90
+uv run verbatim eval --cases evals/gate.jsonl --state data/sample.db --min-mrr 0.90
 ```
 
 The suite needs no network, no Ollama and no API key: every model and network
