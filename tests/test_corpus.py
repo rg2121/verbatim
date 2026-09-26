@@ -494,3 +494,32 @@ def test_opening_the_committed_sample_does_not_change_it(tmp_path: Path) -> None
         corpus.pipeline_stats("fingerprint", "model")
 
     assert file_sha256(copy) == before
+
+
+def test_the_committed_samples_vector_index_is_already_current(tmp_path: Path) -> None:
+    """Every search checks the index first, and an out-of-date one is rewritten.
+
+    A sample saved before the index schema last changed would have all its
+    vectors rewritten by a fresh clone's first search - a read that leaves
+    the committed file modified.
+    """
+    import shutil
+
+    from verbatim import config
+    from verbatim.vectors import SqliteVecIndex, ensure_current
+
+    copy = tmp_path / "sample.db"
+    shutil.copy(Path(__file__).parent.parent / "sample" / "corpus.db", copy)
+    before = file_sha256(copy)
+
+    model_id = config.DEFAULT_EMBEDDING_MODEL
+    with CorpusStore(copy) as corpus:
+        changed = ensure_current(
+            SqliteVecIndex(corpus.connection, 384),
+            corpus.embedding_count(model_id),
+            model_id,
+            corpus.chunk_generation(),
+        )
+
+    assert not changed
+    assert file_sha256(copy) == before
