@@ -211,6 +211,29 @@ def test_the_sheet_saves_scores_under_its_own_blinding() -> None:
     assert "breadth-labels-v1" not in page
 
 
+def test_downloaded_scores_name_the_sheet_they_were_made_on() -> None:
+    items = [{"id": "x", "question": "q", "papers": [], "answers": []}]
+
+    page = breadth_sheet.render_page(items, storage_key="breadth-labels-abc123")
+
+    assert "JSON.stringify({blinding: KEY, ...labels}" in page
+
+
+def test_scores_from_another_blindings_sheet_are_refused() -> None:
+    """An older sheet orders the answers differently, so its scores unblind to nonsense."""
+    manifest = {"storage_key": "breadth-labels-new"}
+    scores = {"q1": {"A": {"coverage": 2}}}
+
+    kept = breadth_score.scores_for_this_blinding(
+        {"blinding": "breadth-labels-new", **scores}, manifest
+    )
+
+    assert kept == scores
+    for stale in ({"blinding": "breadth-labels-old", **scores}, scores):
+        with pytest.raises(SystemExit, match="sheet"):
+            breadth_score.scores_for_this_blinding(stale, manifest)
+
+
 def test_scoring_refuses_a_mapping_or_answers_other_than_the_committed_ones() -> None:
     import json
 

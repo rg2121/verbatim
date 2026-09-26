@@ -326,7 +326,8 @@ function render(){
 document.getElementById("prev").onclick = () => { if (current > 0){ current--; render(); window.scrollTo(0,0); } };
 document.getElementById("next").onclick = () => { if (current < ITEMS.length - 1){ current++; render(); window.scrollTo(0,0); } };
 document.getElementById("download").onclick = () => {
-  const blob = new Blob([JSON.stringify(labels, null, 2) + "\n"], {type: "application/json"});
+  // The scores name their sheet: another blinding orders A, B and C differently.
+  const blob = new Blob([JSON.stringify({blinding: KEY, ...labels}, null, 2) + "\n"], {type: "application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "labels.json";
   document.body.appendChild(a); a.click(); a.remove();
 };

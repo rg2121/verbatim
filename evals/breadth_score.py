@@ -116,6 +116,22 @@ def verify_blinding(manifest: dict, mapping_bytes: bytes, answers_bytes: bytes) 
     return json.loads(mapping_bytes)["mapping"]
 
 
+def scores_for_this_blinding(labels: dict, manifest: dict) -> dict:
+    """The scores, once they are shown to come from this blinding's sheet.
+
+    Every blinding orders A, B and C afresh, so scores made on an older sheet -
+    one left open in a browser, say - would unblind to the wrong arms without
+    any error. The sheet writes its key into the download; this checks it.
+    """
+    scores = dict(labels)
+    if scores.pop("blinding", None) != manifest.get("storage_key"):
+        raise SystemExit(
+            "error: these scores were not made on the sheet of the committed blind "
+            "manifest, whose answers are in a different order. Score the current sheet."
+        )
+    return scores
+
+
 def mechanical(row: dict) -> dict:
     """M1-M4 for one answer. No model, no judgement."""
     answer = row["answer"]
@@ -316,7 +332,7 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text())
     mapping_bytes = args.mapping.read_bytes()
 
-    labels = json.loads(args.labels.read_text())
+    labels = scores_for_this_blinding(json.loads(args.labels.read_text()), manifest)
     mapping = verify_blinding(manifest, mapping_bytes, args.answers.read_bytes())
     missing = 0
     for question, scores in per_question.items():
@@ -367,7 +383,8 @@ def main() -> int:
             print(f"    {measure:<12} vs {other:<9} {e['mean_difference']:+.2f}  [{low:+.2f}, {high:+.2f}]")
     agreed = None
     if args.second_labels is not None:
-        agreed = agreement(labels, json.loads(args.second_labels.read_text()))
+        second = scores_for_this_blinding(json.loads(args.second_labels.read_text()), manifest)
+        agreed = agreement(labels, second)
         print("\n  secondary - agreement between the two blind raters:")
         for criterion, a in agreed.items():
             exact = "n/a" if a["exact"] is None else f"{a['exact']:.0%}"
