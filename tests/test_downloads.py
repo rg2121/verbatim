@@ -196,11 +196,7 @@ def test_each_download_is_reported_as_it_lands(tmp_path: Path) -> None:
 
 
 def test_a_missing_pdf_is_recorded_as_settled_not_as_a_failure(tmp_path: Path) -> None:
-    """A 404 for a versioned PDF is an answer: that version has no PDF.
-
-    Retrying it tomorrow gets the same 404, and reporting it as outstanding
-    work misstates what is left to do for ever.
-    """
+    """A 404 for a versioned PDF is an answer: that version has no PDF."""
     def missing(url: str) -> bytes:
         raise HTTPError(url, 404, "Not Found", {}, None)
 

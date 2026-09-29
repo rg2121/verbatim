@@ -1,16 +1,6 @@
-"""Machine-readable events for the stages, beside the prose for the person.
+"""Structured events for each stage, on stderr as key=value or JSON.
 
-The CLI's printed output is for whoever is watching it: aligned columns,
-counts in context, a progress line that rewrites itself. None of that survives
-being parsed, and an ingest that runs unattended is read by something other
-than a person - a cron mail, a log shipper, a dashboard, a future session
-asking what happened at 03:00.
-
-So the two are separated rather than one being bent into the other. Results
-keep going to stdout unchanged. Events go to stderr as one line each, either
-`key=value` for a terminal or JSON for anything else, and carry the same
-fields the run ledger stores. The ledger is the durable record and these are
-the stream; they agree because both are written from the same place.
+Results stay on stdout. Events carry the same fields as the run ledger.
 
     VERBATIM_LOG_FORMAT=json   one JSON object per line
     VERBATIM_LOG_FORMAT=text   key=value, the default
@@ -23,6 +13,8 @@ import json
 import logging
 import sys
 from typing import Any
+
+from verbatim import config
 
 LOGGER_NAME = "verbatim"
 _configured = False
@@ -57,14 +49,8 @@ def _terse(value: Any) -> str:
 
 
 def configure_logging(fmt: str | None = None, level: str | None = None) -> None:
-    """Attach one stderr handler. Safe to call more than once.
-
-    stderr rather than stdout on purpose: `runs --json` and the chunk export
-    write parseable output to stdout, and a log line landing in the middle of
-    either would corrupt it.
-    """
+    """Attach one stderr handler, keeping stdout parseable. Safe to call twice."""
     global _configured
-    from verbatim import config
 
     logger = logging.getLogger(LOGGER_NAME)
     chosen = (fmt or config.LOG_FORMAT).lower()

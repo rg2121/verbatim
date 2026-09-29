@@ -1,9 +1,4 @@
-"""The MCP front end onto the corpus.
-
-The tools themselves are tested in test_tools; what matters here is that the
-server offers exactly the tools the agent has, in the shape MCP requires, and
-that a client can complete a session against it.
-"""
+"""The MCP front end onto the corpus."""
 
 from pathlib import Path
 
@@ -15,12 +10,7 @@ from verbatim.tools import TOOL_SCHEMAS
 
 @pytest.mark.anyio
 async def test_the_server_offers_exactly_the_tools_the_agent_has(tmp_path: Path) -> None:
-    """Two front ends onto one set of operations, so they cannot drift apart.
-
-    Checked on what the server publishes. These checks used to run against a
-    helper that restated the schemas and that the server never called, so
-    they could only ever agree with themselves.
-    """
+    """Two front ends onto one set of operations, so they cannot drift apart."""
     from helpers import chunked_corpus
     from verbatim.mcp_server import build_server
 
@@ -71,11 +61,7 @@ async def test_a_client_can_list_and_call_tools_over_a_real_session(tmp_path: Pa
 
 @pytest.mark.anyio
 async def test_a_tool_declares_the_arguments_it_actually_takes(tmp_path: Path) -> None:
-    """The server derives the schema from the signature, so it must be real.
-
-    Wrapping the dispatcher as **kwargs would advertise tools that accept
-    nothing, and a client would have no way to pass a query.
-    """
+    """The server derives the schema from the signature, so it must be real."""
     from helpers import chunked_corpus
     from verbatim.mcp_server import build_server
 
@@ -98,13 +84,7 @@ def anyio_backend() -> str:
 
 @pytest.mark.anyio
 async def test_an_array_parameter_is_published_as_a_list_not_a_string(tmp_path: Path) -> None:
-    """read_pages takes a list of page numbers, and published `pages` as str.
-
-    A conforming client could not call it: the tool took "16" and read pages 1
-    and 6. The earlier parity test compared TOOL_SCHEMAS to itself, so a
-    generator that silently downgraded every array passed it. This checks the
-    schema the server actually publishes.
-    """
+    """An array parameter is published as a list, not a string."""
     from helpers import chunked_corpus
     from verbatim.mcp_server import build_server
 

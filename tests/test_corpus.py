@@ -177,13 +177,7 @@ def test_license_backfill_records_absence_so_it_is_not_retried(tmp_path: Path) -
 
 
 def test_a_licence_survives_the_paper_being_synced_again(tmp_path: Path) -> None:
-    """The query API never returns a licence, so every sync writes none.
-
-    A re-sync used to overwrite the licence `licenses` had found with that
-    nothing - and since the paper was already marked checked, nothing ever
-    looked it up again. A paper cross-listed in two synced categories lost
-    its licence on the second category's sync; 50 in the full corpus had.
-    """
+    """The query API never returns a licence, so every sync writes none."""
     licence = "http://creativecommons.org/licenses/by/4.0/"
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         corpus.upsert_papers([paper("2608.12345v1")])
@@ -333,11 +327,7 @@ def test_two_stages_can_write_to_the_corpus_at_once(tmp_path: Path) -> None:
 def test_a_paper_whose_html_is_unchecked_can_be_held_back_from_chunking(
     tmp_path: Path,
 ) -> None:
-    """Chunking during an unfinished html run would read the PDF and be redone.
-
-    The rendering arrives minutes later, the paper is re-chunked from it, and
-    every vector made from the PDF passages is thrown away with them.
-    """
+    """Chunking during an unfinished html run would read the PDF and be redone."""
 
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         downloaded(corpus, tmp_path, "2608.11111v1")  # never checked for HTML
@@ -356,14 +346,7 @@ def test_a_paper_whose_html_is_unchecked_can_be_held_back_from_chunking(
 def test_a_re_chunk_that_yields_nothing_clears_the_papers_stale_passages(
     tmp_path: Path,
 ) -> None:
-    """A paper that stops extracting must not keep serving its old text.
-
-    The chunk stage marks a paper chunked even when extraction produced
-    nothing - a PDF that now fails, or one past the layout timeout - so
-    without this the old passages stayed searchable and citable under a
-    checksum the file no longer has, while the database recorded a successful
-    re-chunk.
-    """
+    """A paper that stops extracting must not keep serving its old text."""
     from helpers import chunked_corpus
 
     with chunked_corpus(tmp_path, {"2608.11111v1": ["Original text about qubits."]}) as corpus:
@@ -396,14 +379,7 @@ def test_a_batch_clears_only_the_papers_it_covered(tmp_path: Path) -> None:
 def test_a_passage_reports_its_papers_licence_however_it_was_chunked(
     tmp_path: Path,
 ) -> None:
-    """A licence found after chunking must still reach every passage and citation.
-
-    Chunks copied a licence only from the download record, HTML chunks never
-    had one, and `licenses` usually runs after both. Measured on the full
-    corpus: 0 of 835,743 passages carried a licence while 7,869 of 7,921
-    papers had one, so every search result and citation said "no licence
-    reported" for papers whose licence was known.
-    """
+    """A licence found after chunking must still reach every passage and citation."""
     from helpers import chunked_corpus
     from verbatim.citations import citation_from_chunk
 
@@ -442,12 +418,7 @@ def _held_rendering(corpus: CorpusStore, tmp_path: Path, arxiv_id: str):
 
 
 def test_a_bibliography_that_yields_nothing_is_not_read_again(tmp_path: Path) -> None:
-    """Reading it and finding nothing is an answer, and it has to be kept.
-
-    Only reference rows marked a paper read, so a rendering whose
-    bibliography parses to nothing was pending for ever: re-parsed on every
-    run, and `stats` never reached zero. The full corpus had 69 such papers.
-    """
+    """Reading it and finding nothing is an answer, and it has to be kept."""
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         source = _held_rendering(corpus, tmp_path, "2608.12345v1")
         before = corpus.papers_without_references(10)
@@ -477,12 +448,7 @@ def test_a_reread_that_finds_nothing_clears_the_old_entries(tmp_path: Path) -> N
 
 
 def test_opening_the_committed_sample_does_not_change_it(tmp_path: Path) -> None:
-    """A clone that searches the sample must not find it modified afterwards.
-
-    Schema that only some stages need is created by those stages, not on
-    open, for exactly this reason: every command opens the corpus, and the
-    sample is a committed file.
-    """
+    """A clone that searches the sample must not find it modified afterwards."""
     import shutil
 
     copy = tmp_path / "sample.db"
@@ -497,12 +463,7 @@ def test_opening_the_committed_sample_does_not_change_it(tmp_path: Path) -> None
 
 
 def test_the_committed_samples_vector_index_is_already_current(tmp_path: Path) -> None:
-    """Every search checks the index first, and an out-of-date one is rewritten.
-
-    A sample saved before the index schema last changed would have all its
-    vectors rewritten by a fresh clone's first search - a read that leaves
-    the committed file modified.
-    """
+    """Every search checks the index first, and an out-of-date one is rewritten."""
     import shutil
 
     from verbatim import config

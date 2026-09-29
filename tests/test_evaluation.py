@@ -210,11 +210,7 @@ def test_an_unanswerable_case_loads(tmp_path: Path) -> None:
 
 
 def test_an_unanswerable_case_must_say_which_kind_it_is(tmp_path: Path) -> None:
-    """The two kinds are different problems and only one is detectable.
-
-    A detector scored against a label that mixes them is measuring nothing,
-    which is how four of them came to be scored against the same six cases.
-    """
+    """The two kinds are different problems and only one is detectable."""
     path = tmp_path / "cases.jsonl"
     path.write_text('{"question": "q", "expect_none": true}\n', encoding="utf-8")
 
@@ -297,13 +293,7 @@ def test_source_of_falls_back_when_a_case_is_unlabelled(tmp_path: Path) -> None:
 
 
 def test_stratified_sample_draws_evenly_across_batches(tmp_path: Path) -> None:
-    """File order would let the biggest batch decide the result.
-
-    The batches here are 36, 52 and 400 cases and score 0.675, 0.816 and 0.918
-    on the same retrieval. Taking the first hundred of a concatenated key draws
-    88 from one authoring method and 12 from another, then reports the average
-    as though it described the corpus.
-    """
+    """File order would let the biggest batch decide the result."""
     from verbatim.evaluation import EvalCase, source_of, stratified_sample
 
     cases = (

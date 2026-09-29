@@ -1,11 +1,4 @@
-"""The command line, where the answering paths actually diverge.
-
-cli.py is the largest module in the project and had no tests: every flag that
-argparse accepts and the branch below quietly ignores is invisible to the rest
-of the suite. These check the wiring, not the retrieval - anything needing a
-model or an ONNX embedder is out of scope here by design, so the checks run
-offline in milliseconds like the rest.
-"""
+"""The command line, where the answering paths actually diverge."""
 
 import pytest
 
@@ -61,11 +54,7 @@ def test_usage_totals_across_calls() -> None:
 def test_deep_refuses_the_flags_it_would_otherwise_ignore(
     monkeypatch, flag: str, expected: str
 ) -> None:
-    """--deep subsumes each of these, so accepting them would be a lie.
-
-    The audit's complaint, applied to the new flag before it can become one:
-    a flag argparse accepts and the branch quietly drops is invisible.
-    """
+    """--deep chooses its own retrieval, so it refuses flags it would ignore."""
     monkeypatch.setattr(
         "sys.argv", ["verbatim", "ask", "what is Adam?", "--deep", flag]
     )
@@ -79,15 +68,7 @@ def test_deep_refuses_the_flags_it_would_otherwise_ignore(
 
 
 def test_eval_accepts_several_key_files(monkeypatch, tmp_path) -> None:
-    """The frozen key is two files now, and must be scorable as one.
-
-    Held-out cases live in two files because they were authored two ways, and
-    the split has to survive into every result. Scoring only one by default
-    would quietly halve the sample this exercise existed to enlarge.
-
-    Checked with a missing second file, so the assertion lands on the loader
-    and the command never reaches an ONNX embedder - this file stays offline.
-    """
+    """The frozen key is two files now, and must be scorable as one."""
     import sys
 
     from verbatim.cli import run as cli_run
@@ -143,11 +124,7 @@ def test_breadth_authoring_refuses_to_overwrite_a_frozen_key(monkeypatch, tmp_pa
 def test_a_routed_ask_refuses_retrieval_flags_it_would_drop(
     monkeypatch, mode: str, flags: list[str]
 ) -> None:
-    """The ladder and the tool-choosing model pick their own retrieval.
-
-    Each of these was parsed and then silently ignored on that path - a search
-    the reader scoped to one paper came back from the whole corpus.
-    """
+    """The ladder and the tool-choosing model pick their own retrieval."""
     monkeypatch.setattr("sys.argv", ["verbatim", "ask", "what is Adam?", mode, *flags])
 
     with pytest.raises(SystemExit) as raised:
@@ -158,11 +135,7 @@ def test_a_routed_ask_refuses_retrieval_flags_it_would_drop(
 
 
 def test_chunk_reports_the_passages_it_actually_wrote(monkeypatch, capsys, tmp_path) -> None:
-    """The summary added HTML papers where it meant HTML passages.
-
-    A run that read one rendering into two passages reported one, so the line
-    a pipeline driver reads understated every HTML-first ingest.
-    """
+    """The summary counts passages written, not papers."""
     from helpers import store_paper
     from verbatim.corpus import CorpusStore
     from verbatim.downloads import file_sha256
@@ -268,11 +241,7 @@ def test_the_licence_stage_is_in_the_run_ledger(monkeypatch, tmp_path, capsys) -
 
 
 def test_every_committed_key_is_kept_out_of_new_authoring() -> None:
-    """A paper a key already scores cannot be written about again.
-
-    The two-turn key was committed without joining the list, so the next
-    held-out authoring run could have drawn its thirty papers.
-    """
+    """A paper a key already scores cannot be written about again."""
     from pathlib import Path
 
     from verbatim.cli import SCORED_KEYS

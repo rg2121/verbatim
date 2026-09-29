@@ -1,27 +1,15 @@
-"""Four ways to retrieve for a follow-up, scored on the paper the case names.
+"""Four ways to retrieve for a follow-up question, scored on evals/conversational.jsonl.
 
-Every key in this project is single-turn, so the one thing a conversation adds
-- that the second question does not carry its own subject - has never been
-measured. `evals/conversational.jsonl` is two-turn: an opening question that
-stands on its own, and a follow-up that does not, both answered by the same
-paper. So retrieval for the follow-up is scored exactly as retrieval for the
-opening, and the gap between them is what a conversation costs.
+Each case is an opening question and a follow-up that refers back to it, both
+answered by the same paper. The arms retrieve for the follow-up:
 
-The arms all retrieve for the SECOND turn:
+  as typed   the follow-up as written
+  rewritten  resolved into a standalone question by one model call (what ships)
+  fused      both rankings merged by position
+  scoped     the rewritten question searched within the opening turn's papers,
+             falling back to the whole corpus
 
-  as typed     the follow-up exactly as written, with no resolving at all
-  rewritten    what ships: one model call turns it into a standalone question
-  fused        both rankings merged by position, so a term the rewrite dropped
-               is not lost
-  scoped       the rewritten question searched within the papers the opening
-               turn retrieved, falling back to the whole corpus if that finds
-               nothing
-
-The opening turn is answered for real before the rewrite, because that is what
-the page sends: the rewrite sees the previous question and its answer.
-
-Answers and per-case ranks go to evals/results/, which is gitignored. What
-gets committed is the aggregate.
+Per-case results go to evals/results/, which git ignores.
 """
 
 from __future__ import annotations
@@ -125,8 +113,7 @@ def main() -> int:
             expected = case["expect_papers"]
             try:
                 opening = retrieve(case["question"])
-                # What the page sends as history is the question and its
-                # answer, so the rewrite is measured against the same thing.
+                # History is the question and its answer, as the page sends it.
                 answered = answer_from_matches(
                     corpus, completion, case["question"], opening
                 )
@@ -144,8 +131,7 @@ def main() -> int:
                 break
             fell_back = not scoped
             if fell_back:
-                # An empty scoped search is no answer at all; the honest
-                # comparison is what the reader would have got instead.
+                # An empty scoped search falls back to what the reader would get.
                 scoped = resolved
             ranks = {
                 "as typed": rank_of_first_hit(as_typed, expected),

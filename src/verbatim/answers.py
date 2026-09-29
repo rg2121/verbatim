@@ -17,13 +17,8 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
-# The same line with the chunk id inside the brackets and no number:
-# `CITE [dc83e954...] :: quoted words`. gemma4:31b writes it this way every
-# time, and reading only the numbered form threw away four genuine citations
-# per answer and marked the prose [unverified]. Accepting it verifies exactly
-# as strictly - the quote is still checked character-for-character against the
-# passage it names - and only the bookkeeping differs, because the inline
-# markers are chunk ids too and renumber_markers already resolves those.
+# The same line with the chunk id in the brackets and no number, as some models
+# write it. The quote is verified just as strictly.
 CITE_ID_LINE_PATTERN = re.compile(r"^CITE\s*\[([0-9a-f]{16,})\]\s*::\s*(.+)$", re.M)
 CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
 MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
@@ -87,15 +82,9 @@ ANSWER_SCHEMA: dict[str, Any] = {
 
 @dataclass
 class Usage:
-    """What the model was asked to do, counted.
+    """Model calls and tokens spent, for the cost footer.
 
-    The orchestrator's whole justification is a cost/benefit argument - a
-    ladder that retries costs generations - and the argument was being made
-    without numbers. Ollama returns them on every call and they were being
-    thrown away.
-
-    Mutable and shared: report sections run in parallel threads against one
-    client, so the increments are taken under a lock.
+    Shared by report sections running in parallel, so updates take a lock.
     """
 
     calls: int = 0
@@ -126,8 +115,7 @@ class Usage:
             return (self.calls, self.prompt_tokens, self.output_tokens, self.seconds)
 
     def since(self, before: tuple[int, int, int, float]) -> "Usage":
-        """What has been spent since a snapshot. A run outlives a step, so a
-        step's cost is a difference rather than a total."""
+        """What has been spent since `before`, a snapshot."""
         calls, prompt, output, seconds = self.snapshot()
         return Usage(
             calls=calls - before[0], prompt_tokens=prompt - before[1],
@@ -158,11 +146,7 @@ class Answer:
     def supporting_papers(self) -> int:
         """Distinct papers behind the answer.
 
-        Reported in to_dict for callers that want it, but deliberately *not*
-        warned on: measured, a lone-paper warning fired on 5 of 14 good answers
-        while catching only 2 of 6 bad ones, and caught nothing the subject
-        check did not already catch. Corroboration reads like a quality signal
-        and is not one here.
+        Reported but not warned on: measured, it did not separate good answers from bad.
         """
         return len({citation.arxiv_id for citation in self.citations})
 
@@ -178,16 +162,10 @@ class Answer:
 
 
 def verify_quote(quoted_text: str, chunk_text: str) -> str | None:
-    """Return why a quote fails verification, or None if it is genuine.
+    """Return why a quote fails verification, or None if it is exact.
 
-    Two presentation differences are forgiven, because neither changes which
-    words were quoted: collapsed whitespace, and wrapping quotation marks or
-    trailing sentence punctuation that a model adds when it sets a quote into
-    its own prose. Measured against a local model, the wrapper alone accounted
-    for a third of apparent failures.
-
-    Nothing about the words themselves is forgiven. A paraphrase still fails,
-    which is the whole point of the check.
+    Only whitespace, wrapping quotation marks and trailing punctuation are
+    forgiven. Any change to the words fails.
     """
     quote = _normalize_quote(quoted_text)
     if not quote:
@@ -214,14 +192,7 @@ class Completion(Protocol):
 
 
 class OllamaToolCaller:
-    """Picks a tool with Ollama's tool calling.
-
-    Tool calling was measured unreliable on long prompts on this model, but an
-    agent's routing turn is short - a question plus the tool schemas - and it
-    chose correctly for recency, single-paper and literature questions alike.
-    Returning None when no tool is chosen lets the loop stop rather than force
-    a call the model did not want to make.
-    """
+    """Picks a tool with Ollama's native tool calling, or None when none is chosen."""
 
     def __init__(self, model: str | None = None, *, host: str | None = None,
                  timeout: float | None = None) -> None:
@@ -233,12 +204,7 @@ class OllamaToolCaller:
 
     @property
     def usage(self) -> "Usage":
-        """This caller's own counters.
-
-        Routing turns are model calls too, and they were counted nowhere:
-        `report --agents` climbs to a rung that calls this, so the path whose
-        cost most needs reporting was the one under-reporting it.
-        """
+        """This caller's model calls and tokens."""
         return self._client.usage
 
     def choose_tool(self, system, messages, tools):
@@ -251,9 +217,7 @@ class OllamaToolCaller:
                 "messages": [{"role": "system", "content": system}, *messages],
             },
         )
-        # Counted here rather than in _post, which also serves calls that are
-        # not generations: a routing turn is a model call and was reporting as
-        # none at all.
+        # A routing turn is a model call, so it is counted.
         self._client.usage.record(body)
         for call in body.get("message", {}).get("tool_calls") or []:
             function = call.get("function", {})
@@ -266,13 +230,10 @@ class OllamaToolCaller:
 
 
 class OllamaCompletion:
-    """A model served by Ollama - a local one, or a `-cloud` one Ollama hosts.
+    """A model served by Ollama, local or `-cloud`.
 
-    Structure is elicited with a flat line protocol rather than Ollama's
-    `format` parameter or tool calling. See `complete` for the measurements
-    behind that choice; briefly, neither of the documented mechanisms survived
-    a realistic multi-passage prompt on the model tested, and the line protocol
-    parsed every time.
+    Answers use a flat line protocol, which small models follow more reliably
+    than JSON output or tool calling (see `complete`).
     """
 
     def __init__(
@@ -293,12 +254,7 @@ class OllamaCompletion:
         self.model = model or config.OLLAMA_MODEL or self._first_available_model()
 
     def complete_text(self, system: str, user: str) -> str:
-        """Ask for prose and return it unparsed.
-
-        Answering needs a structure and gets it through the line protocol.
-        Query rewriting wants sentences back, so it asks plainly rather than
-        being made to fit a protocol it has no use for.
-        """
+        """Ask for prose and return it unparsed."""
         body = self._post(
             "/api/chat",
             {
@@ -314,23 +270,17 @@ class OllamaCompletion:
         return str(body.get("message", {}).get("content", "")).strip()
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
-        """Elicit the answer as flat lines, then shape it like the JSON schema.
+        """Elicit the answer as ANSWER/CITE lines and return it in the schema's shape.
 
-        `schema` is used only by the opt-in tools protocol. Measured on the
-        local 4B model: tool calling produced the right structure on a
-        one-passage prompt but was ignored on every realistic five-passage
-        prompt, as were both `format: "json"` and a full JSON schema. The flat
-        CITE-line protocol parsed correctly on every attempt, so by default
-        the backend elicits that and converts it to the shape the caller
-        expects.
+        `schema` is used only by the opt-in tools protocol. On a local model,
+        tool calling and JSON output were ignored on realistic prompts; the line
+        protocol always parsed.
         """
         if self.protocol == "tools":
             payload = self._complete_with_tools(system, user, schema)
             if payload is not None:
                 return payload
-            # The model ignored the tool, which is what the 4B one always did.
-            # Falling through rather than failing means the worst case is the
-            # protocol that already works.
+            # The model ignored the tool: fall back to the line protocol.
         body = self._post(
             "/api/chat",
             {
@@ -355,14 +305,7 @@ class OllamaCompletion:
     def _complete_with_tools(
         self, system: str, user: str, schema: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Ask for the answer as a tool call, or return None if it is ignored.
-
-        Measured on gemma4:31b-cloud: `format: "json"` and a full JSON schema
-        are both ignored on a realistic five-passage prompt, exactly as on the
-        4B model, but tool calling is honoured and returns the schema's fields.
-        Whether it produces *better* citations than the line protocol is a
-        separate question and is measured rather than assumed.
-        """
+        """Ask for the answer as a tool call, or return None if the model ignores it."""
         body = self._post(
             "/api/chat",
             {
@@ -416,16 +359,9 @@ class OllamaCompletion:
     def stream(self, system: str, user: str):
         """Yield the reply's text as the model writes it.
 
-        The same call `complete` makes, with `stream: true`; Ollama then sends
-        one JSON object per line, each carrying a fragment. The caller joins
-        what it saw and parses it with parse_line_protocol, so streaming
-        changes when text is shown and nothing about what is accepted:
-        verification runs on the finished reply exactly as it always has.
-
-        Failures are read as `_request` reads them - a missing model is named,
-        a refusal is final, a server error is retried - but only until the
-        first line arrives. After that a retry would repeat text the reader
-        has already been shown, so a failure part-way is raised as it is.
+        The caller parses and verifies the finished reply exactly as `complete`
+        does. Failures are retried only before the first line arrives, since a
+        retry after that would repeat text already shown.
         """
         request = Request(
             f"{self.host}/api/chat",
@@ -479,12 +415,7 @@ class OllamaCompletion:
         raise self._unreachable(attempts, last)
 
     def _first_available_model(self) -> str:
-        """The first local model pulled. A `-cloud` one is used only when named.
-
-        A cloud model sends every prompt's passages to Ollama's servers, so it
-        is the user's choice to make in OLLAMA_MODEL, never a default - even
-        when Ollama happens to list it first.
-        """
+        """The first local model pulled. A `-cloud` model is used only when named."""
         models = [item["name"] for item in self._get("/api/tags").get("models", [])]
         if not models:
             raise RuntimeError(
@@ -511,16 +442,7 @@ class OllamaCompletion:
         return self._request(request)
 
     def _request(self, request: Request) -> dict[str, Any]:
-        """One call to Ollama, retrying the failures that retrying can fix.
-
-        A local model either answers or is not running, so this used to try
-        once. A model served over the network does neither reliably: measured
-        here, a sustained run of a few hundred calls draws an occasional 502,
-        and a single one of those killed a ten-minute evaluation outright.
-        Server errors and dropped connections are retried with the same
-        backoff the arXiv client uses; a 4xx is not, because a rejected
-        request is rejected however many times it is sent.
-        """
+        """One call to Ollama, retrying server errors and dropped connections but never a 4xx."""
         attempts = config.HTTP_RETRIES
         last: Exception | None = None
         for attempt in range(attempts + 1):
@@ -544,17 +466,9 @@ class OllamaCompletion:
         raise self._unreachable(attempts, last)
 
     def _refusal(self, error: HTTPError) -> RuntimeError | None:
-        """The error to stop on, or None when a retry could fix this one.
-
-        Shared by the streaming and non-streaming calls. They classified
-        failures apart, and the streaming one - HTTPError being a URLError -
-        read a missing model as an unreachable server.
-        """
+        """The error to stop on, or None when a retry could fix it."""
         if error.code == 404:
-            # Ollama answers 404 when the model is not pulled, which is the
-            # one 4xx a user can act on - and "refused the request (404 Not
-            # Found)" does not tell them the model is the problem, let alone
-            # which models they do have.
+            # Ollama answers 404 when the model is not pulled: name it and list what is.
             return RuntimeError(self._missing_model_message())
         if error.code < 500:
             return RuntimeError(
@@ -570,12 +484,7 @@ class OllamaCompletion:
         )
 
     def _missing_model_message(self) -> str:
-        """Say which model is missing, and what is actually pulled.
-
-        Asking which models exist can itself fail, so it never turns one bad
-        error into another: the useful half of the message is written first
-        and the listing is added only if it arrives.
-        """
+        """Name the missing model and, if listing succeeds, the models that are pulled."""
         message = (
             f"Ollama at {self.host} has no model named {self.model!r}. "
             f"Pull it with 'ollama pull {self.model}'"
@@ -592,10 +501,9 @@ class OllamaCompletion:
 
 
 def parse_line_protocol(content: str) -> dict[str, Any] | None:
-    """Read the flat ANSWER/CITE format back into the answer payload shape.
+    """Parse ANSWER/CITE lines into the answer payload.
 
-    Returns None when there is no ANSWER line at all, which is the signal that
-    the model ignored the format rather than simply finding nothing to cite.
+    Returns None when there is no ANSWER line, meaning the model ignored the format.
     """
     answer = ANSWER_LINE_PATTERN.search(content)
     if answer is None:
@@ -605,9 +513,7 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
         for marker, chunk_id, quote in CITE_LINE_PATTERN.findall(content)
     ]
     citations.extend(
-        # Numbered from where the other form left off; the number is only a
-        # fallback for prose that cites numerically, and this form's prose
-        # cites by chunk id.
+        # Numbered after the other form; this form's prose cites by chunk id.
         {"marker": position, "chunk_id": chunk_id, "quoted_text": quote.strip()}
         for position, (chunk_id, quote) in enumerate(
             CITE_ID_LINE_PATTERN.findall(content), start=len(citations) + 1
@@ -622,13 +528,10 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
 def renumber_markers(
     text: str, citations: list[Citation], marker_positions: dict[int, int] | None = None
 ) -> str:
-    """Rewrite inline markers so they match the rendered bibliography.
+    """Renumber inline markers to match the printed bibliography.
 
-    Small models cite by chunk id, and their numbering does not survive a
-    rejected citation: a model citing [1] and [2] where [1] failed leaves the
-    prose pointing at a reference that is not printed. The bibliography is
-    numbered by position, so the prose is rewritten to match, and any marker
-    whose citation did not survive becomes [unverified].
+    Markers may be numbers or chunk ids. One whose citation was rejected
+    becomes [unverified].
     """
     positions = marker_positions or {}
     chunk_positions = {citation.chunk_id: n for n, citation in enumerate(citations, start=1)}
@@ -639,8 +542,7 @@ def renumber_markers(
         if token.isdigit() and int(token) in positions:
             return f"[{positions[int(token)]}]"
         if token.isdigit() or CHUNK_ID_PATTERN.fullmatch(token):
-            # Points at a citation that did not survive verification. Say so
-            # rather than leaving a dangling number or an opaque hash.
+            # Its citation was rejected.
             return "[unverified]"
         return None  # not a citation marker
 
@@ -652,12 +554,8 @@ def renumber_markers(
         rewritten = rewrite_one(token)
         if rewritten is not None:
             return rewritten
-        # Models also group markers - "[5, 3]", and on models that cite by
-        # chunk id, "[a826c26dad1a785511b3, 180d5845e4ce3b24a60a]". Neither may
-        # survive: a stale pair of numbers points at the wrong references, and
-        # a pair of hashes is not something a reader can follow at all. The
-        # group is only treated as markers if every member is one, so
-        # "[see also, page 3]" is left alone.
+        # Grouped markers such as "[5, 3]" are rewritten only when every part is a
+        # marker, so text like "[see also, page 3]" is left alone.
         grouped = [part.strip() for part in token.split(",")]
         if len(grouped) > 1 and all(is_marker(part) for part in grouped):
             return "".join(rewrite_one(part) or "[unverified]" for part in grouped)
@@ -677,13 +575,10 @@ SUBJECT_SYSTEM = (
 def describe_subject(
     completion: Completion, matches: list[ChunkMatch], *, sample: int = 5
 ) -> str:
-    """Ask what the passages are about, without mentioning the question.
+    """Ask what the passages are about, without showing the question.
 
-    Asked whether passages are relevant, every model tested says yes: they were
-    retrieved because they matched, and the model reads that as evidence. Asked
-    only what they discuss, the same model answers accurately - it called the
-    passages behind "what is a tensor?" multidimensional arrays, and those
-    behind "the farthest star" neutron star properties.
+    Asked whether passages are relevant, models say yes; asked what they
+    discuss, they answer accurately.
     """
     passages = "\n\n".join(f"<passage>{m.chunk.text[:500]}</passage>" for m in matches[:sample])
     reply = completion.judge(SUBJECT_SYSTEM, f"{passages}\n\nSubject:")
@@ -704,17 +599,10 @@ def subject_check(
     *,
     sample: int = 5,
 ) -> tuple[str | None, float | None]:
-    """What the passages are about, and how far that is from the question.
+    """What the passages are about, and its similarity to the question.
 
-    Returns `(None, None)` when the model names no subject, because **a check
-    that did not run must be silent rather than warn**. Embedding an empty
-    subject against the question yields an arbitrary similarity, and on a
-    model that returned nothing here that printed a warning with a blank
-    subject and a threshold complaint beneath it - a report of a measurement
-    that was never made.
-
-    The two steps live together because four call sites were performing them
-    in sequence, which is three chances to guard the result differently.
+    Returns (None, None) when no subject is named, so a check that did not run
+    stays silent.
     """
     subject = describe_subject(completion, matches, sample=sample)
     if not subject:
@@ -764,12 +652,10 @@ def answer_from_payload(
     payload: dict[str, Any],
     papers: dict[str, Any],
 ) -> Answer:
-    """Verify a model's payload into an Answer, however the payload arrived.
+    """Verify a model's payload into an Answer.
 
-    Split from answer_from_matches so a streamed generation - whose deltas
-    were already shown to someone - finishes through exactly this same
-    verification, rather than a second copy of it. `papers` is passed in
-    rather than looked up so the caller can run this off the database thread.
+    Streamed and non-streamed answers both finish here, so they are verified
+    the same way. `papers` is passed in so this can run off the database thread.
     """
     chunks = {match.chunk.chunk_id: match.chunk for match in matches}
 
@@ -795,9 +681,8 @@ def answer_from_payload(
             None,
         )
         if duplicate is not None:
-            # A second quote from the same passage renders as an identical
-            # reference, so the reader gains nothing from a duplicate entry -
-            # but its marker must still resolve to the entry that is printed.
+            # A second quote from one passage adds no reference; its marker points
+            # at the existing one.
             if isinstance(raw.get("marker"), int):
                 marker_positions[raw["marker"]] = duplicate
             continue

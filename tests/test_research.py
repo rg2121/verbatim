@@ -1,8 +1,4 @@
-"""Answering a compound question in parts.
-
-The loop is off by default and must never make a question worse, so most of
-these are about it declining to interfere or failing safely.
-"""
+"""Answering a compound question in parts."""
 
 import pytest
 
@@ -74,11 +70,7 @@ def test_every_part_keeps_its_share_of_the_passages(tmp_path) -> None:
 
 
 class _KeywordOnly:
-    """An embedder stand-in whose vector leg returns nothing.
-
-    hybrid_search tolerates an empty vector leg, so this exercises the quota
-    without needing a real model.
-    """
+    """An embedder stand-in whose vector leg returns nothing."""
 
     def __init__(self, corpus) -> None:
         from verbatim.corpus import EmbeddingModel

@@ -1,41 +1,11 @@
-"""Roles that differ in kind, coordinated in code, and measured against not doing it.
+"""The orchestrator behind `ask --deep` and `report --agents`.
 
-The 2026 literature on multi-agent systems agrees on more than it argues
-about, and this module is built from the parts that agree:
-
-- **Orchestrator and workers.** A lead coordinates specialists that work in
-  parallel on independent facets; a published orchestrator-workers research
-  system reports a 90% gain over a single agent on breadth-first tasks,
-  and the LangGraph
-  benchmark finds supervisor designs stay accurate as tools proliferate
-  where a single agent degrades. The cost is tokens - 3 to 15 times a
-  single agent - so the work has to be worth it.
-- **Divide by context, not by problem type.** Facets that share context
-  belong to one agent; facets that share nothing may be split. This is why
-  splitting one question into sub-questions lost here (measured: worse on
-  its own compound cases) while a review's *sections* are the right split -
-  they share a topic and nothing else.
-- **A verifier that is not the writer.** The separate citation agent in those
-  systems exists because one agent both writing and checking plays "a game of
-  telephone". Here the verifier is stronger than an agent: it is the
-  deterministic quote check, and it never asks a model whether the answer is
-  good, because models asked that always say yes (measured, four ways).
-- **A ledger, and no blind retries.** Magentic-One's orchestrator keeps a
-  progress ledger and retries on error; OrchestraBench (arXiv:2608.05263)
-  finds blind retry reproduces latent faults and that detection *with
-  attribution* is what makes containment possible. So every attempt here is
-  recorded with what it retrieved, what verified, and why it was rejected,
-  and a retry always changes strategy.
-- **The supervisor never paraphrases.** The LangGraph benchmark's main
-  failure mode was the supervisor's "translation layer" rewriting worker
-  output. The supervisor here forwards each section's verified answer
-  untouched.
-
-The supervisor is code rather than a model for the same reason the retrieval
-gates are: routing by question shape was measured to win, and code can be
-tested offline in two seconds. Models do the narrow jobs - planning sections,
-writing prose, naming what passages are about, and, as the last rung of the
-ladder, choosing a tool - and the ledger says which one did what.
+Each section is routed by its question shape to a ladder of retrieval
+strategies. After each attempt a deterministic verdict decides: accept when a
+citation verified and the passages are on-subject, otherwise retry with the
+next strategy, never the same one. Every attempt is recorded in a ledger. The
+supervisor is code; models only plan sections, write prose, name subjects
+and, on the last rung, choose a tool.
 """
 
 from __future__ import annotations
@@ -51,12 +21,7 @@ from typing import Any
 
 from verbatim import config
 from verbatim.agent import ToolCaller, gather, records_answer
-from verbatim.answers import (
-    Answer,
-    Completion,
-    answer_from_matches,
-    subject_check,
-)
+from verbatim.answers import Answer, Completion, answer_from_matches, subject_check
 from verbatim.contracts import Budget, BudgetGuard, Cost, Critique, Gathered, Verdict
 from verbatim.corpus import CorpusStore
 from verbatim.critique import critique as run_critique
@@ -73,12 +38,8 @@ RECENCY = re.compile(
     re.IGNORECASE,
 )
 
-# The strategies a section may be retrieved with, in the order each shape
-# tries them. Every rung is a different retrieval, so a retry is never blind.
-# "hybrid" is the measured default (the definitional graph gate is inside it);
-# "compare" and "titles" are the legs measured best on multi-paper questions;
-# "agent" lets a model choose a tool, which is the only rung that can answer a
-# recency or named-paper question, and the most expensive.
+# The strategies each shape tries, in order. Every rung retrieves differently, so
+# a retry is never blind; "agent" lets a model choose a tool.
 LADDERS: dict[str, tuple[str, ...]] = {
     "definitional": ("hybrid", "titles", "agent"),
     "comparison": ("compare", "titles", "agent"),
@@ -107,15 +68,9 @@ def question_shape(question: str) -> str:
 
 @dataclass(frozen=True)
 class Attempt:
-    """One rung of the ladder: what was tried, and what the verifier found.
+    """One rung of the ladder: what was tried and what the verifier found.
 
-    `route` records how the agent rung actually gathered its passages - which
-    tools it called, in order. Without it the ledger says a rung ran and not
-    what it did, and this module's own argument is that containment needs
-    detection *with attribution*.
-
-    `error` records a rung that could not run at all, so a model that fell over
-    is distinguishable in the ledger from one that answered badly.
+    `route` is the agent rung's tool trace; `error` marks a rung that could not run.
     """
 
     strategy: str
@@ -126,8 +81,7 @@ class Attempt:
     verdict: str
     route: str = ""
     error: str = ""
-    # Which passages this attempt actually stood on, so the ledger can be
-    # traced to sources rather than only to counts.
+    # The passages this attempt stood on.
     papers: tuple[str, ...] = ()
     chunks: tuple[str, ...] = ()
     cost: Cost = Cost()
@@ -184,9 +138,6 @@ class Ledger:
                     f"{subject}{cost} -> {attempt.verdict}"
                 )
                 if attempt.papers:
-                    # Which sources, not only how many: a ledger that cannot be
-                    # traced back to passages records that something happened
-                    # rather than what it stood on.
                     shown = ", ".join(f"arXiv:{paper}" for paper in attempt.papers[:4])
                     more = "" if len(attempt.papers) <= 4 else f" (+{len(attempt.papers) - 4})"
                     lines.append(f"    - stood on {shown}{more}")
@@ -213,13 +164,8 @@ def verdict_for(
 ) -> Verdict:
     """Accept or retry, from numbers only.
 
-    A section is accepted when at least one citation survived verification
-    and the passages are about what the section asks. No model is asked
-    whether the answer is good: asked that, every model tested says yes.
-
-    `listed` is the one other way to stand: a recency question answered from
-    catalogue rows. Nothing was generated, so there is nothing to verify, and
-    the rows are the answer rather than evidence for one.
+    Accepted when a citation verified and the passages are on-subject;
+    `listed` accepts a recency answer listed from the catalogue.
     """
     if listed:
         return Verdict(True, "listed from the catalogue; nothing was generated")
@@ -240,12 +186,7 @@ def retrieve(
     max_per_paper: int | None,
     caller: ToolCaller | None,
 ) -> Gathered:
-    """Run one strategy, returning its passages and how it got them.
-
-    The route is empty for the deterministic strategies, whose name already
-    says what they did, and is the agent's tool trace on the agent rung, which
-    is the only rung whose behaviour varies from question to question.
-    """
+    """Run one strategy; the route is the tool trace on the agent rung."""
     if strategy == "agent":
         if caller is None:
             return Gathered(question, (), strategy, "no tool-choosing model available")
@@ -262,12 +203,7 @@ def retrieve(
 
 
 def answered_from_records(gathered: Gathered, shape: str) -> bool:
-    """Whether this attempt answers from catalogue rows rather than passages.
-
-    Only for a recency question. A listing is the answer to "what is new";
-    to any other question a looked-up record with no passage is a lookup
-    that found nothing to quote, and is treated as exactly that.
-    """
+    """Whether this attempt answers a recency question from catalogue rows."""
     return shape == "recency" and not gathered.matches and bool(gathered.records)
 
 
@@ -285,13 +221,7 @@ def write(
 
 
 class Meters:
-    """What an attempt spent, across every client it used.
-
-    The answering model and the tool-choosing one keep separate counters, and
-    an agent rung's routing turns were missing from its cost because only the
-    first was read. Each counter is read once, since the two can be one
-    client. Shared by both supervisors so their ledgers cannot disagree.
-    """
+    """What an attempt spent across every client, each counted once."""
 
     def __init__(self, *clients: object) -> None:
         counters = (getattr(client, "usage", None) for client in clients)
@@ -331,28 +261,11 @@ def work_section(
 ) -> tuple[ReportSection, SectionLedger]:
     """Climb the ladder for one section until the verifier accepts.
 
-    The best attempt is kept, not the last: an escalation can retrieve worse
-    than what it replaced, and the reader should get the strongest section
-    the ladder found, with the ledger showing the rest.
-
-    `ladder` overrides the router's choice, which is how the plain report runs
-    this same loop with a single rung and no escalation.
-
-    `on_attempt` is called with (strategy, rung, rungs) before each rung runs,
-    for callers that must show progress while the loop blocks - a page waiting
-    silently through three retrievals and three generations reads as a broken
-    one. It is told what is *about* to be tried, because what was tried is
-    already in the ledger by the time the loop returns.
-
-    A rung that raises - an unreachable model, a corpus fault - is recorded as
-    a failed attempt and the ladder continues. One failure in one section must
-    not discard a review that may have taken ten minutes to write.
-
-    With `critic`, each written section is also checked for claims carrying no
-    citation and for subjects the question raises that no passage covers. Only
-    the second escalates: a different retrieval can fix missing coverage and
-    cannot fix a sentence the writer left uncited, so the first is reported to
-    the reader instead of being retried.
+    The best attempt is kept, not the last. `ladder` overrides the router (the
+    plain report uses one rung). `on_attempt` reports each rung before it runs.
+    A rung that raises is recorded as failed and the ladder continues. With
+    `critic`, uncovered subjects force a retry; uncited sentences are only
+    reported, since another retrieval cannot fix them.
     """
     shape = question_shape(heading)
     meters = Meters(completion, caller)
@@ -440,14 +353,9 @@ def work_section(
 def choose_best(
     candidates: list[tuple[Attempt, ReportSection]], heading: str, shape: str
 ) -> tuple[ReportSection, SectionLedger]:
-    """Pick the attempt to keep, and say what the ladder came to.
+    """Pick the best attempt, not the last, and state the section's outcome.
 
-    The best attempt, not the last: an escalation can retrieve worse than what
-    it replaced, and the reader should get the strongest section found.
-
-    Shared by both supervisors rather than written twice. They are meant to
-    differ in control flow and in nothing else, so any selection rule living
-    in one of them would make a comparison between them meaningless.
+    Shared by both supervisors, so they differ only in control flow.
     """
     best_attempt, best_section = max(
         candidates,
@@ -462,8 +370,7 @@ def choose_best(
     if best_attempt.verdict == ACCEPTED:
         outcome = "accepted"
     elif best_attempt.verified and best_attempt.critique and best_attempt.critique.unaddressed:
-        # Held back by the critic, not by the subject check: its subject may
-        # be fine, and calling it a subject warning named the wrong problem.
+        # Held back by the critic, not the subject check.
         outcome = (
             "accepted, though no passage covers: "
             + ", ".join(best_attempt.critique.unaddressed)
@@ -484,12 +391,7 @@ def choose_best(
 
 
 class _Serialized:
-    """One embedder shared by worker threads, one call at a time.
-
-    ONNX inference is cheap next to generation, so serialising it costs
-    nothing measurable and removes a class of race the threads would
-    otherwise have on first load.
-    """
+    """One embedder shared by worker threads, one call at a time."""
 
     def __init__(self, embedder: Embedder) -> None:
         self._embedder = embedder
@@ -513,12 +415,7 @@ SUPERVISORS = ("builtin", "langgraph")
 
 
 def _supervisor(name: str) -> Callable[..., tuple[ReportSection, SectionLedger]]:
-    """The function that climbs one section's ladder.
-
-    Imported lazily, because the LangGraph one needs an optional dependency
-    and a default install does not have it - naming a supervisor nobody
-    installed should say so, not fail at import time for everybody else.
-    """
+    """The function that climbs one section's ladder; LangGraph is imported only if chosen."""
     if name == "builtin":
         return work_section
     if name == "langgraph":
@@ -551,21 +448,11 @@ def orchestrate(
     on_section_done: Callable[[ReportSection, SectionLedger], None] | None = None,
     supervisor: str = "builtin",
 ) -> tuple[Report, Ledger]:
-    """Plan a review, then work its sections - in parallel when asked.
+    """Plan a review, then work its sections, in parallel when `workers` > 1.
 
-    Sections share a topic and nothing else, which is the division of labour
-    the literature says parallel workers are for. Each worker thread opens
-    its own connection to the corpus, because SQLite connections belong to
-    the thread that made them, and shares one serialised embedder.
-
-    `on_section_done` receives each finished section and its ledger entry as
-    it lands, which is what lets a review be streamed rather than waited for.
-
-    `supervisor` chooses which implementation climbs the ladder: the built-in
-    loop, or the same ladder as a LangGraph state machine. They share every
-    role and the selection rule and are meant to differ only in control flow;
-    the point of keeping both is that two implementations behind one set of
-    contracts is what shows the contracts are a boundary.
+    Each worker thread opens its own corpus connection and shares one
+    serialised embedder. `on_section_done` receives each section as it
+    finishes, from a worker thread when `workers` > 1.
     """
     if workers < 1:
         raise ValueError("workers must be at least 1")
@@ -593,10 +480,6 @@ def orchestrate(
             with CorpusStore(corpus.path) as own:
                 worked = climb(own, shared, completion, heading, **options)
         if on_section_done is not None:
-            # Fired as each section lands, so a caller streaming a review has
-            # something to show before the whole thing is finished. With
-            # several workers this arrives from a worker thread, so anything
-            # the caller does here must be safe to call from one.
             on_section_done(*worked)
         return worked
 

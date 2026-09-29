@@ -30,12 +30,7 @@ def test_plan_sections_parses_lines_and_survives_a_dead_model() -> None:
 
 
 def test_a_section_that_starts_with_a_number_keeps_it() -> None:
-    """A list marker is a number followed by '.' or ')'; '3D' and '4-bit' are not.
-
-    Stripping every leading digit turned "4-bit quantization" into "bit
-    quantization" - and a section's heading is also the query retrieval runs
-    for it, so the number was lost from the search as well as the page.
-    """
+    """A list marker is a number followed by '.' or ')'; '3D' and '4-bit' are not."""
     planned = plan_sections(
         lambda system, user: (
             "1. 3D Gaussian splatting for scene reconstruction\n"

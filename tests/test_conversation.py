@@ -1,9 +1,4 @@
-"""Following up on an earlier question.
-
-The invariant under test is not "the rewrite is good" - it is that the
-conversation reaches retrieval and never reaches the answering model, because
-text from an earlier turn cannot be verified against any paper.
-"""
+"""Following up on an earlier question."""
 
 
 import pytest
@@ -93,11 +88,7 @@ def test_a_turn_with_no_answer_yet_still_gives_its_question() -> None:
 
 
 def test_a_question_that_stands_alone_is_not_sent_for_rewriting() -> None:
-    """A rewrite can only damage a question that needed no resolving.
-
-    It also costs a model call per turn, and the conversation is most useful
-    when a follow-up is cheap.
-    """
+    """A rewrite can only damage a question that needed no resolving."""
     def explode(system: str, user: str) -> str:
         raise AssertionError("a standalone question must not be rewritten")
 

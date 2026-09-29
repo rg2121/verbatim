@@ -1,18 +1,7 @@
-"""Reading a paper's bibliography out of its arXiv HTML rendering.
+"""Reading a paper's bibliography from its arXiv HTML rendering.
 
-A reference list is the one part of a paper that names other papers, and
-LaTeXML marks it up properly: every entry is an <li class="ltx_bibitem">,
-where a PDF offers only a run of text that has to be guessed apart.
-
-The references serve two directions. Outward, they say which papers this
-corpus keeps leaning on and does not contain - the reading list `grow` works
-from. Inward, they are the citation graph: measured over all 398,802 entries,
-12,781 distinct edges resolve into the corpus and 43% of papers touch at least
-one. (An earlier version of this docstring said a graph could not be built
-here, from 70 edges in an 11% sample - but that sample was the alphabetically
-first ids, the corpus's oldest papers, whose references point at work still
-absent. The conclusion did not survive the full corpus.) The graph itself
-lives in `verbatim.graph`.
+LaTeXML marks every entry up as <li class="ltx_bibitem">. The entries feed
+`grow` (papers cited but not held) and the citation graph in `verbatim.graph`.
 """
 
 from __future__ import annotations
@@ -23,28 +12,24 @@ from pathlib import Path
 import re
 
 BIBITEM_CLASS = "ltx_bibitem"
-# arXiv:2401.12345v2, arxiv.org/abs/hep-th/9711200, and the spacing variants
-# that appear in real bibliographies.
+# "arXiv:2401.12345v2", "arxiv.org/abs/hep-th/9711200", "arXiv 2401.12345", and
+# other spacing variants found in real bibliographies.
 ARXIV_ID = re.compile(
-    # "arXiv:2401.12345v2", "arxiv.org/abs/hep-th/9711200", "arXiv 2401.12345"
     r"arxiv(?:\.org)?[.:/\s]*(?:abs/|pdf/)?"
     r"((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?)",
     re.IGNORECASE,
 )
 DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 VERSION_SUFFIX = re.compile(r"v\d+$")
-# LaTeXML prints the entry's own marker inside it; the ordinal already records
-# it, so carrying "[1]" into the stored text would only duplicate it.
+# LaTeXML prints the entry's own "[1]"; the ordinal already records it.
 LEADING_MARKER = re.compile(r"^\[\d+\]\s*")
 
 
 @dataclass(frozen=True)
 class Reference:
-    """One entry in a paper's bibliography, and what it could be resolved to.
+    """One bibliography entry and what it resolves to.
 
-    `raw_text` is kept whether or not an identifier was found: an unresolved
-    reference is still evidence of what the paper builds on, and resolution can
-    improve later without re-reading the HTML.
+    `raw_text` is kept even when nothing resolves, so resolution can improve later.
     """
 
     citing_arxiv_id: str
@@ -68,8 +53,7 @@ class BibliographyParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self._current is not None:
-            # A nested list inside an entry must not let its end tag close the
-            # entry early, so same-name nesting is counted.
+            # Count nested <li> so a nested list does not end the entry early.
             if tag == "li":
                 self._depth += 1
             return
@@ -112,12 +96,7 @@ def parse_bibliography(html: str, citing_arxiv_id: str) -> list[Reference]:
 
 
 def extract_arxiv_id(text: str) -> str | None:
-    """The arXiv identifier a reference names, without its version.
-
-    Deterministic extraction only. A reference is resolved because it states an
-    identifier, never because a title looked similar - the same standard the
-    rest of the project holds citations to.
-    """
+    """The arXiv identifier a reference states, without its version; never guessed from a title."""
     match = ARXIV_ID.search(text)
     if match is None:
         return None

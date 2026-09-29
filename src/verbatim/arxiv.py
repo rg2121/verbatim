@@ -11,8 +11,7 @@ from xml.etree import ElementTree
 from verbatim.fetching import fetch
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
-# Licence lives only here; the query API omits it entirely. arXiv moved its
-# OAI-PMH service to this host; the old export.arxiv.org/oai2 redirects here.
+# Licences come only from OAI-PMH; the query API omits them.
 ARXIV_OAI_URL = "https://oaipmh.arxiv.org/oai"
 OAI_NAMESPACE = "http://www.openarchives.org/OAI/2.0/"
 ARXIV_OAI_METADATA_NAMESPACE = "http://arxiv.org/OAI/arXiv/"
@@ -67,12 +66,7 @@ def fetch_metadata_page(
     sort_by: str = "lastUpdatedDate",
     http_get: Callable[[str], bytes] | None = None,
 ) -> FeedPage:
-    """Fetch one page of a category, for callers that page through results.
-
-    arXiv caps a single request well below the size of a real corpus, so
-    anything past a few hundred papers has to be paged.  `total_results` comes
-    from the feed itself, which is what lets a caller know when to stop.
-    """
+    """Fetch one page of a category, newest first, with the total result count."""
     if start < 0:
         raise ValueError("start must not be negative")
     if page_size < 1:
@@ -101,12 +95,7 @@ def fetch_papers_by_id(
     *,
     http_get: Callable[[str], bytes] | None = None,
 ) -> list[Paper]:
-    """Fetch metadata for specific papers, named by identifier.
-
-    Category queries return what is newest; this returns what was asked for,
-    which is what growing a corpus along its own citations needs. arXiv caps a
-    single id_list request, so callers batch.
-    """
+    """Fetch metadata for specific papers, at most MAX_IDS_PER_REQUEST at a time."""
     if not arxiv_ids:
         return []
     if len(arxiv_ids) > MAX_IDS_PER_REQUEST:
@@ -134,27 +123,12 @@ def fetch_metadata(
     sort_by: str = "lastUpdatedDate",
     http_get: Callable[[str], bytes] | None = None,
 ) -> list[Paper]:
-    """Fetch recent papers in one arXiv category.
-
-    `http_get` exists to keep parsing deterministic and network-free in tests.
-    """
+    """Fetch the newest papers in one arXiv category."""
     if max_results < 1:
         raise ValueError("max_results must be at least 1")
-    if sort_by not in {"lastUpdatedDate", "submittedDate"}:
-        raise ValueError("sort_by must be 'lastUpdatedDate' or 'submittedDate'")
-
-    query = urlencode(
-        {
-            "search_query": f"cat:{category}",
-            "start": 0,
-            "max_results": max_results,
-            "sortBy": sort_by,
-            "sortOrder": "descending",
-        }
-    )
-    url = f"{ARXIV_API_URL}?{query}"
-    get = http_get or _get
-    return parse_feed(get(url))
+    return fetch_metadata_page(
+        category, page_size=max_results, sort_by=sort_by, http_get=http_get
+    ).papers
 
 
 def parse_feed(xml: bytes) -> list[Paper]:
@@ -190,19 +164,12 @@ def parse_feed(xml: bytes) -> list[Paper]:
 
 
 def license_class(license_url: str | None) -> str:
-    """Group a licence URL by what it actually permits.
+    """Group a licence URL by what it permits.
 
-    The distinction matters more than presence: arXiv's default
-    non-exclusive-distrib licence grants *arXiv* the right to distribute and
-    grants a third party nothing, so treating "has a licence" as "is reusable"
-    would be wrong. Nor is every Creative Commons licence equivalent:
-
-    - `open` — CC0, CC-BY, CC-BY-SA. Redistribution and derivatives permitted,
-      subject to attribution and, for SA, share-alike.
-    - `noncommercial` — carries -NC. No commercial use.
-    - `no-derivatives` — carries -ND. A trained model is arguably a derivative,
-      so this excludes training regardless of commercial intent.
-    - `arxiv-nonexclusive` — arXiv may distribute it; you may not.
+    - `open`: CC0, CC-BY, CC-BY-SA; redistribution and derivatives allowed.
+    - `noncommercial`: a CC licence with -NC.
+    - `no-derivatives`: a CC licence with -ND, which rules out training.
+    - `arxiv-nonexclusive`: arXiv may distribute the paper; nobody else may.
 
     Only `open` is safe for redistribution or training.
     """
@@ -212,9 +179,7 @@ def license_class(license_url: str | None) -> str:
     if "creativecommons.org/publicdomain" in url or "/zero/" in url:
         return "open"
     if "creativecommons.org/licenses/" in url:
-        # NC and ND are not "open" for the uses this project cares about, and
-        # lumping them in with CC-BY would misreport a third of the licensed
-        # corpus as reusable. The stricter term wins when both are present.
+        # The stricter term wins when both are present.
         if "-nd" in url:
             return "no-derivatives"
         if "-nc" in url:
@@ -228,23 +193,14 @@ def license_class(license_url: str | None) -> str:
 def fetch_license(
     base_arxiv_id: str, *, http_get: Callable[[str], bytes] | None = None
 ) -> str | None:
-    """Look up one paper's licence via arXiv's OAI-PMH interface.
-
-    The query API does not return `<arxiv:license>` at all — measured across 59
-    papers, every one came back without it — so licence has to come from the
-    OAI-PMH record, which does carry it. Takes the base identifier without a
-    version, which is what OAI-PMH is keyed on.
-    """
+    """Look up one paper's licence from its OAI-PMH record, by base identifier."""
     query = urlencode(
         {
             "verb": "GetRecord",
             "identifier": f"oai:arXiv.org:{base_arxiv_id}",
             "metadataPrefix": "arXiv",
         },
-        # Sent as written. The current service answers 406, with an empty
-        # body, to an identifier whose ':' or '/' is percent-encoded - the
-        # answer it gives an identifier that does not exist - so after the
-        # move every encoded lookup failed. Both are legal in a query.
+        # Unencoded: the service answers 406 to a percent-encoded ':' or '/'.
         safe=":/",
     )
     get = http_get or _get

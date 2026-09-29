@@ -1,9 +1,4 @@
-"""Running the ingest stages to a fixpoint.
-
-The interesting cases are the ones that bit in practice: work that appears
-after its own stage has run, work that never completes, and a stage that dies
-without taking the ingest with it.
-"""
+"""Running the ingest stages to a fixpoint."""
 
 import pytest
 
@@ -116,12 +111,7 @@ def test_max_rounds_must_be_at_least_one() -> None:
 
 
 def test_a_stage_that_prints_nothing_is_treated_as_not_having_run() -> None:
-    """Silence is how a no-op stage passed for a successful one.
-
-    `python -m verbatim.cli <stage>` had no __main__ guard, so it imported
-    the module, ran nothing and exited 0. Every stage reported success while
-    the pending counts never moved.
-    """
+    """Silence is how a no-op stage passed for a successful one."""
     import subprocess
     from unittest.mock import patch
 

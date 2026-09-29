@@ -1,10 +1,4 @@
-"""Fetching URLs from a service that fails transiently.
-
-arXiv is slow and intermittently unavailable under load: timing the query API,
-identical requests returned in 2s, 18s, 36s and 61s, and one came back 503. A
-single attempt is therefore not a reasonable way to fetch several thousand
-documents, so both the metadata client and the PDF downloader share this.
-"""
+"""HTTP fetching with retries, shared by the arXiv metadata and PDF clients."""
 
 from __future__ import annotations
 
@@ -27,14 +21,9 @@ def fetch(
     max_bytes: int | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bytes:
-    """Fetch one URL, retrying only the failures that retrying can fix.
+    """Fetch one URL, retrying server errors, timeouts and dropped connections.
 
-    Server errors, timeouts and connection failures are transient and worth
-    another attempt. A 4xx is not: a withdrawn paper returns 404 however many
-    times it is asked for, and retrying only slows the run down.
-
-    `max_bytes` bounds the response so one pathological document cannot
-    exhaust memory during a bulk ingest.
+    A 4xx is raised at once. `max_bytes` bounds the response size.
     """
     attempts = config.HTTP_RETRIES if retries is None else retries
     pause = config.HTTP_BACKOFF if backoff is None else backoff

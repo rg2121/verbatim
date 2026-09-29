@@ -1,9 +1,4 @@
-"""The HTTP front end.
-
-Retrieval itself is tested elsewhere; what matters here is that a result
-carries everything needed to check it, and that the page and the API are
-usable without a network.
-"""
+"""The HTTP front end."""
 
 import json
 from pathlib import Path
@@ -198,12 +193,7 @@ def test_the_page_is_served_and_reaches_no_external_host(tmp_path: Path) -> None
 def test_a_follow_up_is_resolved_before_retrieval_and_never_sent_to_the_answer(
     tmp_path,
 ) -> None:
-    """History may decide what is looked up. It may not decide what is claimed.
-
-    Prose from an earlier turn cannot be verified against any paper, so letting
-    it reach the answering model would let a claim enter without ever having
-    come from one.
-    """
+    """History may decide what is looked up. It may not decide what is claimed."""
     import json
 
     from fastapi.testclient import TestClient
@@ -300,13 +290,7 @@ def test_requests_served_from_different_threads_each_work(tmp_path: Path) -> Non
 
 
 def test_the_page_javascript_parses() -> None:
-    """A broken escape once turned a regex literal into a syntax error, which
-    killed the whole script block and left the page inert - every button dead,
-    with nothing in the server log because the failure was in the browser.
-
-    Checked with node when it is available, and by direct assertion when it is
-    not, so CI catches it either way.
-    """
+    """A syntax error anywhere in the page script would leave every button dead."""
     import re
     import shutil
     import subprocess
@@ -430,11 +414,7 @@ def test_the_review_endpoint_refuses_an_unbounded_request(tmp_path: Path) -> Non
 
 
 def test_an_injected_model_is_never_supplemented_by_a_real_one(tmp_path: Path) -> None:
-    """The suite must not reach Ollama, and the route needs a tool caller.
-
-    Building one behind an injected model's back made the suite take a minute
-    and would have made it need a running Ollama.
-    """
+    """The suite must not reach Ollama, and the route needs a tool caller."""
     with chunked_corpus(
         tmp_path, {"2608.22222v1": ["Superconducting qubits decohere quickly."]}
     ) as store:
@@ -515,12 +495,7 @@ def test_health_reports_the_corpus_and_the_last_run_of_each_command(tmp_path: Pa
 
 
 class LadderScript:
-    """A model that fails one rung and answers on the next.
-
-    `complete` is what the ladder calls; the first call quotes something the
-    passage does not contain, so verification rejects it, no citation survives
-    and the verdict is retry. The second quotes exactly, and is accepted.
-    """
+    """A model that fails one rung and answers on the next."""
 
     def __init__(self, chunk_id: str) -> None:
         self.chunk_id = chunk_id
@@ -561,13 +536,7 @@ def deep_client(tmp_path: Path) -> tuple[TestClient, LadderScript]:
 def test_deep_streams_the_rungs_it_tries_and_the_answer_it_accepts(
     tmp_path: Path,
 ) -> None:
-    """Rungs, not tokens.
-
-    The ladder may write an answer, find that no citation survived, and retry.
-    A draft shown to a reader and then withdrawn is worse than a slower page,
-    so deep mode streams what is being tried and the answer only once a rung
-    is accepted. LadderScript.stream raises if that is ever violated.
-    """
+    """Rungs, not tokens."""
     client_app, model = deep_client(tmp_path)
 
     events = sse_events(
@@ -597,12 +566,7 @@ def test_deep_streams_the_rungs_it_tries_and_the_answer_it_accepts(
 def test_deep_does_not_warn_about_a_subject_it_already_escalated_on(
     tmp_path: Path,
 ) -> None:
-    """Warning after escalating reports a failure that did not happen.
-
-    Plain ask warns because it cannot act. The ladder retried on exactly that
-    signal, so the accepted answer is the best it found and the subject is
-    reported rather than complained about.
-    """
+    """Warning after escalating reports a failure that did not happen."""
     client_app, _ = deep_client(tmp_path)
 
     events = sse_events(
@@ -628,12 +592,7 @@ def test_plain_ask_still_streams_tokens(tmp_path: Path) -> None:
 
 
 def test_search_runs_the_graph_leg_the_other_front_ends_run(tmp_path: Path) -> None:
-    """The page's search skipped the leg the CLI, MCP and ask all default to.
-
-    A definitional question reached it drowned in usage, so the same corpus
-    answered "what is the Adam optimizer" differently depending on where it
-    was asked.
-    """
+    """The page's search runs the same default graph leg as the other front ends."""
     from test_graph import TermEmbedder, graph_corpus
     from verbatim.embedding import embed_pending
 
@@ -650,13 +609,7 @@ def test_search_runs_the_graph_leg_the_other_front_ends_run(tmp_path: Path) -> N
 def test_a_follow_up_is_answered_as_the_question_it_was_resolved_to(
     tmp_path: Path,
 ) -> None:
-    """The writer saw "why does it clip?" while retrieval saw the real question.
-
-    Deep mode already wrote to the resolved question; plain mode handed the
-    model a pronoun it had no way to resolve. The history itself still never
-    reaches the writer - only the standalone question built from it, which the
-    page shows the reader.
-    """
+    """The writer answers the resolved question, as retrieval searched for it."""
     with chunked_corpus(tmp_path, {"2608.11111v1": ["PPO clips its objective ratio."]}):
         pass
 
@@ -682,12 +635,8 @@ def test_a_follow_up_is_answered_as_the_question_it_was_resolved_to(
 
 
 # -- the page's own behaviour ----------------------------------------------
-#
-# The Python suite reaches the API and never the script that renders it, which
-# is how a review's sources read "page undefined" and a reset conversation
-# kept a stale turn without a test noticing. These run the page's real script
-# in node against a small stand-in for the browser: enough DOM to render into,
-# and an EventSource the test drives by hand. Skipped where node is absent.
+# The page's real script runs in node against a small DOM and a hand-driven
+# EventSource. Skipped where node is absent.
 
 PAGE_HARNESS = r"""
 class El {
@@ -760,11 +709,7 @@ def run_page(scenario: str, **data: object) -> dict:
 
 
 def test_a_review_section_cites_in_the_same_shape_as_an_answer(tmp_path: Path) -> None:
-    """One renderer draws both, so both must send what it reads.
-
-    A section sent four fields of its own choosing and the page read the
-    answer's, so every source in a review said "page undefined".
-    """
+    """One renderer draws both, so both must send what it reads."""
     fragments = ["ANSWER: They decohere quickly [1].\n", ""]
     client_app, chunk_id = ask_client(tmp_path / "ask", fragments)
     fragments[1] = f"CITE [1] {chunk_id} :: Superconducting qubits decohere quickly."
@@ -873,11 +818,7 @@ def test_a_listing_answer_is_shown_as_a_list() -> None:
 
 
 def test_deep_mode_refuses_a_scope_it_cannot_honour(tmp_path: Path) -> None:
-    """The CLI refuses --deep with --arxiv-id; the API searched everything.
-
-    Each rung of the ladder sets its own retrieval, so a question scoped to
-    one paper came back from the whole corpus looking scoped.
-    """
+    """Like the CLI, the API refuses deep mode with arxiv_id."""
     client_app, _chunk_id = ask_client(tmp_path, ["ANSWER: unused\n"])
     response = client_app.get(
         "/api/ask", params={"q": "qubits", "deep": "true", "arxiv_id": "2608.11111v1"}

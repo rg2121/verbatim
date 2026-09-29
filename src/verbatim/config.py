@@ -47,20 +47,16 @@ CHUNKS_PATH = _path("VERBATIM_CHUNKS_PATH", "data/chunks.jsonl")
 PAPERS_SNAPSHOT_PATH = _path("VERBATIM_PAPERS_SNAPSHOT_PATH", "data/papers.json")
 # The retrieval answer key. Committed, unlike the corpus it scores.
 EVAL_PATH = _path("VERBATIM_EVAL_PATH", "evals/retrieval.jsonl")
-# Under data/, which is gitignored: TRAINING-POLICY.md makes the generated
-# dataset private by default, since it quotes the papers directly and is
-# more clearly a derivative than trained weights are.
+# Under data/, which git ignores: TRAINING-POLICY.md keeps the dataset private.
 DISTILL_PATH = _path("VERBATIM_DISTILL_PATH", "data/distill/dataset.jsonl")
 
 # Chunking. Changing either forces affected PDFs to be re-chunked, because both
 # are part of the chunker fingerprint.
 CHUNK_SIZE = _integer("VERBATIM_CHUNK_SIZE", 1_200)
 CHUNK_OVERLAP = _integer("VERBATIM_CHUNK_OVERLAP", 200)
-# PDFs held in memory at once. Extraction costs ~11MB per PDF and does not
-# plateau, so the whole corpus in one pass would need tens of gigabytes.
+# PDFs held in memory at once, at about 11 MB each.
 CHUNK_BATCH_SIZE = _integer("VERBATIM_CHUNK_BATCH_SIZE", 100)
-# Layout extraction is C code with no internal limit; one paper here held a
-# core for 46 minutes. A paper that exceeds this is skipped, not waited for.
+# Seconds before layout extraction of one PDF is abandoned and the paper skipped.
 EXTRACTION_TIMEOUT = float(_text("VERBATIM_EXTRACTION_TIMEOUT", "180"))
 
 # Retrieval.
@@ -68,21 +64,16 @@ EMBEDDING_MODEL = _text("VERBATIM_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 SEARCH_LIMIT = _integer("VERBATIM_SEARCH_LIMIT", 10)
 ASK_PASSAGES = _integer("VERBATIM_ASK_PASSAGES", 8)
 ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)
-# Below this, the passages' own subject is far enough from the question to be
-# worth warning about. Chosen conservatively: it flags the clearest mismatches
-# without suppressing anything, because the ranges genuinely overlap.
+# Warn when the passages' subject is less similar to the question than this.
+# A warning only: answerable and unanswerable questions overlap.
 SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))
 
-# Whether a passage is embedded with its paper title and section heading in
-# front of it. Off until measured on this corpus: it adds the context a bare
-# paragraph lacks, and also makes one paper's passages resemble each other.
+# Embed each passage behind its paper title and section heading. Off by
+# default; measured, the difference was inconclusive.
 EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "false", "False", ""}
 
-# How the answering model is asked for structure. "lines" is the flat
-# ANSWER/CITE protocol, which every model tested has followed; "tools" uses
-# Ollama tool calling, which the 4B model ignored on realistic prompts and the
-# 31B one honours. Measured on the 31B model it is no better, so the default
-# stays "lines".
+# How the answering model is asked for structure: "lines" (ANSWER/CITE lines)
+# or "tools" (Ollama tool calling, measured no better).
 ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
 
 # Stage events go to stderr so stdout stays parseable. "json" for a shipper,
@@ -90,25 +81,20 @@ ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
 LOG_FORMAT = _text("VERBATIM_LOG_FORMAT", "text")
 LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 
-# Answer generation goes through Ollama and nothing else. A local model keeps
-# the corpus - 26 GB of other people's papers - on this machine; a model whose
-# name ends `-cloud` sends each prompt's passages to Ollama's servers. Which
-# one runs is the user's visible choice, not a default (docs/architecture.md).
+# Generation goes through Ollama only. A `-cloud` model sends passages to
+# Ollama's servers, so it is used only when named.
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled local model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
 
-# arXiv's API is variable: identical queries have taken 2s and 61s, and it
-# returns 503 under load, so a long ingest needs patience and retries.
+# arXiv's API is slow at times and returns 503 under load, so requests retry.
 HTTP_TIMEOUT = float(_text("VERBATIM_HTTP_TIMEOUT", "90"))
 HTTP_RETRIES = _integer("VERBATIM_HTTP_RETRIES", 4)
 HTTP_BACKOFF = float(_text("VERBATIM_HTTP_BACKOFF", "5"))
-# PDFs are larger than metadata, and one pathological file should not be able
-# to exhaust memory during a bulk ingest.
+# Limits for a single PDF download.
 PDF_TIMEOUT = float(_text("VERBATIM_PDF_TIMEOUT", "120"))
 PDF_MAX_BYTES = _integer("VERBATIM_PDF_MAX_BYTES", 200_000_000)
-# Seconds between PDF requests. Thousands of downloads without a gap is
-# exactly the hammering arXiv asks callers to avoid.
+# Seconds between PDF requests, as arXiv asks.
 DOWNLOAD_DELAY = float(_text("VERBATIM_DOWNLOAD_DELAY", "3"))
 
 # Sync paging. arXiv caps a single request, so a real corpus has to be paged.

@@ -1,23 +1,8 @@
-"""Ground truth for an absence-detector, by planting gaps whose answer is known.
+"""Plant gaps whose answer is known, to measure the gap Falsifier.
 
-A standing gap is only worth anything if the Falsifier would have found the
-paper had it been there. So the experiment is: take a real paper, write a claim
-that *this paper refutes*, and run the Falsifier twice.
-
-  paper visible   the Falsifier must refute the claim. Failing here is the
-                  dangerous error - it would confirm a gap that is not one.
-  paper hidden    the Falsifier cannot reach that paper. If it still refutes,
-                  another paper covers the same ground, which is correct
-                  behaviour and says the "gap" was never one to begin with.
-
-**The headline number is recall with the paper visible.** That is the
-Falsifier's ability to find evidence that demonstrably exists, and it is what
-licenses reading a standing gap as absence rather than as a failed search.
-
-The hidden arm is deliberately *not* scored as accuracy. Hiding one paper does
-not create absence: the corpus holds 7,921 papers and neighbours overlap. A
-refutation from another paper is the system being right, not wrong, so that
-count is reported as what it is - how often a one-paper gap was never a gap.
+Each claim is one a real paper refutes, and the Falsifier runs twice. With the
+paper visible it must refute the claim: recall, the headline number. With the
+paper hidden, a refutation from another paper means the gap was never a gap.
 """
 
 from __future__ import annotations
@@ -81,8 +66,7 @@ def main() -> int:
             """
         ).fetchall()
         rng = random.Random(args.seed)
-        # Over-draw: most candidates are lost to the leak filter, and a run
-        # that quietly returns eight gaps is not the experiment asked for.
+        # Over-draw: most candidates are lost to the leak filter.
         picked = rng.sample(candidates, min(args.papers * 5, len(candidates)))
 
         skipped = 0
@@ -93,10 +77,8 @@ def main() -> int:
             if found is None or not checkable(found.group(1)):
                 skipped += 1
                 continue
-            # The abstract's own phrasing would hand the Falsifier the
-            # paper. Rejected by the threshold the held-out key already uses:
-            # the first run of this measured 100% and 16 of 25 claims had
-            # borrowed a five-or-more-word run from the abstract.
+            # A claim borrowing the abstract's phrasing would hand the Falsifier
+            # the paper, so the held-out key's five-word limit applies.
             borrowed = longest_shared_run(found.group(1), row["summary"])
             if borrowed >= MAX_SHARED_RUN:
                 leaky += 1
@@ -136,8 +118,7 @@ def main() -> int:
         return 1
 
     refuted_visible = [r for r in rows if r["visible_verdict"] == REFUTED]
-    # Found the planted paper itself, rather than something else that happens
-    # to fit - the strictest reading of the same result.
+    # Refuted by the planted paper itself: the strictest reading.
     found_the_paper = [
         r for r in refuted_visible if r["visible_cited"] == r["arxiv_id"]
     ]

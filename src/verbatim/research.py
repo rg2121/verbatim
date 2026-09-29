@@ -1,17 +1,8 @@
-"""Answering a question in parts, when one retrieval cannot reach all of it.
+"""Answering a compound question in parts, behind `ask --plan`.
 
-A single retrieval serves a single-subject question well. It serves a compound
-one badly: "how do MOND and dark matter differ in galaxy clusters" is two
-subjects, and the passages that best match the whole sentence tend to come from
-whichever half the wording leans towards. Splitting the question, retrieving for
-each part, and answering over the union puts both halves in front of the model.
-
-This is a multi-step loop, not a swarm of agents. Each step is a retrieval, and
-the answer is still written once by the existing verified-citation path, so a
-claim still cannot appear unless its quoted words are in the passage it names.
-It is off by default and reported beside the single-step path rather than
-replacing it, because decomposition can also dilute a question that never
-needed splitting: three mediocre retrievals in place of one good one.
+A model splits the question, each part is retrieved separately, and one answer
+is written over the union through the verified-citation path. Off by default:
+splitting can also dilute a question that never needed it.
 """
 
 from __future__ import annotations
@@ -38,12 +29,7 @@ PLAN_SYSTEM = (
 def plan_subquestions(
     complete: Callable[[str, str], str], question: str, *, max_parts: int = 3
 ) -> list[str]:
-    """Break a question into the parts that need answering separately.
-
-    The original question is returned whenever planning fails, is unavailable,
-    or produces nothing usable, so this can only add retrievals, never lose the
-    question that was actually asked.
-    """
+    """Split a question into parts, or return it unchanged if planning fails."""
     if max_parts < 1:
         raise ValueError("max_parts must be at least 1")
     try:
@@ -54,13 +40,7 @@ def plan_subquestions(
 
 
 def parse_plan_lines(reply: str, limit: int) -> list[str]:
-    """Read a plan the model wrote one line at a time, tolerating decoration.
-
-    Models prepend bullets and numbers however often the prompt says not to,
-    so the markers are stripped rather than fought. Shared with the report
-    planner, which asks a different question but reads the same shape of
-    reply.
-    """
+    """Read a one-per-line plan, dropping list markers and repeats; shared with the report planner."""
     lines: list[str] = []
     seen: set[str] = set()
     for line in reply.splitlines():
@@ -81,15 +61,9 @@ def gather_for_parts(
     max_per_paper: int | None = 2,
     **search_options: Any,
 ) -> list[ChunkMatch]:
-    """Retrieve for each part and keep every part's share of the passages.
+    """Retrieve for each part with its own quota, so one part cannot crowd out another.
 
-    A quota per part rather than one fused ranking, because fusion lets the
-    better-matching half of a compound question crowd out the other, which is
-    the failure this exists to avoid.
-
-    `search_options` are hybrid_search's own - scope, filters, the gated legs -
-    and reach every part unchanged, so a question scoped to one paper stays
-    scoped when it is split.
+    `search_options` are passed to hybrid_search for every part.
     """
     collected: list[ChunkMatch] = []
     seen: set[str] = set()
@@ -117,14 +91,10 @@ def research(
     max_per_paper: int | None = 2,
     **search_options: Any,
 ) -> tuple[Answer, list[str], list[ChunkMatch]]:
-    """Answer a question by parts: the answer, the plan, and the passages used.
+    """Answer a question by parts, returning the answer, the plan and the passages.
 
-    The plan is returned rather than hidden, because a reader who disagrees
-    with how a question was split needs to see the split to say so. The
-    passages are returned because every check the single-step path runs over
-    them - the subject warning above all - must run here too, and returning an
-    answer without them would quietly disable the one abstention safeguard
-    that measured any use.
+    The plan is shown to the reader; the passages let the caller run the same
+    checks as the single-step path.
     """
     parts = plan_subquestions(complete_text, question, max_parts=max_parts)
     matches = gather_for_parts(

@@ -227,29 +227,12 @@ def test_index_filters_by_kind_and_paper_without_passing_ids(tmp_path: Path) -> 
         query = WordCountEmbedder().embed_query("flux charge")
 
         everything = index.search(query, limit=10)
-        body_only = index.search(query, limit=10, kind="body")
+        body_only = index.search(query, limit=10, exclude_kind=REFERENCES)
         one_paper = index.search(query, limit=10, arxiv_id="2608.22222v1")
 
     assert len(everything) == 2
     assert len(body_only) == 1
     assert len(one_paper) == 1
-
-
-def test_an_index_built_before_metadata_columns_is_replaced(tmp_path: Path) -> None:
-    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
-        SqliteVecIndex(corpus.connection, 3)  # loads the sqlite-vec extension
-        # Simulate the older schema: no arxiv_id or kind columns.
-        corpus.connection.execute("DROP TABLE vec_chunks")
-        corpus.connection.execute(
-            "CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[3])"
-        )
-        corpus.connection.commit()
-
-        index = SqliteVecIndex(corpus.connection, 3)  # should detect and replace
-        index.rebuild("stub")
-        hits = index.search(WordCountEmbedder().embed_query("flux"), limit=5, kind="body")
-
-    assert len(hits) == 1
 
 
 def test_index_sync_adds_only_what_is_missing(tmp_path: Path) -> None:
@@ -355,14 +338,7 @@ class ConstantEmbedder:
 def test_changing_the_embedding_model_does_not_leave_the_old_vectors_searchable(
     tmp_path: Path,
 ) -> None:
-    """The count check cannot tell one model's vectors from another's.
-
-    `embeddings` is keyed (chunk_id, model_id) so both sets coexist, and the
-    variants this project uses - `bge-small` and `bge-small+context` - have
-    identical widths. Before the index recorded whose vectors it held, the
-    counts matched, no sync ran, and every search answered from the previous
-    model's vectors without raising anything.
-    """
+    """The count check cannot tell one model's vectors from another's."""
     from verbatim.embedding import embed_pending
 
     with chunked_corpus(tmp_path, {"2608.11111v1": ["One."], "2608.22222v1": ["Two."]}) as corpus:
@@ -411,14 +387,7 @@ def test_an_index_that_never_said_which_model_it_holds_is_rebuilt_once(
 def test_a_replaced_source_does_not_silently_drop_out_of_vector_search(
     tmp_path: Path,
 ) -> None:
-    """The count check cannot see ids change underneath it.
-
-    A chunk id is a hash of the paper, its source checksum, the page and the
-    chunker version. Replacing a paper's source therefore gives every one of
-    its passages a new id while leaving the count alone - and the index went
-    on holding the old ids, which resolve to nothing. Measured before the fix:
-    a search returned 0 passages out of 1 embedded, and raised nothing.
-    """
+    """The count check cannot see ids change underneath it."""
     from verbatim.downloads import DownloadedPaper, file_sha256
     from verbatim.embedding import embed_pending
     from verbatim.retrieval import vector_search
@@ -453,11 +422,7 @@ def test_a_replaced_source_does_not_silently_drop_out_of_vector_search(
 
 
 def test_reopening_an_index_at_a_different_width_rebuilds_it(tmp_path: Path) -> None:
-    """A vec0 table declares its dimension, and CREATE IF NOT EXISTS keeps it.
-
-    Opening a 3-wide index at 5 used to succeed and then fail deep inside an
-    insert with a dimension mismatch the caller could do nothing about.
-    """
+    """A vec0 table declares its dimension, and CREATE IF NOT EXISTS keeps it."""
     with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
         SqliteVecIndex(corpus.connection, 3).rebuild("stub", corpus.chunk_generation())
 
@@ -474,11 +439,7 @@ def test_reopening_an_index_at_a_different_width_rebuilds_it(tmp_path: Path) -> 
 def test_an_index_run_leaves_nothing_for_the_next_search_to_reconcile(
     tmp_path: Path,
 ) -> None:
-    """Indexing records what it built from, so a search after it does no work.
-
-    Without the generation, state says 0, and the next search sees a mismatch
-    and reconciles work that had just been done - correct, but wasted.
-    """
+    """Indexing records what it built from, so a search after it does no work."""
     with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
         generation = corpus.chunk_generation()
         index = SqliteVecIndex(corpus.connection, 3)
@@ -500,13 +461,7 @@ def test_an_index_run_leaves_nothing_for_the_next_search_to_reconcile(
 
 
 def test_a_table_is_searched_and_a_bibliography_is_not(tmp_path: Path) -> None:
-    """The filter exists to keep bibliographies out, and it kept tables out too.
-
-    It was written as "body only" when body and bibliography were the only
-    kinds. Tables arrived three weeks later as a third kind, so every table
-    in the corpus - 64,742 of them - was stored, embedded and never returned
-    by search, ask, the page or MCP.
-    """
+    """The filter exists to keep bibliographies out, and it kept tables out too."""
     from verbatim.chunking import REFERENCES, TABLE
     from verbatim.retrieval import hybrid_search
 

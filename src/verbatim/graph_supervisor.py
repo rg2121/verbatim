@@ -1,24 +1,9 @@
-"""The same ladder, expressed as a LangGraph state machine.
+"""The orchestrator's retry ladder as a LangGraph state machine.
 
-A second supervisor, not a replacement. The roles this project already
-defines as Protocols - retriever, writer, verifier - become nodes here, and
-the escalation that `work_section` writes as a `for` loop becomes a
-conditional edge back to the retriever. Everything inside the nodes is the
-same code the built-in supervisor calls: the same `retrieve`, the same
-verified-answer path, the same deterministic `verdict_for`, the same
-`choose_best`. Only the control flow differs.
-
-That is the whole point of it. Two implementations behind one set of
-contracts is the only thing that shows the contracts are a real boundary
-rather than decoration, and running both over the same held-out questions
-says whether the boundary holds. If the two disagree, the abstraction leaks
-somewhere and the ledger will say where.
-
-LangGraph is an optional dependency (`uv sync --extra langgraph`). The
-default install stays at seven direct dependencies, because a local-first
-project should not oblige anyone to pull a framework tree to answer a
-question. Importing this module without it raises with that instruction
-rather than an opaque ImportError.
+A second supervisor over the same roles: the nodes call the same retrieve,
+write, verdict and selection code as the built-in loop; only the control flow
+differs, so the two can be compared. LangGraph is an optional extra
+(`uv sync --extra langgraph`).
 """
 
 from __future__ import annotations
@@ -28,12 +13,8 @@ import sqlite3
 from typing import Any, TypedDict
 
 from verbatim import config
-from verbatim.answers import (
-    Answer,
-    Completion,
-    subject_check,
-)
 from verbatim.agent import ToolCaller
+from verbatim.answers import Answer, Completion, subject_check
 from verbatim.contracts import BudgetGuard
 from verbatim.corpus import CorpusStore
 from verbatim.critique import critique as run_critique
@@ -62,12 +43,7 @@ MISSING = (
 
 
 class LadderState(TypedDict, total=False):
-    """What flows between nodes.
-
-    Deliberately only data. The corpus, the models and the tool caller are
-    closed over when the graph is built: a SQLite connection is not state, and
-    putting one here would be the first thing to break under a checkpointer.
-    """
+    """What flows between nodes: data only. Connections and models are closed over."""
 
     heading: str
     shape: str
@@ -78,8 +54,7 @@ class LadderState(TypedDict, total=False):
     subject: str | None
     closeness: float | None
     error: str
-    # Set when the budget refuses a rung: the built-in loop stops there
-    # rather than trying every remaining rung only to be refused again.
+    # Set when the budget refuses a rung, so the remaining rungs are skipped.
     stopped: bool
     spent_before: Any
     candidates: list[tuple[Attempt, ReportSection]]
@@ -100,12 +75,7 @@ def build_graph(
     complete_text: Callable[[str, str], str] | None = None,
     critic: bool = False,
 ) -> Any:
-    """Compile the ladder into a graph: route, retrieve, write, verify, repeat.
-
-    Takes every option `work_section` takes. orchestrate passes the critic's
-    two to whichever supervisor it runs, and when this accepted fewer,
-    `report --agents --supervisor langgraph` failed before its first section.
-    """
+    """Compile the ladder into a graph: route, retrieve, write, verify, repeat."""
     try:
         from langgraph.graph import END, START, StateGraph
     except ImportError as error:  # pragma: no cover - exercised by its own test
@@ -192,16 +162,13 @@ def build_graph(
                 if critic else None
             )
         except (RuntimeError, OSError, sqlite3.Error) as failure:
-            # The checks call the model too. The built-in loop contains a
-            # failure here as a failed rung; this node raised, and one section
-            # losing its model took the whole review down with it.
+            # The checks call the model too; a failure here is a failed rung.
             return failed(state["heading"], strategy, candidates, str(failure)[:200])
         verdict = verdict_for(
             answer, closeness, warn_below,
             listed=answered_from_records(state["gathered"], state["shape"]),
         )
-        # A critique escalates only where a different retrieval could help,
-        # exactly as in the built-in supervisor.
+        # As in the built-in supervisor, only uncovered subjects force a retry.
         accepted = verdict.accepted and not (found.unaddressed if found else ())
         spent = meters.since(state.get("spent_before"))
         evidence = describe_evidence(
@@ -230,13 +197,7 @@ def build_graph(
                 "answer": None}
 
     def next_step(state: LadderState) -> str:
-        """The `for` loop's condition, as an edge.
-
-        Accept on a verified, on-subject answer; otherwise climb, unless the
-        ladder has run out. A rung that errored is not accepted, so a dead
-        model server escalates to the next strategy exactly as it does in the
-        built-in supervisor.
-        """
+        """Stop on an accepted answer, a budget stop or the last rung; otherwise climb."""
         last, _section = state["candidates"][-1]
         if last.verdict == ACCEPTED or state.get("stopped"):
             return "done"
@@ -270,17 +231,11 @@ def work_section_with_graph(
     ladder: tuple[str, ...] | None = None,
     **options: Any,
 ) -> tuple[ReportSection, SectionLedger]:
-    """Climb the ladder through the graph, returning what `work_section` does.
-
-    Same signature and same return type as the built-in supervisor, so callers
-    and measurements cannot tell which one ran except by asking.
-    """
+    """Climb the ladder through the graph; same signature and result as `work_section`."""
     compiled = build_graph(corpus, embedder, completion, **options)
     state: LadderState = {"heading": heading}
     if ladder is not None:
         state["ladder"] = ladder
-    # The recursion limit has to clear one pass per rung: route, then four
-    # nodes per attempt. LangGraph counts supersteps, not nodes, so this is
-    # generous rather than exact - an exhausted ladder ends on its own.
+    # Generous: LangGraph counts supersteps, and an exhausted ladder ends on its own.
     final = compiled.invoke(state, {"recursion_limit": 64})
     return choose_best(final["candidates"], heading, final["shape"])

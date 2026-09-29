@@ -197,11 +197,7 @@ def test_only_the_current_version_of_a_paper_is_embedded(tmp_path: Path) -> None
 
 
 def test_context_is_part_of_the_model_identity(tmp_path: Path) -> None:
-    """Vectors made with and without context are not interchangeable.
-
-    pending_embeddings keys on the model id, so a shared id would let a
-    flipped flag leave the corpus holding a silent mixture of the two.
-    """
+    """Vectors made with and without context are not interchangeable."""
     from verbatim.embedding import FastEmbedEmbedder
 
     plain = FastEmbedEmbedder(model_name="BAAI/bge-small-en-v1.5")
@@ -259,11 +255,7 @@ def test_context_embedding_uses_the_paper_title_from_the_corpus(tmp_path: Path) 
 
 
 def test_a_chunk_from_an_older_chunker_can_be_left_unembedded(tmp_path: Path) -> None:
-    """Its paper will be re-chunked and the vector discarded with the chunk.
-
-    Mid-migration on the real corpus this was 490,620 of 729,347 chunks, which
-    is around eleven hours of embedding guaranteed to be thrown away.
-    """
+    """Its paper will be re-chunked and the vector discarded with the chunk."""
     from verbatim.embedding import embed_pending
 
     with chunked_corpus(tmp_path, ["alpha", "beta"]) as corpus:

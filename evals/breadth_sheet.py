@@ -1,21 +1,10 @@
 """Build the blind scoring sheet for the breadth evaluation.
 
-For every question the three answers appear as A, B and C, in an order
-shuffled by a secret random seed. Which arm wrote which letter goes to a
-mapping file kept outside the repository, and a blind manifest holding its
-SHA-256 (and the answers') is written for committing BEFORE any scoring.
-evals/breadth_score.py refuses to unblind unless the scores were committed
-after that manifest and the mapping still matches its hash.
-
-The first version shuffled with a seed written here, so anyone holding the
-repository could rebuild the mapping; the manifest records that amendment.
-
-Declined answers are shown in one neutral wording. Each arm declines in its
-own words - the team's sentence is unmistakable - so showing them as written
-would unblind the sheet on exactly the answers where it matters most.
-
-The sheet is a single local HTML file with no network dependencies. Scores
-save in the browser as you go, and a button downloads them as labels.json.
+Each question's three answers appear as A, B and C, shuffled with a secret
+seed. The mapping is kept outside the repository, and a manifest of its hash
+(and the answers') is written for committing before any scoring. Declined
+answers share one neutral wording, since each arm's own would reveal it.
+Scores save in the browser and download as labels.json.
 """
 
 from __future__ import annotations
@@ -159,12 +148,7 @@ def main() -> int:
 
 
 def render_page(items: list[dict], storage_key: str = "breadth-labels") -> str:
-    """The sheet, with the answers embedded as data.
-
-    Answer text comes from a model and is untrusted: a closing script tag inside
-    one would end the script block and run whatever followed it. Escaping every
-    "</" keeps the embedded JSON inert.
-    """
+    """The sheet with the answers embedded; "</" is escaped so model text cannot end the script."""
     data = json.dumps(items).replace("</", "<\\/")
     return TEMPLATE.replace("__DATA__", data).replace("__KEY__", json.dumps(storage_key))
 

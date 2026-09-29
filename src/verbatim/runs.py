@@ -1,20 +1,8 @@
-"""What each command actually did, kept where the corpus is kept.
+"""The run ledger: one row per command invocation, stored in the corpus.
 
-This project measures retrieval carefully and recorded nothing at all about
-its own executions. An ingest that runs unattended every night could fail, or
-half-finish, or embed with a different model than yesterday, and the only
-evidence was whatever scrolled past in a terminal. `stats` says what the
-corpus holds now; nothing said how it got there.
-
-One row per command invocation: when it started and finished, whether it
-succeeded, what it was asked to do, what it produced, which models it used,
-what the corpus looked like before and after, and what the generation cost.
-Failures are recorded too - a run that stopped is the one worth finding
-later, and a ledger that only holds successes is a ledger of the wrong half.
-
-Recording is best-effort by construction. A command's job is the corpus, not
-the bookkeeping, so a bookkeeping error is swallowed rather than allowed to
-fail work that otherwise succeeded.
+Each row records when the command ran, whether it succeeded, its inputs and
+outputs, and the corpus counts before and after. Recording is best-effort: a
+ledger error never fails the command itself.
 """
 
 from __future__ import annotations
@@ -46,8 +34,7 @@ CREATE TABLE IF NOT EXISTS {RUNS_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS runs_by_command ON {RUNS_TABLE} (command, started_at DESC);
 """
-# The counts that make one run comparable with the next. Cheap to take: they
-# are four COUNT(*)s against tables that are indexed anyway.
+# Cheap counts that make one run comparable with the next.
 SNAPSHOT = {
     "papers": "SELECT COUNT(*) FROM papers",
     "chunks": "SELECT COUNT(*) FROM chunks",
@@ -83,9 +70,7 @@ def _snapshot(connection: sqlite3.Connection) -> dict[str, int]:
 def record_run(corpus: Any, command: str, **inputs: Any):
     """Record one command invocation, whether or not it succeeds.
 
-    Yields a Run the caller adds outputs to. An exception is recorded with its
-    message and then re-raised: the ledger must not swallow a failure it exists
-    to remember.
+    Yields a Run the caller adds outputs to. A failure is recorded, then re-raised.
     """
     connection = corpus.connection
     run = Run(run_id=uuid4().hex[:12], command=command)
@@ -102,10 +87,7 @@ def record_run(corpus: Any, command: str, **inputs: Any):
                  json.dumps(_plain(inputs)), json.dumps(before)),
             )
     except Exception:  # noqa: BLE001 - deliberately total; see below
-        # Not sqlite3.Error alone: whatever goes wrong writing a row, the
-        # command's job is the corpus and the ledger is a convenience. A
-        # bookkeeping failure that escaped here would fail work that had
-        # otherwise succeeded, which is the opposite of what this is for.
+        # Any ledger error is swallowed: the command's work matters more.
         pass
 
     event("run.start", command=command, run_id=run.run_id, **_plain(inputs))
@@ -118,8 +100,7 @@ def record_run(corpus: Any, command: str, **inputs: Any):
     finally:
         finished = datetime.now(UTC)
         seconds = round((finished - started).total_seconds(), 3)
-        # The stream and the ledger are written from one place, so they cannot
-        # disagree about what happened.
+        # Logged and recorded from one place, so the two always agree.
         event(
             "run.failed" if error else "run.finish",
             level=40 if error else 20,

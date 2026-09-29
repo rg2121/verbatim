@@ -1,33 +1,20 @@
-"""Reading a paper from arXiv's HTML rather than its PDF.
+"""Reading a paper from arXiv's HTML rendering rather than its PDF.
 
-arXiv renders every TeX submission to HTML, and that rendering is made from the
-author's source rather than from a printed page. Measured on this corpus, 96%
-of papers have one. It is better input than a PDF in three ways:
-
-- **Maths survives.** Every <math> element carries the original LaTeX in its
-  `alttext`, so an equation stays an equation instead of becoming the character
-  soup a PDF extractor produces.
-- **Structure is real.** Headings come from the author's sectioning commands,
-  not from guessing at font sizes.
-- **No extraction damage.** None of the ligatures, lone surrogates or
-  reading-order problems that PDF text carries.
-
-What it loses is page numbers: HTML has none, so an HTML-sourced passage is
-located by section instead. `Chunk.page_number` therefore means "page" for a
-PDF and "section ordinal" for HTML, which is why chunks record which they came
-from.
+The rendering comes from the author's TeX: maths keeps its LaTeX (from each
+<math> element's alttext), headings are the author's own, and there is no PDF
+extraction damage. HTML has no pages, so `page_number` holds a section ordinal
+and `source_kind` says which applies.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 from collections.abc import Callable
-from html.parser import HTMLParser
-from urllib.error import HTTPError
-import re
-
+from dataclasses import asdict, dataclass
 from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
+import re
+from urllib.error import HTTPError
 
 from verbatim.chunking import (
     TABLE,
@@ -102,9 +89,7 @@ class ArxivHTMLParser(HTMLParser):
     # -- structure -------------------------------------------------------
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if self._skip_tag is not None:
-            # Nothing inside a skipped region is read, not even its maths. A
-            # nested element of the same name is counted so that its end tag
-            # does not close the region early.
+            # Skip everything inside, counting nested tags of the same name.
             if tag == self._skip_tag and tag not in VOID_ELEMENTS:
                 self._skip_nesting += 1
             return
@@ -130,8 +115,7 @@ class ArxivHTMLParser(HTMLParser):
                     _span(attributes.get("rowspan")), _span(attributes.get("colspan"))
                 )
         if tag == "math":
-            # Take the LaTeX and ignore the rendered glyphs inside, which would
-            # otherwise arrive as unreadable fragments of the same equation.
+            # Keep the LaTeX; the rendered glyphs inside would arrive as fragments.
             latex = (attributes.get("alttext") or "").strip()
             if latex:
                 self._emit(f"${latex}$")
@@ -194,23 +178,19 @@ class ArxivHTMLParser(HTMLParser):
         if self._heading is not None:
             self._heading.append(text)
         elif self._cell is not None:
-            # Text inside a table cell belongs to that cell, including the
-            # LaTeX of any maths in it.
+            # Text in a cell, including its maths, belongs to that cell.
             self._cell.append(text)
         elif self._table is not None:
-            # Between cells - alignment padding and stray whitespace. Dropping
-            # it keeps the serialised table to its actual contents.
+            # Whitespace between cells is dropped.
             return
         elif self._skip_tag is None:
             self._body.append(text)
 
     def _assemble_row(self, cells: list[tuple[list[str], int, int]]) -> list[str]:
-        """Place a row's cells in their real columns, honouring spans.
+        """Place a row's cells in their real columns, honouring rowspan and colspan.
 
-        Nineteen per cent of the tables in this corpus use rowspan and 29% use
-        colspan. Ignoring them does not merely lose formatting: the cells after
-        a span shift left, so a continuation line lands in the first column and
-        the table states something the paper does not.
+        Ignoring spans shifts later cells left, so the table would state
+        something the paper does not.
         """
         row: list[str] = []
         queue = list(cells)
@@ -262,9 +242,7 @@ class ArxivHTMLParser(HTMLParser):
         self._offset += len(text) + 1
 
     def _flush(self) -> None:
-        # Cells are normalised as they are read, so a completed table is not
-        # passed through normalisation again: that would collapse the newlines
-        # its rows are made of.
+        # Tables are normalised per cell; normalising again would collapse their rows.
         text = tidy_spacing(normalize_page_text(" ".join(self._body)))
         self._body = []
         if not text:
@@ -294,11 +272,7 @@ def _span(value: str | None) -> int:
 def render_table(rows: list[list[str]]) -> str:
     """Serialise a table as a Markdown pipe table.
 
-    The rows are what a PDF extractor destroys: flattened, "Person Corp Time
-    Position Musk SpaceX 2002 CEO" gives a reader no way to see that Musk,
-    SpaceX, 2002 and CEO are one row. Pipes are used because a model reads them
-    as a table without being told, and because they survive being quoted back
-    for citation verification.
+    Pipes keep rows readable to a model and survive being quoted for verification.
     """
     filled = [row for row in rows if any(cell.strip() for cell in row)]
     if not filled:
@@ -315,13 +289,7 @@ def render_table(rows: list[list[str]]) -> str:
 
 
 def tidy_spacing(text: str) -> str:
-    """Close up the spaces left by joining inline elements, sparing maths.
-
-    Every inline element is joined with a space, so a citation the paper prints
-    as "[6]." arrives as "[ 6 ] .". Maths spans are copied through untouched:
-    the LaTeX is the reason for reading HTML at all, and it is not ours to
-    reformat.
-    """
+    """Close up spaces left by joining inline elements ("[ 6 ] ." to "[6]."), sparing maths."""
     pieces: list[str] = []
     end = 0
     for span in MATHS_SPAN.finditer(text):
@@ -346,11 +314,7 @@ def parse_html_sections(html: str) -> list[Section]:
 
 @dataclass(frozen=True)
 class HtmlSource:
-    """An auditable record of one paper's HTML rendering, held locally.
-
-    Mirrors DownloadedPaper: a chunk may only claim to come from bytes we have
-    and can re-verify, whichever form those bytes take.
-    """
+    """A locally held HTML rendering, recorded with its checksum like a downloaded PDF."""
 
     arxiv_id: str
     url: str
@@ -362,20 +326,13 @@ class HtmlSource:
         return asdict(self)
 
 
-# arXiv's LaTeXML conversion sometimes fails partway and the partial result is
-# published anyway. Measured over 170 papers, the text of a healthy rendering
-# runs from 0.66 to 4.55 times its PDF's (median 1.09 - LaTeX markup adds
-# characters), while a truncated one measured 0.08. Nothing legitimate came
-# near the threshold from either side.
+# arXiv sometimes publishes a partial rendering. Healthy ones measured 0.66 to
+# 4.55 times their PDF's text length; a truncated one measured 0.08.
 MIN_COMPLETENESS = 0.5
 
 
 def completeness(html_text_length: int, pdf_text_length: int) -> float:
-    """How much of the PDF's text the rendering accounts for.
-
-    A rendering covering almost none of its paper is worse than the PDF it
-    would replace, so this decides whether it is used at all.
-    """
+    """How much of the PDF's text the rendering accounts for, by length."""
     if pdf_text_length <= 0:
         return 1.0  # nothing to compare against; trust the rendering
     return html_text_length / pdf_text_length
@@ -386,12 +343,7 @@ def html_url_for(arxiv_id: str) -> str:
 
 
 def fetch_html(arxiv_id: str, *, get: Callable[[str], bytes] | None = None) -> bytes | None:
-    """Fetch one paper's HTML, or None when arXiv has no rendering for it.
-
-    A missing rendering is normal - a PDF-only submission has no TeX source to
-    convert - so it is reported rather than raised, and the caller falls back
-    to the PDF.
-    """
+    """Fetch one paper's HTML, or None when arXiv has no rendering (a 404)."""
     fetcher = get or fetch
     try:
         return fetcher(html_url_for(arxiv_id))
@@ -408,14 +360,9 @@ def extract_html_chunks(
     overlap: int = 200,
     read_html: Callable[[Path], str] | None = None,
 ) -> list[Chunk]:
-    """Chunk papers from their HTML rendering, verifying the bytes first.
+    """Chunk papers from their HTML rendering.
 
-    Same discipline as the PDF path: the file on disk is re-hashed before any
-    text is emitted, so a passage can never claim to come from bytes that have
-    since changed.
-
-    Sections are numbered in place of pages. `page_number` therefore holds a
-    section ordinal here, and `source_kind` records which meaning applies.
+    Each file is re-hashed first, so a passage never claims bytes that have changed.
     """
     reader = read_html or _read_text
     fingerprint = chunker_fingerprint(chunk_size, overlap)
@@ -462,7 +409,6 @@ def _read_text(path: Path) -> str:
 
 
 def _html_chunk_id(source: HtmlSource, ordinal: int, index: int, fingerprint: str) -> str:
-    # "html" is part of the identity so an HTML chunk can never collide with the
-    # PDF chunk of the same paper, section and position.
+    # "html" in the identity keeps HTML and PDF chunk ids apart.
     identifier = f"html:{source.arxiv_id}:{source.sha256}:{ordinal}:{index}:{fingerprint}"
     return sha256(identifier.encode("utf-8")).hexdigest()[:20]

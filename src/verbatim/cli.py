@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import argparse
-import sqlite3
+from collections.abc import Callable
+import hashlib
+import json
 from pathlib import Path
+import sqlite3
 import time
 
+from verbatim import config
 from verbatim.agent import answer_question
 from verbatim.answers import (
-    subject_check,
     OllamaCompletion,
     OllamaToolCaller,
     answer_from_matches,
+    subject_check,
 )
 from verbatim.arxiv import (
     MAX_IDS_PER_REQUEST,
@@ -23,33 +25,16 @@ from verbatim.arxiv import (
     fetch_papers_by_id,
     license_class,
 )
-from verbatim.sync import format_sync_report, sync_category
-from verbatim.citations import render_bibliography, render_locator
 from verbatim.chunking import (
     chunker_fingerprint,
     extract_pdf_chunks,
     extract_plain_pages_from_pdf,
     normalize_page_text,
 )
+from verbatim.citations import render_bibliography, render_locator
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
-from verbatim import config
-import hashlib
-
-from verbatim.embedding import (
-    FastEmbedEmbedder,
-    embed_pending,
-    embed_pending_papers,
-)
-from verbatim.html_source import (
-    MIN_COMPLETENESS,
-    completeness,
-    HtmlSource,
-    extract_html_chunks,
-    fetch_html,
-    html_url_for,
-    parse_html_sections,
-)
-from verbatim.evidence import describe_evidence
+from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
+from verbatim.embedding import FastEmbedEmbedder, embed_pending, embed_pending_papers
 from verbatim.evaluation import (
     describe_case_mix,
     evaluate,
@@ -57,16 +42,24 @@ from verbatim.evaluation import (
     render_compound_report,
     render_report,
 )
+from verbatim.evidence import describe_evidence
+from verbatim.html_source import (
+    MIN_COMPLETENESS,
+    HtmlSource,
+    completeness,
+    extract_html_chunks,
+    fetch_html,
+    html_url_for,
+    parse_html_sections,
+)
+from verbatim.logs import configure_logging
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
-from verbatim.logs import configure_logging
+from verbatim.reranking import CrossEncoderReranker, rerank
+from verbatim.research import research
+from verbatim.retrieval import hybrid_search, vector_search
 from verbatim.runs import record_run, recent_runs, render_runs
 from verbatim.sampling import export_sample
-from verbatim.research import research
-from verbatim.reranking import CrossEncoderReranker, rerank
-from verbatim.retrieval import hybrid_search, vector_search
-from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
-from verbatim.downloads import DownloadedPaper, DownloadReport, download_papers
 from verbatim.storage import (
     load_download_manifest,
     load_papers,
@@ -74,6 +67,8 @@ from verbatim.storage import (
     save_download_manifest,
     save_papers,
 )
+from verbatim.sync import format_sync_report, sync_category
+from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
 
 
 def main() -> None:
@@ -88,34 +83,16 @@ def main() -> None:
 
 
 AUTHORED_HEADER = """\
-# Held-out evaluation cases, generated from each paper's TITLE AND ABSTRACT
-# ONLY by `verbatim author-cases`. No retrieval was run against any
-# question before this file was committed - the authoring module imports
-# nothing that can search, and a test asserts it never will.
-#
-# Papers were chosen before any question existed: current papers with 25-90
-# body passages, excluding every paper named in retrieval.jsonl, heldout.jsonl
-# and gate.jsonl, grouped by primary category and taken at a fixed stride, so
-# no category can fill the set by being large.
-#
-# A model reaches for the abstract's own words where a person paraphrases, and
-# abstracts are passages in this corpus, so a question sharing a distinctive
-# span with one would be found by keyword search for that reason alone. The
-# 88 hand-authored cases in heldout.jsonl share a median run of 2 words with
-# their paper's abstract and at most 6; only 4 share 5 or more. Cases sharing
-# 5 or more are rejected here, so this set is no leakier than that one.
-#
-# Every case is `shape=plain` with one expected paper. There are no
-# unanswerable cases: deciding that a subject is uncovered requires inspecting
-# the corpus, which is what authoring blind forbids. Those live in
-# heldout.jsonl, written by hand.
+# Held-out cases written by `verbatim author-cases` from each paper's title and
+# abstract only; no retrieval ran against any question before this file was
+# committed. Papers: current, 25-90 body passages, none named by another key,
+# taken at a fixed stride per primary category. Questions sharing a 5-word run
+# with their abstract were rejected. There are no unanswerable cases: those need
+# the corpus inspected, which blind authoring forbids.
 """
 
 
-# Every committed key. A paper one of them names has been scored already, so
-# `author-cases` may not write a new question about it. Named once, and tested
-# against what is on disk, because a key added without joining this list let
-# its papers be drawn again.
+# Every committed key; `author-cases` never writes about a paper these name.
 SCORED_KEYS = (
     Path("evals/retrieval.jsonl"),
     Path("evals/heldout.jsonl"),
@@ -126,57 +103,31 @@ SCORED_KEYS = (
 )
 
 
-# Shared by `search` and `ask`, which both offer these legs. The numbers the
-# help once quoted came from the development key, which a held-out key later
-# showed could not separate the modes; the gates are justified by the question
-# shape each one targets, and that is what the help now says.
+# Help text shared by `search` and `ask`.
 NO_GRAPH_HELP = (
-    "Skip the citation-graph leg on definitional questions. On by default: "
-    "it fires only on definition-shaped questions, where \"what is the Adam "
-    "optimizer\" goes from unfound to rank 3, and leaves every other question's "
-    "ranking untouched"
+    "Skip the citation-graph leg. On by default; it only fires on "
+    "definition-shaped questions such as \"what is the Adam optimizer\""
 )
 USE_COMPARE_HELP = (
-    "On comparison-shaped questions only, also retrieve from papers whose "
-    "titles match. Off by default: it lifts full coverage of multi-paper "
-    "questions, but its cost on single-paper comparison questions is still "
-    "unmeasured - it fires on 6 of 488 held-out cases"
+    "On comparison-shaped questions, also retrieve from papers whose titles "
+    "match. Off by default: its effect on single-paper questions is unmeasured"
 )
 
 
 CONVERSATION_HEADER = """\
-# Two-turn evaluation cases, written from each paper's TITLE AND ABSTRACT ONLY
-# by `verbatim author-cases --conversational`. No retrieval was run against
-# any question before this file was committed; the authoring module imports
-# nothing that can search, and a test asserts it never will.
-#
-# Each row is an opening question that stands on its own and a follow-up that
-# does not: it points back with "it" or "that approach" and never names the
-# subject again. Both turns are answered by the same paper, so retrieval for
-# the follow-up is scored exactly as retrieval for the opening - which is the
-# comparison every other key here cannot make.
-#
-# Rejected before they were kept: openings that do not name their subject or
-# ask about the paper's cover, follow-ups that stand on their own, and
-# exchanges sharing a run of five or more words with the abstract.
+# Two-turn cases written by `verbatim author-cases --conversational` from each
+# paper's title and abstract only; no retrieval ran against them before this
+# file was committed. Each row is an opening question and a follow-up that
+# refers back without naming the subject; the same paper answers both.
 #
 # NOT YET SCORED. Commit this file before running any arm against it.
 """
 
 
 BREADTH_HEADER = """\
-# Breadth evaluation questions, written under evals/breadth/PROTOCOL.md, which
-# was committed before this file existed and before any arm ran.
-#
-# Each question was written by a model from the titles and abstracts of TWO
-# papers joined by an in-corpus citation edge, and names both as
-# require_papers. No retrieval was run against any question before this file
-# was committed; the authoring module imports nothing that can search.
-#
-# Rejected before they were kept: questions sharing a run of five or more
-# words with either abstract, questions that do not name their subject, and
-# questions about authors or funding. Kinds - comparison, limitation,
-# synthesis - in equal numbers.
+# Breadth questions written under evals/breadth/PROTOCOL.md, each from the
+# titles and abstracts of two papers joined by a citation, named as
+# require_papers. No retrieval ran against them before this file was committed.
 #
 # NOT YET RUN. Commit this file before running any arm against it.
 """
@@ -236,7 +187,7 @@ def run() -> None:
     eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     eval_parser.add_argument(
         "--rerank", action="store_true",
-        help="Re-score with a cross-encoder. Measured worse on all three models tried",
+        help="Re-score with a cross-encoder (measured worse than without)",
     )
     eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
@@ -258,8 +209,7 @@ def run() -> None:
     )
     eval_parser.add_argument(
         "--min-mrr", type=float,
-        help="Exit non-zero if --gate-mode scores below this. For CI: a "
-             "measurement nothing enforces is a claim, not a guarantee",
+        help="Exit non-zero if --gate-mode scores below this (used by CI)",
     )
     eval_parser.add_argument(
         "--gate-mode", default="hybrid+graph",
@@ -283,22 +233,19 @@ def run() -> None:
     )
     answers_parser.add_argument(
         "--sample", type=int,
-        help="Draw this many questions evenly across authoring batches, rather "
-             "than taking the first --limit in file order. The batches differ "
-             "in size and difficulty, so file order decides the result",
+        help="Draw this many questions evenly across authoring batches instead "
+             "of the first --limit",
     )
     answers_parser.add_argument("--seed", type=int, default=0)
     answers_parser.add_argument(
         "--runs", type=int, default=1,
-        help="Repeat the whole sample; generation is not deterministic and one "
-             "run cannot show its own spread",
+        help="Repeat the sample this many times, to show run-to-run spread",
     )
     answers_parser.add_argument("--passages", type=int, default=config.ASK_PASSAGES)
     answers_parser.add_argument(
         "--judge", action="store_true",
-        help="Also ask a model whether each cited quote supports its claim, "
-             "scored against mismatched control pairs so the judge itself is "
-             "measured rather than believed",
+        help="Also ask a model whether each quote supports its claim, scored "
+             "against mismatched control pairs",
     )
 
     distill_parser = subparsers.add_parser(
@@ -343,9 +290,8 @@ def run() -> None:
     )
     author_parser.add_argument(
         "--conversational", action="store_true",
-        help="Write two-turn cases - an opening question and a follow-up that "
-             "only makes sense after it - for measuring how retrieval handles "
-             "a conversation",
+        help="Write two-turn cases (a question and a follow-up) for evaluating "
+             "conversations",
     )
     author_parser.add_argument("--llm", help="Generation model")
     author_parser.add_argument(
@@ -432,8 +378,7 @@ def run() -> None:
     runs_parser.add_argument("--limit", type=int, default=20)
     runs_parser.add_argument(
         "--json", action="store_true",
-        help="Emit the ledger as JSON, for a daily driver to check rather than "
-             "a person to read",
+        help="Emit the ledger as JSON",
     )
 
     graph_parser = subparsers.add_parser(
@@ -519,8 +464,7 @@ def run() -> None:
     embed_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
     embed_parser.add_argument(
         "--only-current", action="store_true",
-        help="Skip passages an older chunker produced, which a later chunk "
-             "run will replace and whose vectors would be discarded with them",
+        help="Skip passages from an older chunker, which the next chunk run replaces",
     )
     embed_parser.add_argument("--batch-size", type=int, default=64)
     embed_parser.add_argument("--limit", type=int, help="Embed at most this many chunks this run")
@@ -532,13 +476,12 @@ def run() -> None:
     search_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     search_parser.add_argument(
         "--rerank", action="store_true",
-        help="Re-score with a cross-encoder. Measured worse on all three models tried",
+        help="Re-score with a cross-encoder (measured worse than without)",
     )
     search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
     search_parser.add_argument(
         "--use-titles", action="store_true",
-        help="Also retrieve from papers whose title matches. Measured worse "
-             "overall on both answer keys, but finds definitional papers",
+        help="Also retrieve from papers whose title matches (measured worse overall)",
     )
     search_parser.add_argument(
         "--no-graph", dest="use_graph", action="store_false",
@@ -566,8 +509,7 @@ def run() -> None:
         "--match",
         choices=("any", "all"),
         default="any",
-        help="keyword mode only: rank by matched terms (default), or require every term. "
-             "Requiring every term scored mrr 0.389 against 0.866 on the development key",
+        help="keyword mode only: rank by matched terms (default), or require every term",
     )
     search_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model for --mode vector")
     search_parser.add_argument(
@@ -597,7 +539,7 @@ def run() -> None:
     )
     ask_parser.add_argument(
         "--llm",
-        help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model",
+        help="Ollama model (default: $OLLAMA_MODEL or the first local model)",
     )
     ask_parser.add_argument(
         "--supervisor", default="builtin", choices=["builtin", "langgraph"],
@@ -605,10 +547,8 @@ def run() -> None:
     )
     ask_parser.add_argument(
         "--deep", action="store_true",
-        help="Escalate when the first answer fails: route by question shape and "
-             "climb the retrieval ladder until a citation verifies and the "
-             "passages are on-subject. Costs nothing extra when the first "
-             "attempt succeeds, because it is the same attempt",
+        help="Retry with the next retrieval strategy until a citation verifies and "
+             "the passages are on-subject; no extra cost when the first attempt works",
     )
     ask_parser.add_argument(
         "--tools",
@@ -639,14 +579,13 @@ def run() -> None:
     report_parser.add_argument("topic", help="What the review is about; a phrase, not a question")
     report_parser.add_argument(
         "--supervisor", default="builtin", choices=["builtin", "langgraph"],
-        help="Which implementation climbs each section's ladder. Both share "
-             "every role and the selection rule; they differ in control flow. "
-             "langgraph needs the optional extra",
+        help="Which implementation runs each section's retries (langgraph needs "
+             "the optional extra)",
     )
     report_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     report_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     report_parser.add_argument(
-        "--llm", help="Generation model. Ollama: defaults to $OLLAMA_MODEL or the first pulled model"
+        "--llm", help="Ollama model (default: $OLLAMA_MODEL or the first local model)"
     )
     report_parser.add_argument(
         "--sections", type=int, default=4, help="Maximum sections to plan"
@@ -671,9 +610,8 @@ def run() -> None:
     )
     report_parser.add_argument(
         "--agents", action="store_true",
-        help="Orchestrate specialist roles per section: route by shape, retry a "
-             "section that fails verification with the next strategy, and append "
-             "the ledger of what each role did",
+        help="Retry a section that fails verification with the next strategy, "
+             "and append a ledger of what was tried",
     )
     report_parser.add_argument(
         "--workers", type=int, default=1,
@@ -681,9 +619,8 @@ def run() -> None:
     )
     report_parser.add_argument(
         "--critic", action="store_true",
-        help="With --agents: check each section for claims carrying no citation "
-             "and for subjects the question raises that no passage covers. Only "
-             "the second escalates, because only it is a retrieval problem",
+        help="With --agents: flag uncited claims and uncovered subjects; only "
+             "uncovered subjects trigger a retry",
     )
     report_parser.add_argument(
         "--max-tokens", type=int,
@@ -708,8 +645,7 @@ def run() -> None:
     chunk_parser.add_argument("--limit", type=int, help="Chunk at most this many PDFs this run")
     chunk_parser.add_argument(
         "--only-checked", action="store_true",
-        help="Skip papers whose HTML has not been looked for yet, so an "
-             "unfinished 'html' run cannot cause work to be redone",
+        help="Skip papers whose HTML has not been looked for yet",
     )
     chunk_parser.add_argument("--batch-size", type=int, default=config.CHUNK_BATCH_SIZE,
                               help="PDFs held in memory at once; bounds peak memory")
@@ -776,9 +712,7 @@ def run() -> None:
                 # Recorded before reporting failures, so a partial run still
                 # leaves every fetched PDF accounted for.
                 corpus.record_downloads(report.downloaded)
-                # A 404 for a versioned PDF is an answer, not a failure to
-                # get one; recording it stops the paper being asked for on
-                # every future run and reported as outstanding work for ever.
+                # A 404 for a versioned PDF is final; record it so it is not retried.
                 settled = [
                     (f.arxiv_id, f.pdf_url, f.reason)
                     for f in report.failed if f.permanent
@@ -799,9 +733,7 @@ def run() -> None:
             print(f"  {len(report.failed)} paper(s) could not be downloaded.")
 
     if args.command == "stats":
-        # Counted under the id `embed` writes, which is the model name plus
-        # "+context" when passages are embedded with their titles. The bare
-        # name counted nothing in that case and reported every passage pending.
+        # Count under the id `embed` writes, which adds "+context" when used.
         model_id = FastEmbedEmbedder(model_name=args.model).model_id
         with CorpusStore(args.state) as corpus:
             counts = corpus.pipeline_stats(
@@ -876,8 +808,7 @@ def run() -> None:
             if args.out == Path("evals/heldout-generated.jsonl") else args.out
         )
         if out.exists() and out.read_text(encoding="utf-8").strip():
-            # A frozen key is written once, for the same reason the breadth
-            # one is: re-authoring after an arm has run is what freezing rules out.
+            # A frozen key is written once; re-authoring takes a deliberate deletion.
             raise SystemExit(
                 f"error: {out} already exists. A frozen key is written once; "
                 "delete it deliberately if you mean to re-author it."
@@ -926,9 +857,7 @@ def run() -> None:
             if args.out == Path("evals/heldout-generated.jsonl") else args.out
         )
         if out.exists() and out.read_text(encoding="utf-8").strip():
-            # A frozen key is written once. Re-authoring after an arm has run
-            # against it is the move pre-registration exists to rule out, so it
-            # takes a deliberate deletion rather than a flag.
+            # A frozen key is written once; re-authoring takes a deliberate deletion.
             raise SystemExit(
                 f"error: {out} already exists. A frozen key is written once; "
                 "delete it deliberately if you mean to re-author it."
@@ -985,10 +914,8 @@ def run() -> None:
             if line.strip() and not line.startswith("#")
         ]
         if existing:
-            import json as _json
-
             for line in existing:
-                for arxiv_id in _json.loads(line).get("expect_papers") or []:
+                for arxiv_id in json.loads(line).get("expect_papers") or []:
                     exclude.add(str(arxiv_id))
             print(f"resuming: {len(existing)} case(s) already in {args.out}")
         rejected: dict[str, int] = {}
@@ -1081,8 +1008,6 @@ def run() -> None:
         return
 
     if args.command == "distill":
-        import json
-
         from verbatim.distill import (
             Tally,
             attributions,
@@ -1119,10 +1044,8 @@ def run() -> None:
                 tally=tally,
                 skip=[row["example_id"] for row in existing],
             )
-            # A generation is minutes of work per example and the model server
-            # is not always there. Every kept example is already on disk, so a
-            # failure stops the run and the same command resumes it, rather
-            # than discarding an hour to a 502.
+            # Every kept example is already on disk, so a failure stops the run and
+            # the same command resumes it.
             try:
                 for example in examples_made:
                     record = example.to_dict()
@@ -1194,9 +1117,7 @@ def run() -> None:
                             corpus, completion, case.question, matches
                         )
                     except (RuntimeError, OSError) as error:
-                        # Scored on what it got rather than lost entirely: a
-                        # model server that goes away after ninety questions
-                        # has still produced ninety questions of signal.
+                        # Score what was answered before the failure.
                         stopped = f"{type(error).__name__}: {error}"
                         break
                     this_run.append(AnsweredCase(
@@ -1218,8 +1139,7 @@ def run() -> None:
         print(",".join(str(path) for path in args.cases) + "\n")
         print(score.render())
         if len(per_run) > 1:
-            # Printed because one run cannot show its own spread, and this
-            # measure swung ten points between consecutive runs of twenty.
+            # One run cannot show its own spread.
             print("\n  per run, answers with a verified citation:")
             for number, batch in enumerate(per_run, start=1):
                 got = score_answers(batch)
@@ -1230,22 +1150,19 @@ def run() -> None:
             batches.setdefault(source_by_question.get(case.question, "unknown"),
                                []).append(case)
         if len(batches) > 1:
-            # By batch, because how a batch was authored moves its score more
-            # than anything the system does.
+            # How a batch was authored moves its score more than the system does.
             print("\n  by authoring batch:")
             for source, group in sorted(batches.items()):
                 got = score_answers(group)
-                share = lambda n: f"{n / max(got.cases, 1):.0%}"
                 print(f"    {source:<20} {got.cases:>4} answers, "
-                      f"verified {share(got.with_verified_citation)}, "
-                      f"marked {share(got.fully_cited)}, "
-                      f"expected paper {share(got.cited_expected_paper)}")
+                      f"verified {_percent(got.with_verified_citation, got.cases)}, "
+                      f"marked {_percent(got.fully_cited, got.cases)}, "
+                      f"expected paper {_percent(got.cited_expected_paper, got.cases)}")
         if stopped is not None:
             print(f"\n  STOPPED after {len(answered)} answer(s): {stopped}")
         if args.judge:
-            print("\n  Does a cited quote support the claim it is attached to?")
-            print("  Real pairs are scored beside mismatched ones, because a")
-            print("  judge that cannot tell them apart is not measuring support.\n")
+            print("\n  Does each cited quote support its claim? Real pairs are scored")
+            print("  beside mismatched control pairs.\n")
             report = judge_with_control(
                 answered, lambda system, user: completion.complete_text(system, user)
             )
@@ -1258,9 +1175,7 @@ def run() -> None:
             model = embedder.model
             index = SqliteVecIndex(corpus.connection, model.dimensions)
             papers = SqlitePaperIndex(corpus.connection, model.dimensions)
-            # The generation is passed so the index records what it was built
-            # from. Without it the state says generation 0, the next search
-            # sees a mismatch, and reconciles work that was just done.
+            # Record the generation built from, so the next search finds it current.
             generation = corpus.chunk_generation()
             if args.rebuild:
                 rebuilt = index.rebuild(model.model_id, generation)
@@ -1282,8 +1197,7 @@ def run() -> None:
                       f"{index.count()} passage vectors, {papers.count()} paper vectors.")
 
     if args.command == "licenses":
-        # In the ledger like every other stage, so a lookup run that failed
-        # reaches `runs` and the health check rather than only a terminal.
+        # Recorded in the run ledger like every other stage.
         with CorpusStore(args.state) as corpus, record_run(corpus, "licenses", limit=args.limit) as run:
             pending = corpus.base_ids_missing_license(args.limit)
             found = failed = 0
@@ -1321,15 +1235,11 @@ def run() -> None:
                 except (OSError, RuntimeError, ValueError) as error:
                     print(f"  ! {arxiv_id}: {error}")
                     continue
-                # A write can lose a race with a long chunking transaction.
-                # Losing one paper to that is nothing - it is simply fetched
-                # again next run - but losing the remaining six hours of the
-                # run to it is what happened before this guard existed.
+                # A write can lose a race with a long chunking transaction: defer
+                # the paper to the next run rather than abort this one.
                 try:
                     if payload is None:
-                        # No TeX source, so no rendering. The PDF remains the
-                        # source, and the absence is recorded so this paper is
-                        # not asked for again on every later run.
+                        # No TeX source, so no rendering; record that so it is not re-asked.
                         corpus.record_html_absent(arxiv_id, html_url_for(arxiv_id))
                         missing += 1
                         continue
@@ -1388,11 +1298,7 @@ def run() -> None:
             f"Read {entries} references from {read} papers; corpus holds {total}."
         )
         if reading_list:
-            print(
-                "\nMost cited by this corpus and absent from it. The corpus is a"
-                "\nslice of the newest papers, so the work it rests on is mostly"
-                "\noutside it; these are what it asks for most:"
-            )
+            print("\nMost cited by this corpus and absent from it:")
             for cited, citations in reading_list:
                 print(f"  {citations:>4} citing papers   arXiv:{cited}")
 
@@ -1425,9 +1331,7 @@ def run() -> None:
             pending,
             state=str(args.state),
             max_rounds=args.max_rounds,
-            # The stages that make and index vectors are told which model.
-            # Without it they used the default while the count above waited
-            # on this one, and the embedding count never moved.
+            # The stages that make and index vectors use the model counted above.
             stage_arguments={
                 "embed": ("--model", args.model),
                 "index": ("--model", args.model),
@@ -1450,9 +1354,7 @@ def run() -> None:
         with CorpusStore(args.state) as corpus:
             listed = recent_runs(corpus, command=args.command_filter, limit=args.limit)
         if args.json:
-            import json as _json
-
-            print(_json.dumps(listed, indent=1))
+            print(json.dumps(listed, indent=1))
         else:
             print(render_runs(listed))
         # A driver can stop on this rather than parsing prose.
@@ -1486,8 +1388,7 @@ def run() -> None:
                 raise SystemExit(f"error: no paper in the corpus matches {args.identifier!r}")
             builds_on = get_citations(corpus, args.identifier, direction="references", limit=args.limit)
         print(f"arXiv:{citers['arxiv_id']}  {citers['title']}")
-        # The identifier just resolved, so the second lookup cannot miss; the
-        # fallback only keeps a mid-command corpus rewrite from crashing this.
+        # The identifier just resolved; the fallback guards a concurrent rewrite.
         cited = builds_on["papers"] if builds_on else []
         for label, related in (
             ("builds on (held here)", cited),
@@ -1555,10 +1456,7 @@ def run() -> None:
                     f"  embedded {done}/{total}", end="\r", flush=True
                 ),
             )
-            # Abstracts are embedded in the same pass: they are one vector per
-            # paper against hundreds per paper of passages, so the cost is
-            # negligible and leaving them for a separate command would mean the
-            # two indexes could silently drift apart.
+            # Abstracts are embedded in the same pass, so the two indexes never drift.
             papers = embed_pending_papers(
                 corpus,
                 embedder,
@@ -1620,11 +1518,7 @@ def run() -> None:
         for rank, match in enumerate(matches, start=1):
             print(format_match(rank, match, full=args.full))
     if args.command == "ask":
-        # Refused rather than ignored. --deep routes by question shape and
-        # climbs a ladder whose last rung is the tool-choosing agent, so
-        # --tools is already inside it and --use-compare would override the
-        # router on questions it never applies to. Silently dropping a flag
-        # the parser accepted is the defect the audit found here before.
+        # Refuse flags that would be ignored rather than silently drop them.
         if args.supervisor != "builtin" and not args.deep:
             raise SystemExit(
                 "error: --supervisor only applies with --deep; without it "
@@ -1668,9 +1562,7 @@ def run() -> None:
 
                 embedder = FastEmbedEmbedder(model_name=args.model)
                 completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-                # The agent rung needs a tool caller. Passing None silently
-                # disables the last rung of every ladder, which is a defect
-                # this project has already shipped once.
+                # The ladder's last rung is the tool-choosing agent, which needs a caller.
                 tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
                 section, ledger = _supervisor(args.supervisor)(
                     corpus, embedder, completion, args.question,
@@ -1689,8 +1581,7 @@ def run() -> None:
                 if answer.citations:
                     print("\nReferences")
                     print(render_bibliography(answer.citations))
-                # The trace, always - a reader who wants to know why an answer
-                # is thin needs to see what was tried, not just what worked.
+                # Always show what was tried, not just what worked.
                 print(f"\n  {ledger.shape} question, {len(ledger.attempts)} attempt(s):")
                 for attempt in ledger.attempts:
                     detail = attempt.error or attempt.verdict
@@ -1713,8 +1604,7 @@ def run() -> None:
                     print(render_bibliography(answer.citations))
                 for item in answer.rejected:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
-                # The routing turns are model calls too, so this path reports
-                # both clients rather than skipping the footer entirely.
+                # Routing turns are model calls too, so both clients are billed.
                 print(f"\n  {_usage_footer(completion, tool_caller)}")
                 return
             embedder = FastEmbedEmbedder(model_name=args.model)
@@ -1726,8 +1616,7 @@ def run() -> None:
                     lambda system, user: completion.complete_text(system, user),
                     args.question,
                     per_part=max(args.passages // 3, 2),
-                    # Every flag plain `ask` honours reaches each part too;
-                    # they used to be parsed here and then dropped.
+                    # Every flag plain `ask` honours applies to each part.
                     max_per_paper=args.max_per_paper,
                     arxiv_id=args.arxiv_id,
                     include_references=args.include_references,
@@ -1748,8 +1637,7 @@ def run() -> None:
                 )
                 answer = answer_from_matches(corpus, completion, args.question, matches)
             if len(plan) > 1:
-                # Shown, not hidden: a reader who disagrees with how the
-                # question was split needs to see the split to say so.
+                # Show the split, so a reader can disagree with it.
                 print("Answered in parts:")
                 for part in plan:
                     print(f"  - {part}")
@@ -1762,13 +1650,11 @@ def run() -> None:
             subject = None
             closeness = None
             if matches and not args.no_subject_check:
-                # Asked what the passages discuss rather than whether they are
-                # relevant: every model tested says yes to the latter.
+                # Ask what the passages discuss, not whether they are relevant.
                 subject, closeness = subject_check(
                     completion, embedder, args.question, matches
                 )
-            # Computed here, while the corpus is open; printed below with the
-            # answer.
+            # Computed while the corpus is open; printed with the answer.
             evidence = describe_evidence(
                 corpus, args.question, matches, subject=subject, closeness=closeness
             )
@@ -1776,20 +1662,16 @@ def run() -> None:
         if answer.citations:
             print("\nReferences")
             print(render_bibliography(answer.citations))
-        # Always said, not only when a threshold trips: the case where the
-        # corpus covers a subject and answers nothing about it is invisible to
-        # every detector tried, so the reader is told what the answer rests on
-        # and judges it themselves.
+        # Always say what the answer rests on: some failures are invisible to
+        # every detector tried, so the reader judges.
         for line in evidence.lines():
             print(f"  {line}")
         if subject and closeness is not None and closeness < config.SUBJECT_WARN_BELOW:
-            # A warning, never a suppression: the ranges for answerable and
-            # unanswerable questions overlap, so this cannot decide, only show.
+            # A warning, never a suppression: the similarity ranges overlap.
             print(f"\n  ! these passages are about: {subject}")
             print(f"    which may not be what you asked ({closeness:.2f} similarity)")
         for item in answer.rejected:
-            # Loud on purpose: an unverifiable citation is the failure this
-            # tool exists to catch.
+            # A rejected citation is what this tool exists to catch, so it is shown.
             print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
         print(f"\n  {_usage_footer(completion)}")
 
@@ -1803,22 +1685,20 @@ def run() -> None:
                 "or drop --supervisor."
             )
         if args.agents and args.use_compare:
-            # Refused rather than ignored: with --agents the shape router
-            # picks a strategy per section, so honouring this flag would mean
-            # overriding the router on sections it never applies to.
+            # Refused rather than ignored: with --agents the router picks each strategy.
             raise SystemExit(
                 "error: --use-compare has no effect with --agents; the shape "
                 "router chooses each section's strategy. Drop one of the two."
             )
         embedder = FastEmbedEmbedder(model_name=args.model)
         completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-        progress = lambda heading, done, total: print(f"  [{done}/{total}] {heading}", flush=True)
+        def progress(heading: str, done: int, total: int) -> None:
+            print(f"  [{done}/{total}] {heading}", flush=True)
         ledger = None
         with CorpusStore(args.state) as corpus, record_run(corpus, "report", model=args.model, llm=args.llm, sections=args.sections, agents=args.agents) as run:
             if args.agents:
-                from verbatim.orchestrator import orchestrate
-
                 from verbatim.contracts import Budget
+                from verbatim.orchestrator import orchestrate
 
                 caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
                 ceiling = Budget(
@@ -1865,8 +1745,7 @@ def run() -> None:
                 declined=sum(1 for s in built.sections if s.answer.declined),
                 escalations=ledger.escalations if ledger else 0,
             )
-        # The agent rung's routing turns are the calls the orchestrator's own
-        # cost argument is about, so they are counted with the rest.
+        # The agent rung's routing calls are billed with the rest.
         billed = (completion, caller) if args.agents else (completion,)
         markdown = render_markdown(built, ledger=ledger)
         if args.out is not None:
@@ -1890,9 +1769,7 @@ def run() -> None:
         else:
             fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
             with CorpusStore(args.state) as corpus, record_run(corpus, "chunk", limit=args.limit, batch_size=args.batch_size) as run:
-                # HTML first: it keeps maths as LaTeX and carries the author's
-                # own sectioning, so a paper with a rendering is chunked from
-                # that and never from its PDF.
+                # HTML first: a paper with a rendering is never chunked from its PDF.
                 html_pending = corpus.html_sources_pending_chunking(
                     fingerprint, limit=args.limit
                 )
@@ -1918,10 +1795,8 @@ def run() -> None:
                         require_html_checked=args.only_checked,
                     )
                 )
-                # Extraction holds roughly 11MB per PDF and never plateaus, so
-                # chunking five thousand at once would need tens of gigabytes.
-                # Batching bounds peak memory and commits as it goes, which also
-                # makes an interrupted run resume rather than restart.
+                # Batches bound peak memory (about 11 MB per PDF) and commit as they
+                # go, so an interrupted run resumes.
                 written = 0
                 for start in range(0, len(pending), args.batch_size):
                     batch = pending[start : start + args.batch_size]
@@ -1947,12 +1822,7 @@ def run() -> None:
 
 
 def _refuse_ignored(mode: str, reason: str, given: dict[str, bool]) -> None:
-    """Refuse flags a routed `ask` would parse and then silently drop.
-
-    Refused before anything is built, like the other refusals. A search the
-    reader scoped to one paper that quietly comes back from the whole corpus
-    is worse than an error saying the scope cannot apply.
-    """
+    """Refuse flags a routed `ask` would parse and then silently ignore."""
     named = [flag for flag, present in given.items() if present]
     if named:
         raise SystemExit(
@@ -1961,15 +1831,12 @@ def _refuse_ignored(mode: str, reason: str, given: dict[str, bool]) -> None:
         )
 
 
-def _usage_footer(*clients: object) -> str:
-    """What the run cost, across every client that was asked to do work.
+def _percent(part: int, whole: int) -> str:
+    return f"{part / max(whole, 1):.0%}"
 
-    Read defensively: the Completion protocol does not require usage, and a
-    scripted stand-in in the tests has none. More than one client is passed
-    where a run uses more than one - answering and tool routing are separate
-    clients, and counting only the first under-reports the path whose cost
-    matters most.
-    """
+
+def _usage_footer(*clients: object) -> str:
+    """What the run cost across every client used; clients without usage are skipped."""
     counted = [getattr(client, "usage", None) for client in clients]
     present = [usage for usage in counted if usage is not None]
     if not present:
@@ -1984,21 +1851,13 @@ def _usage_footer(*clients: object) -> str:
 
 
 def _line_completion(model: str | None) -> Callable[[str, str], str]:
-    """A plain text completion, for the query rewriting that expansion needs.
-
-    Answering uses a line protocol with a schema; rewriting wants prose back,
-    so it asks for the raw reply rather than going through that.
-    """
+    """A plain-text completion, for query rewriting."""
     completion = OllamaCompletion(model or config.OLLAMA_MODEL)
     return lambda system, user: completion.complete_text(system, user)
 
 
 def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
-    """Render one hit so the passage can be traced back to a paper and page.
-
-    The header is the citation: paper version, page, and the abs URL that
-    resolves to exactly the version the text came from.
-    """
+    """Render one hit with the paper version, location and URL it came from."""
     chunk = match.chunk
     where_in_paper = render_locator(
         chunk.source_kind, chunk.page_number, chunk.section_path
@@ -2007,8 +1866,7 @@ def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
         f"{rank}. arXiv:{chunk.arxiv_id}  {where_in_paper}  "
         f"[chars {chunk.char_start}-{chunk.char_end}]  score {match.score:.2f}"
     )
-    # The deepest heading, not the whole ancestry: the outermost element is the
-    # paper title, which every passage shares and so tells the reader nothing.
+    # The deepest heading only; the outermost is the paper title.
     section = chunk.section_path.split(" > ")[-1] if chunk.section_path else ""
     where = f"   {chunk.source_url}  ({chunk.license_url or 'no licence reported'})"
     if section and section not in where_in_paper:
@@ -2020,17 +1878,16 @@ def format_match(rank: int, match: ChunkMatch, *, full: bool = False) -> str:
 def _merge_downloads(
     existing_downloads: list[DownloadedPaper], new_downloads: list[DownloadedPaper]
 ) -> list[DownloadedPaper]:
-    """Keep legacy snapshot downloads cumulative while callers migrate to SQLite."""
+    """Merge snapshot downloads, keeping the newest record per paper."""
     by_id = {download.arxiv_id: download for download in existing_downloads}
     by_id.update({download.arxiv_id: download for download in new_downloads})
     return list(by_id.values())
 
 
 def html_completeness(corpus: CorpusStore, source: HtmlSource) -> float:
-    """Compare a rendering's text against its own PDF's.
+    """How much of its PDF's text a rendering covers, by length.
 
-    Plain extraction is used rather than the layout-aware path: this only needs
-    a length, and paying 50x for one would make fetching the corpus far slower.
+    Plain extraction suffices: only a length is needed, and layout extraction is slow.
     """
     download = corpus.download_for(source.arxiv_id)
     if download is None:
@@ -2081,7 +1938,5 @@ def format_stats(counts: dict[str, int]) -> str:
 
 
 if __name__ == "__main__":  # pragma: no cover - module entry point
-    # Without this, `python -m verbatim.cli <stage>` imports the module,
-    # runs nothing and exits 0. The pipeline driver invokes stages that way,
-    # so every stage silently succeeded at doing nothing.
+    # Needed for `python -m verbatim.cli`, which the pipeline uses to run stages.
     main()

@@ -1,38 +1,13 @@
-"""Training examples generated from the corpus, under the licence policy.
+"""Training examples generated from the corpus under TRAINING-POLICY.md.
 
-The long-term goal of this project is a small model that answers the way this
-pipeline answers: the flat ANSWER/CITE protocol, the abstention wording, the
-citation discipline. This module writes the data to teach it - not by taking
-the papers' prose, which TRAINING-POLICY.md puts out of scope, but by
-recording what the full pipeline did: a question, the passages retrieval
-returned for it, and the answer that survived verification.
+Each example is a question, the passages retrieval returned, and an answer
+whose every quote verified. The policy's rules are enforced here:
 
-Three rules come straight from the policy and are enforced here rather than
-trusted.
-
-**Only eligible papers, and never after the fact.** The licence gate is a
-`PaperFilter` pushed into retrieval, so an ineligible paper is never among the
-passages an answer is written from. Discarding examples afterwards would leave
-the ineligible text in the prompt that produced the kept ones. A final check
-still runs over the citations, and if it ever fires it is a bug in the gate
-and is reported as a fault, not as an ordinary rejection.
-
-**Only verified answers.** An example is kept only if every citation the model
-wrote survived the quote check. The pipeline's own behaviour is to mark a
-failed quote `[unverified]` and carry on, which is right for a reader and
-wrong for training data: an example containing `[unverified]` teaches a model
-to produce it. One bad quote rejects the whole example.
-
-**Provenance per example, sufficient to delete it.** Every record carries its
-chunk ids, its papers with their licence URLs and classes, and the source
-checksums, so that if a licence turns out to have been misrecorded its
-examples are identifiable and removable without regenerating the rest.
-
-Questions are seeded from real passages, because a question the corpus cannot
-answer produces no example and costs a generation call to find out. Seeding
-guarantees at least one paper can answer it; retrieval is then run for real,
-and may or may not find that paper - which is the task the student has to
-learn, not a lookup of where the question came from.
+- Only `open`-licensed papers, filtered inside retrieval so an ineligible
+  passage never reaches a prompt. A final check reports any leak as a fault.
+- Only fully verified answers: one failed quote rejects the example.
+- Provenance per example (chunk ids, papers, licences, checksums), so any
+  example can be traced and removed.
 """
 
 from __future__ import annotations
@@ -50,20 +25,14 @@ from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
 from verbatim.retrieval import hybrid_search
 
-# From the policy's eligibility table. `arxiv-nonexclusive` grants arXiv
-# distribution rights and grants this project nothing; `no-derivatives` and
-# `noncommercial` exclude themselves; `unknown` means unknown, not permitted.
+# From the policy: only `open` permits training; `unknown` is not permission.
 ELIGIBLE_CLASSES: tuple[str, ...] = ("open",)
 
-# A seed passage short enough to be about one thing and long enough to hold an
-# answer. Measured against nothing - these are the chunker's own bounds seen
-# from the other side, and are here to skip headers and reference fragments.
+# Seed passages long enough to hold an answer and short enough to be about one thing.
 MIN_SEED_WORDS = 60
 MAX_SEED_WORDS = 400
 
-# Seed passages drawn per example asked for. Generous on purpose; see
-# `generate`, where the reason is that seeds are free and generations
-# are not.
+# Seed passages drawn per example wanted: seeds are cheap, generations are not.
 SEED_OVERDRAW = 4
 
 QUESTION_SYSTEM = """You are given a passage from a research paper. Write questions that this passage answers.
@@ -86,10 +55,8 @@ Q: <question>"""
 
 QUESTION_LINE = re.compile(r"^\s*Q:\s*(.+?)\s*$", re.MULTILINE)
 
-# A question that points at its source instead of naming its subject is
-# useless as a retrieval query: "what does this paper propose" retrieves
-# everything. The model is told not to write them; this is the check, because
-# a model asked to follow a rule is not evidence that it did.
+# Questions that point at their source ("what does this paper propose") are
+# useless as queries. The prompt forbids them; this checks.
 DEICTIC = re.compile(
     r"\b(?:this|the|these|those)\s+"
     r"(?:passage|paper|study|work|article|authors?|section|figure|table|"
@@ -99,16 +66,8 @@ DEICTIC = re.compile(
 )
 MIN_QUESTION_WORDS = 5
 
-# A passage from a paper's front matter carries its title, authors and their
-# affiliations, and a question generator handed one dutifully asks who works
-# where. Measured on the first 300 examples: 83 of them - 28% - were
-# bibliographic trivia ("what is the email address of ...").
-#
-# The check is on the question rather than on the passage because the passage
-# has no clean signal: front matter shares `chunk_index` 0 with 48% of the
-# corpus and with most of the *good* seeds, since an HTML paper's first chunk
-# usually holds the abstract too. What is wrong here is what was asked, not
-# what it was asked about.
+# Questions about the paper's cover: authors, affiliations, funding. Checked on
+# the question, since front-matter passages often hold the abstract too.
 BIBLIOGRAPHIC = re.compile(
     r"\b(?:affiliation|affiliated|e-?mail|who\s+wrote|corresponding\s+author|"
     r"acknowledge(?:s|d|ment)?|funding|grant\s+number|which\s+institution|"
@@ -116,10 +75,8 @@ BIBLIOGRAPHIC = re.compile(
     re.IGNORECASE,
 )
 
-# An answer that says the evidence is missing while carrying citations teaches
-# a student to abstain and cite at the same time. Deliberately anchored on
-# references to the *supplied* evidence: "the authors do not provide a proof"
-# is a claim about a paper and is fine.
+# An answer that says the passages lack something while citing them. Anchored
+# on the supplied evidence, so "the authors do not provide a proof" is fine.
 DISOWNS_ITS_EVIDENCE = re.compile(
     r"\b(?:provided|given|these|the|supplied)\s+"
     r"(?:passages?|excerpts?|context|text|documents?)\s+"
@@ -130,9 +87,7 @@ DISOWNS_ITS_EVIDENCE = re.compile(
     re.IGNORECASE,
 )
 
-# The marker `renumber_markers` leaves where a citation did not survive - or
-# where the model pointed at a passage it never cited at all, which produces
-# the marker with an empty `rejected` list. Checking the text catches both.
+# Left where a citation did not survive or pointed at a passage never cited.
 UNVERIFIED_MARKER = "[unverified]"
 
 
@@ -191,12 +146,7 @@ class TrainingExample:
 
 @dataclass
 class Tally:
-    """What was made, and what was thrown away and why.
-
-    Kept as a first-class result rather than a log line: the rejection mix is
-    the only signal that the generator is working. A run that keeps everything
-    has stopped checking, and one that keeps nothing is misconfigured.
-    """
+    """What was kept, and what was rejected and why."""
 
     kept: int = 0
     rejected: dict[str, int] = field(default_factory=dict)
@@ -229,12 +179,7 @@ def seed_passages(
     seed: int = 0,
     classes: Sequence[str] = ELIGIBLE_CLASSES,
 ) -> list[Chunk]:
-    """Body passages from eligible papers, at most one per paper.
-
-    One per paper because a hundred passages from one paper would teach the
-    student that paper rather than the behaviour, and because the corpus has
-    3,806 eligible papers to draw on before it needs a second bite of any.
-    """
+    """Body passages from eligible papers, at most one per paper, in a seeded order."""
     if limit < 1:
         raise ValueError("limit must be at least 1")
     placeholders = ",".join("?" * len(classes))
@@ -253,8 +198,7 @@ def seed_passages(
         [BODY, *classes, MIN_SEED_WORDS, MAX_SEED_WORDS],
     ).fetchall()
     chunk_ids = [row["chunk_id"] for row in rows]
-    # Shuffled with a seed rather than ORDER BY RANDOM(): a run has to be
-    # reproducible, and a resumed run has to pick the same passages.
+    # A seeded shuffle, so a resumed run picks the same passages.
     random.Random(seed).shuffle(chunk_ids)
     return corpus.chunks_by_id(chunk_ids[:limit])
 
@@ -285,11 +229,7 @@ def standalone(question: str) -> bool:
 
 
 def bibliographic(question: str) -> bool:
-    """Whether a question asks about the paper's cover rather than its content.
-
-    Who wrote it, where they work and who funded it are all answerable from
-    the corpus and none of them are what this pipeline is for.
-    """
+    """Whether a question asks about the paper's cover rather than its content."""
     return BIBLIOGRAPHIC.search(question) is not None
 
 
@@ -341,26 +281,20 @@ def keep(
         tally.reject("a quote failed verification")
         return None
     if UNVERIFIED_MARKER in answer.text:
-        # An empty `rejected` list is not enough. A model that writes an
-        # inline marker for a passage it never cited leaves a dangling
-        # reference, which is rewritten to [unverified] with nothing rejected.
+        # A marker for a passage never cited becomes [unverified] with nothing rejected.
         tally.reject("an unverified marker in the text")
         return None
     if not answer.citations:
         tally.reject("no citation")
         return None
     if DISOWNS_ITS_EVIDENCE.search(answer.text):
-        # "The provided passages do not mention X" carrying citations teaches
-        # a student to abstain and cite at once. A real abstention has no
-        # citations and is rejected above; this is the half-abstention.
+        # A half-abstention: it says the evidence is missing while citing it.
         tally.reject("abstains while citing")
         return None
 
     cited = sorted({citation.arxiv_id for citation in answer.citations})
     papers = corpus.papers_by_id(cited)
-    # `Paper` does not carry the licence class - it is derived from the
-    # licence URL and stored beside it - so the classes come in one extra
-    # query rather than one per citation.
+    # The licence class is stored beside the paper; fetched in one query.
     placeholders = ",".join("?" * len(cited))
     license_classes = {
         row["arxiv_id"]: row["license_class"] or "unknown"
@@ -374,8 +308,7 @@ def keep(
     for arxiv_id in cited:
         license_class = license_classes.get(arxiv_id, "unknown")
         if license_class not in classes:
-            # Impossible if the filter held. Loud, because the alternative is
-            # an ineligible paper quoted in a training set.
+            # Impossible if the filter held, so reported as a fault.
             tally.fault(f"cited {license_class}")
             return None
         paper = papers.get(arxiv_id)
@@ -434,14 +367,8 @@ def generate(
         raise ValueError("examples must be at least 1")
     tally = tally if tally is not None else Tally()
     already = set(skip)
-    # Draw far more seed passages than the arithmetic needs. A passage yields
-    # at most `questions_per_passage` candidates and most yield fewer - the
-    # writer declines, or a quote fails verification, and the whole example
-    # goes - so sizing the draw to an assumed keep rate makes the run quietly
-    # return fewer examples than asked for. Seeds are one SQL query against
-    # 3,806 eligible papers and cost nothing; generations are what cost. The
-    # loop stops as soon as the target is met, so an over-draw is never paid
-    # for.
+    # Over-draw seeds: most passages yield fewer examples than asked, and the
+    # loop stops once the target is met.
     wanted = examples * SEED_OVERDRAW
     for chunk in seed_passages(corpus, limit=wanted, seed=seed, classes=classes):
         for question in questions_for(
@@ -455,9 +382,7 @@ def generate(
             if example is None:
                 continue
             if example.example_id in already:
-                # `keep` counted it before this could be known - the id needs
-                # the passages, which only retrieval can supply. Move it from
-                # kept to rejected rather than letting the tally overcount.
+                # Counted as kept before its id was known; move it to rejected.
                 tally.kept -= 1
                 tally.reject("already generated")
                 continue
@@ -468,11 +393,9 @@ def generate(
 
 
 def source_papers(records: Iterable[dict]) -> list[SourcePaper]:
-    """Rebuild the papers behind a dataset from its written records.
+    """Rebuild the papers behind a dataset from its records on disk.
 
-    The dataset on disk is the whole dataset; a resumed run holds only its own
-    examples in memory. ATTRIBUTIONS has to cover every example, so it is built
-    from the file rather than from the run.
+    ATTRIBUTIONS must cover every example, including earlier runs'.
     """
     seen: dict[str, SourcePaper] = {}
     for record in records:
@@ -490,11 +413,7 @@ def source_papers(records: Iterable[dict]) -> list[SourcePaper]:
 
 
 def attributions(papers: Iterable[SourcePaper]) -> str:
-    """The ATTRIBUTIONS file the policy requires of any released artifact.
-
-    Written whether or not anything is released. It costs nothing now and
-    cannot be reconstructed later if the dataset is regenerated.
-    """
+    """The ATTRIBUTIONS file the policy requires, written with every dataset."""
     seen = {paper.arxiv_id: paper for paper in papers}
     lines = [
         "Source papers for this dataset.",

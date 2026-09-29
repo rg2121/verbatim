@@ -1,19 +1,8 @@
-"""A literature review written section by section, every claim still verified.
+"""A literature review written section by section, every claim verified.
 
-Composition, not new machinery. Planning the sections is one model call that
-returns flat lines, the shape a local model actually follows. Each section is
-then a retrieval with the measured defaults and an answer written by the
-existing verified-citation path, so a claim cannot appear in the review unless
-its quoted words are in the passage it names - the property the whole project
-exists for, carried unchanged into a longer document.
-
-What a report adds over `ask` run several times is the assembly: one
-bibliography numbered across sections with the inline markers rewritten to
-match, each section's subject check carried beside it as a warning rather
-than silently dropped, and a section the corpus cannot support saying so in
-place instead of being papered over. A hosted "deep research" product cannot
-show its retrieval or verify its quotes; this one can, and the markdown it
-writes is the evidence.
+One model call plans the sections; each is answered through the verified-citation
+path. The report merges them under one bibliography and keeps each section's
+evidence and subject warnings beside it.
 """
 
 from __future__ import annotations
@@ -24,10 +13,7 @@ import re
 from typing import Any
 
 from verbatim import config
-from verbatim.answers import (
-    Answer,
-    Completion,
-)
+from verbatim.answers import Answer, Completion
 from verbatim.citations import render_bibliography
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import Embedder
@@ -53,8 +39,7 @@ class ReportSection:
     answer: Answer
     subject: str | None = None
     subject_closeness: float | None = None
-    # The evidence account, already rendered to lines. Carried as text so this
-    # module needs no opinion about how evidence is computed.
+    # The evidence account, already rendered to lines.
     evidence_lines: tuple[str, ...] = ()
 
 
@@ -68,11 +53,7 @@ class Report:
 def plan_sections(
     complete_text: Callable[[str, str], str], topic: str, *, max_sections: int = 4
 ) -> list[str]:
-    """The questions the review will answer, one per section.
-
-    Falls back to the topic as a single section when planning fails or
-    returns nothing usable, so a report can always be produced.
-    """
+    """The questions the review will answer, one per section; the topic alone if planning fails."""
     if max_sections < 1:
         raise ValueError("max_sections must be at least 1")
     try:
@@ -96,18 +77,8 @@ def build_report(
     check_subject: bool = True,
     on_section: Callable[[str, int, int], None] | None = None,
 ) -> Report:
-    """Plan, retrieve, and write every section of a review on one topic.
-
-    This is the orchestrator run with a single rung and no escalation: each
-    section is retrieved once with the measured defaults, written by the
-    verified-citation path, and subject-checked. The loop lived here in
-    duplicate until the two drifted - the orchestrated path gained per-section
-    error containment and evidence disclosure and this one did not - so there
-    is now one loop and this function chooses its ladder.
-    """
-    # Imported here rather than at module scope: the orchestrator imports this
-    # module for Report and ReportSection, and a top-level import either way
-    # would be circular.
+    """Plan and write a review: the orchestrator with one rung and no retries."""
+    # Imported here: the orchestrator imports this module.
     from verbatim.orchestrator import orchestrate
 
     report, _ledger = orchestrate(
@@ -134,12 +105,9 @@ def render_markdown(
     warn_below: float = config.SUBJECT_WARN_BELOW,
     ledger: Any = None,
 ) -> str:
-    """The review as one markdown document with a single bibliography.
+    """The review as one markdown document with a single, renumbered bibliography.
 
-    Sections cite locally as [1], [2]; here every citation is renumbered into
-    one reference list, a passage cited by two sections appearing once. The
-    inline markers were already rewritten to match each section's own
-    citations, so the remap is position to position, never a guess.
+    A passage cited by two sections appears once.
     """
     citations = []
     number_of: dict[str, int] = {}
@@ -165,9 +133,7 @@ def render_markdown(
 
         lines += ["", f"## {section.heading}", "", MARKER.sub(remap, section.answer.text)]
         if section.evidence_lines:
-            # Always, not on a threshold: the case a threshold would catch is
-            # exactly the one no threshold sees, so the section says what it
-            # rests on and lets the reader judge.
+            # Always shown, so the reader can judge what the section rests on.
             lines += ["", "> " + " ".join(section.evidence_lines)]
         if (
             section.subject_closeness is not None
@@ -192,8 +158,6 @@ def render_markdown(
         for reference in render_bibliography(citations).splitlines():
             lines += ["", reference]
     if ledger is not None:
-        # The orchestrator's trace, when there was one: which strategy each
-        # section took, what verified, and what was retried. Rendered by the
-        # ledger itself so this module need not know its shape.
+        # The orchestrator's trace: strategies tried, what verified, what was retried.
         lines += ["", ledger.render_markdown()]
     return "\n".join(lines)

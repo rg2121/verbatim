@@ -14,11 +14,10 @@ MAX_NAMED_AUTHORS = 3
 
 @dataclass(frozen=True)
 class Citation:
-    """Everything needed to find the cited words again, and to prove they were there.
+    """Everything needed to find the cited words again and check them.
 
-    The version is carried separately from the base identifier because v1 and
-    v2 of a paper can disagree; citing "arXiv:2608.05440" without a version
-    points at whichever revision the reader happens to fetch.
+    The version is kept apart from the base identifier because revisions of a
+    paper can differ.
     """
 
     arxiv_id: str
@@ -77,10 +76,7 @@ def format_authors(authors: list[str]) -> str:
 
 
 def render_citation(marker: int, citation: Citation) -> str:
-    """Render one reference line.
-
-    The version is always present, and the URL resolves to that exact version.
-    """
+    """Render one reference line; the version and URL name the exact revision."""
     return (
         f"[{marker}] {format_authors(citation.authors)}, "
         f'"{citation.title}", '
@@ -97,14 +93,10 @@ def locator(citation: Citation) -> str:
 
 
 def render_locator(source_kind: str, page_number: int, section_path: str) -> str:
-    """Where a passage is, in the terms its source actually has.
+    """Where a passage is: a page for a PDF, the author's section heading for HTML.
 
-    A PDF has pages. arXiv's HTML rendering does not, so an HTML-sourced
-    passage is located by section instead; printing "p. 3" for it would be an
-    invented page number. Nor is our own section counter printed: papers number
-    their own sections, often as "III", so the counter would send a reader to a
-    section the paper does not have. The author's heading is what they can
-    look for, and the counter is only a fallback.
+    HTML has no pages, so printing one would invent it; the section counter is
+    only a fallback when there is no heading.
     """
     if source_kind != "html":
         return f"p. {page_number}"

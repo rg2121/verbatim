@@ -1,29 +1,11 @@
 """Score the breadth evaluation under its pre-registered decision rule.
 
-Mechanical measures (M1-M4) are computed from the answers at any time. The
-human measures need the blind labels, and the script refuses to read the
-blinding key until evals/breadth/labels.json is committed and unchanged: the
-protocol commits the scores before anyone learns which arm wrote which answer,
-and a check nobody enforces is a promise, not a protocol.
-
-The aggregate result goes to evals/breadth/result.json - numbers only, never
-the answer text, which quotes papers under mixed licences.
-
-Secondary statistics, added 2026-09-26 at a reviewer's suggestion and before
-any label existed: the team's paired effect size against each simpler arm
-with a bootstrap 95% interval, and - when a second blind rater's labels are
-given - agreement between the raters (exact share and quadratic-weighted
-kappa, the usual measure for ordinal 0-2 scores). They describe the result;
-they never decide it. The verdict is the preregistered sign-test rule in
-decide(), unchanged, and it reads only the first rater's labels.
-
-Blinding that can be audited, added 2026-09-26 before any score existed: the
-answer order is shuffled with a secret seed, the mapping is kept outside the
-repository, and evals/breadth/blind_manifest.json - committed before scoring -
-holds the SHA-256 of the mapping and of the answers. Unblinding refuses unless
-the scores were committed after the manifest and the revealed mapping and
-answers match its hashes; the result records the commits involved. The
-amendment to the protocol's fixed seed is written into the manifest itself.
+Mechanical measures (M1-M4) come from the answers alone. Human scores are
+unblinded only when the blind manifest was committed first, the labels after
+it, and the mapping and answers still match its hashes (see the amendment in
+evals/breadth/PROTOCOL.md). Effect sizes and rater agreement are reported
+beside the verdict but never change it. The result, numbers only, goes to
+evals/breadth/result.json.
 """
 
 from __future__ import annotations
@@ -48,9 +30,8 @@ SECONDARY = ("coverage", "balance", "limitations", "both_papers")
 BOOTSTRAP_ROUNDS = 10_000
 BOOTSTRAP_SEED = 0
 MANIFEST_PATH = Path("evals/breadth/blind_manifest.json")
-# Outside the repository, so it can be neither committed by accident nor read
-# beside the sheet. Copied into evals/breadth/mapping.json only after
-# unblinding, where anyone can check it against the manifest's hash.
+# Kept outside the repository until unblinding, then copied to
+# REVEALED_MAPPING_PATH, where anyone can check it against the manifest.
 MAPPING_PATH = Path.home() / ".verbatim-blind" / "breadth_mapping.json"
 REVEALED_MAPPING_PATH = Path("evals/breadth/mapping.json")
 
@@ -88,10 +69,9 @@ def last_commit(path: Path) -> str | None:
 
 
 def committed_before(first: Path, then: Path) -> bool:
-    """Whether `first` was last committed strictly before `then` was.
+    """Whether `first` was last committed strictly before `then`.
 
-    Committed together proves nothing about order, and a manifest touched
-    after the scores could have been chosen to fit them - both are refused.
+    Committed together, or the manifest touched after the scores, is refused.
     """
     earlier, later = last_commit(first), last_commit(then)
     if not earlier or not later or earlier == later:
@@ -117,11 +97,10 @@ def verify_blinding(manifest: dict, mapping_bytes: bytes, answers_bytes: bytes) 
 
 
 def scores_for_this_blinding(labels: dict, manifest: dict) -> dict:
-    """The scores, once they are shown to come from this blinding's sheet.
+    """The scores, once shown to come from this blinding's sheet.
 
-    Every blinding orders A, B and C afresh, so scores made on an older sheet -
-    one left open in a browser, say - would unblind to the wrong arms without
-    any error. The sheet writes its key into the download; this checks it.
+    Each blinding orders the answers afresh, so scores from an older sheet
+    would unblind to the wrong arms. The sheet writes its key into the download.
     """
     scores = dict(labels)
     if scores.pop("blinding", None) != manifest.get("storage_key"):
@@ -181,11 +160,7 @@ def effect_sizes(
     seed: int = BOOTSTRAP_SEED,
 ) -> dict[str, dict[str, dict]]:
     """The team's mean per-question difference from each simpler arm, with a
-    paired bootstrap 95% interval. Descriptive only - see decide() for the rule.
-
-    A p-value says whether a difference is distinguishable from none; this
-    says how large it is and how uncertain, which a reader needs as well.
-    Seeded, so the same scores always print the same interval.
+    seeded paired bootstrap 95% interval. Descriptive only; decide() is the rule.
     """
     rows = list(per_question.values())
     measures = [m for m in SECONDARY if rows and all(m in r["team"] for r in rows)]
@@ -373,8 +348,7 @@ def main() -> int:
                else "it does not beat both simpler arms on any primary measure at p < 0.05")
         print(f"\n  VERDICT: the team does not earn its cost here - {why}. It stays opt-in.")
 
-    # Secondary: how large and how certain, and how far raters agree. Printed
-    # after the verdict and kept apart in the result, because it cannot move it.
+    # Secondary statistics: printed after the verdict and kept apart in the result.
     effects = effect_sizes(per_question)
     print("\n  secondary - team minus each simpler arm, mean per question, 95% bootstrap interval:")
     for measure, against in effects.items():
@@ -416,8 +390,7 @@ def main() -> int:
             "answers_sha256": manifest["answers_sha256"],
         },
     }, indent=2) + "\n")
-    # The reveal: the mapping joins the repository only now, and its hash can
-    # be checked by anyone against the manifest committed before scoring.
+    # The mapping joins the repository only now; its hash matches the manifest's.
     REVEALED_MAPPING_PATH.write_bytes(mapping_bytes)
     print(f"\n  Written to {args.result}, and the mapping revealed at {REVEALED_MAPPING_PATH}.")
     print("  Commit both together: the mapping's hash matches the manifest committed at")

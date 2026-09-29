@@ -1,9 +1,4 @@
-"""Rewriting a question before retrieval sees it.
-
-Both treatments are optimisations, so the tests are mostly about what happens
-when they go wrong: retrieval must still answer, and must never lose the words
-the user actually typed.
-"""
+"""Rewriting a question before retrieval sees it."""
 
 import pytest
 

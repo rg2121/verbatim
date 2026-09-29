@@ -216,12 +216,7 @@ def test_renumbering_leaves_non_citation_brackets_alone() -> None:
 
 
 def test_a_grouped_marker_is_renumbered_member_by_member() -> None:
-    """Models also write "[5, 3]", which must not survive as stale numbers.
-
-    Found in the first real report: a grouped marker slipped past the
-    per-number rewrite and pointed at the model's own numbering, which the
-    rejected-citation renumbering had already invalidated.
-    """
+    """Models also write "[5, 3]", which must not survive as stale numbers."""
     from verbatim.answers import renumber_markers
 
     class FakeCitation:
@@ -479,13 +474,7 @@ def test_a_long_subject_is_truncated_and_whitespace_collapsed(tmp_path: Path) ->
 
 
 def test_a_cite_line_that_puts_the_chunk_id_in_the_brackets_is_read() -> None:
-    """gemma4:31b writes `CITE [<chunk_id>] :: quote` and never the numbered form.
-
-    Reading only the numbered form threw away every citation it made and
-    marked the whole answer [unverified], while the model had in fact quoted
-    the passages correctly. Verification is unchanged: the quote is still
-    checked character-for-character against the passage it names.
-    """
+    """Some models write `CITE [<chunk_id>] :: quote` instead of the numbered form."""
     from verbatim.answers import parse_line_protocol
 
     payload = parse_line_protocol(
@@ -518,11 +507,7 @@ def test_both_cite_forms_can_appear_in_one_reply() -> None:
 
 
 def test_the_model_client_retries_a_transient_failure_but_not_a_refusal() -> None:
-    """A local model answers or is down; a served one drops calls occasionally.
-
-    A single 502 used to kill a ten-minute evaluation. A 4xx still must not be
-    retried: a rejected request stays rejected however often it is sent.
-    """
+    """A local model answers or is down; a served one drops calls occasionally."""
     from urllib.error import HTTPError
 
     from verbatim.answers import OllamaCompletion
@@ -582,14 +567,7 @@ def _cite(chunk_id: str) -> Citation:
 
 
 def test_grouped_chunk_id_markers_are_renumbered_like_single_ones() -> None:
-    """A pair of hashes is not something a reader can follow.
-
-    Models that cite by chunk id group their markers the same way models that
-    cite by number do. A single id was renumbered and a group was not, so
-    "[a826c26dad1a785511b3, 180d5845e4ce3b24a60a]" reached the reader - in
-    `ask`, in `report`, and into generated training data, where it teaches a
-    student to emit twenty hex characters as a citation.
-    """
+    """A pair of hashes is not something a reader can follow."""
     first, second = "a826c26dad1a785511b3", "180d5845e4ce3b24a60a"
     citations = [_cite(first), _cite(second)]
 
@@ -617,13 +595,7 @@ def test_prose_in_brackets_is_not_mistaken_for_a_grouped_marker() -> None:
 
 
 def test_a_missing_model_says_which_one_and_what_is_pulled() -> None:
-    """Ollama answers 404 when a model is not pulled.
-
-    It is the one 4xx a user can act on, and "refused the request (404 Not
-    Found)" tells them nothing - not that the model is the problem, and not
-    which models they have. This matters most on a fresh clone, where naming
-    a model you do not have is the likeliest first mistake.
-    """
+    """Ollama answers 404 when a model is not pulled."""
     from urllib.error import HTTPError
 
     from verbatim.answers import OllamaCompletion
@@ -649,11 +621,7 @@ def test_a_missing_model_says_which_one_and_what_is_pulled() -> None:
 
 
 def test_left_to_choose_it_picks_a_local_model_over_a_cloud_one() -> None:
-    """A `-cloud` model sends every passage to Ollama's servers.
-
-    Which model runs is the user's visible choice, so an unset OLLAMA_MODEL
-    must never land on one - even when Ollama lists it first.
-    """
+    """A `-cloud` model sends every passage to Ollama's servers."""
     from verbatim.answers import OllamaCompletion
 
     def tags(self, path):
@@ -738,11 +706,7 @@ def _streaming_client():
 
 
 def test_a_streamed_answer_names_a_missing_model_too() -> None:
-    """The page streams, and said "Is it running?" to someone whose Ollama was.
-
-    HTTPError is a URLError, so the stream's catch-all for an unreachable
-    server swallowed the 404 that the non-streaming path already explains.
-    """
+    """A missing model is named in a stream too, not reported as Ollama being down."""
     from urllib.error import HTTPError
 
     completion = _streaming_client()

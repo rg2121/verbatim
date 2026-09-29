@@ -102,11 +102,7 @@ def _citation(**overrides):
     return Citation(**fields)
 
 def test_an_html_citation_names_the_section_the_paper_gave_it() -> None:
-    """Our ordinal is not the paper's numbering, and papers use Roman numerals.
-
-    Citing "section 4" of a paper whose sections run I, II, III sends the
-    reader looking for something that is not there.
-    """
+    """Our ordinal is not the paper's numbering, and papers use Roman numerals."""
     from verbatim.citations import locator
 
     cited = _citation(

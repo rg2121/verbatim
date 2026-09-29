@@ -181,12 +181,7 @@ def test_most_cited_held_papers_ranks_by_distinct_citers(tmp_path: Path) -> None
 
 
 class TermEmbedder:
-    """Vectors keyed to the Adam fixture, so drowning is reproducible.
-
-    The query and every usage passage share "adam" and "optimizer"; the
-    defining passage says "optimization", so both retrieval legs rank it
-    last - which is the measured 60:1 failure in miniature.
-    """
+    """Vectors keyed to the Adam fixture, so drowning is reproducible."""
 
     def __init__(self) -> None:
         self.model = EmbeddingModel(
@@ -256,13 +251,7 @@ def test_use_graph_leaves_every_other_question_untouched(tmp_path: Path) -> None
 
 
 def test_the_tool_every_other_front_end_calls_uses_the_graph_gate(tmp_path: Path) -> None:
-    """MCP clients, `ask --tools` and the orchestrator's agent rung go here.
-
-    They were all searching without the leg the README calls default-on, so a
-    definitional question reached them drowned in usage while the CLI's own
-    `ask` answered it. The gate still gates: a question that is not
-    definition-shaped is unaffected.
-    """
+    """MCP clients, `ask --tools` and the orchestrator's agent rung go here."""
     with graph_corpus(tmp_path) as corpus:
         embed_pending(corpus, TermEmbedder())
 

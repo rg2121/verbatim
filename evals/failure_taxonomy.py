@@ -1,25 +1,18 @@
-"""Why retrieval misses, counted rather than eyeballed.
+"""Why retrieval misses, classified from three mechanical signals.
 
-A mean says how often the right paper is found; it never says what happened
-the rest of the time, and a project that cannot distinguish its failure modes
-cannot know which of them is worth work. Three signals decide each case, all
-mechanical:
+  rank           where the expected paper landed, if at all
+  term_coverage  how much of the question's vocabulary appears in that paper
+  neighbour      abstract similarity between the winning paper and the expected one
 
-  rank          - where the expected paper landed, if at all
-  term_coverage - how much of the question's vocabulary appears anywhere in
-                  that paper's passages. Low means the words the question uses
-                  are simply not in the paper, which no ranking can fix
-  neighbour     - abstract-vector similarity between the paper that took the
-                  top spot and the expected one. High means a near neighbour
-                  won and the corpus genuinely holds two candidates; low means
-                  retrieval went somewhere unrelated
-
-The categories follow from those, so re-running this cannot be argued with.
+Low coverage means the paper does not use the question's words; high
+similarity means a near neighbour won.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+from pathlib import Path
 import re
 import sys
 
@@ -85,12 +78,16 @@ def classify(rank: int | None, covered: float, neighbour: float | None) -> str:
 
 
 def main() -> int:
-    cases = [c for c in load_cases(config.EVAL_PATH.parent / "heldout.jsonl") if not c.expect_none]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", type=Path, default=config.EVAL_PATH.parent / "heldout.jsonl")
+    parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    args = parser.parse_args()
+    cases = [c for c in load_cases(args.cases) if not c.expect_none]
     embedder = FastEmbedEmbedder(model_name=config.EMBEDDING_MODEL)
     model_id = embedder.model_id
     counts: dict[str, int] = {}
     rows = []
-    with CorpusStore(config.STATE_PATH) as corpus:
+    with CorpusStore(args.state) as corpus:
         for case in cases:
             matches = hybrid_search(
                 corpus, embedder, case.question, limit=10, use_graph=True

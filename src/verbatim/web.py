@@ -1,44 +1,43 @@
-"""An HTTP front end onto the corpus, and a page that uses it.
+"""HTTP API and web page over the corpus, calling the same functions as the CLI.
 
-A third front end, alongside the CLI and the MCP server, onto the same tools.
-Nothing here searches, resolves or cites: it translates HTTP into the calls
-that already exist, so behaviour cannot diverge between the three.
-
-The page is served from this module rather than a build directory. It is one
-file with no dependencies, no bundler and no external requests, because the
-project runs offline once the corpus is built and a page that reaches a CDN
-would quietly undo that.
+The page is one self-contained HTML file that makes no external requests.
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import json
+from pathlib import Path
 import queue
 import threading
-from pathlib import Path
 from typing import Any
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from verbatim import config
 from verbatim.answers import (
     SYSTEM_PROMPT,
     Answer,
+    OllamaCompletion,
+    OllamaToolCaller,
     answer_from_payload,
     build_prompt,
     parse_line_protocol,
     subject_check,
 )
+from verbatim.chunking import chunker_fingerprint
 from verbatim.citations import render_locator
 from verbatim.conversation import Turn, standalone_question
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
+from verbatim.orchestrator import orchestrate, work_section
+from verbatim.report import render_markdown
 from verbatim.retrieval import hybrid_search
 from verbatim.runs import last_run_per_command, recent_runs
 
 MAX_LIMIT = 50
-# A review is minutes of generation per section, so the ceiling is low on
-# purpose: this endpoint is the most expensive thing the server can be asked
-# to do, and the planner is told to write three to five sections anyway.
+# Reviews are the costliest request, so the ceiling is low.
 MAX_SECTIONS = 6
 
 
@@ -54,9 +53,7 @@ def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
         "text": section.answer.text,
         "declined": section.answer.declined,
         "evidence": list(section.evidence_lines),
-        # The whole citation, as an answer sends it: the page draws both with
-        # one renderer, and four hand-picked fields left every review source
-        # reading "page undefined", with no quote and no authors.
+        # The full citation, so the page renders review and answer sources alike.
         "citations": [citation.to_dict() for citation in section.answer.citations],
         "rejected": len(section.answer.rejected),
         "shape": entry.shape,
@@ -76,10 +73,7 @@ def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
 
 
 def _usage_totals(*models: Any) -> tuple[int, int, int, float] | None:
-    """A snapshot of what these clients have counted so far.
-
-    None when nothing counts, which is every scripted stand-in in the tests.
-    """
+    """What these clients have counted so far, or None if none counts."""
     counted = [getattr(model, "usage", None) for model in models]
     present = [usage for usage in counted if usage is not None]
     if not present:
@@ -95,12 +89,7 @@ def _usage_totals(*models: Any) -> tuple[int, int, int, float] | None:
 def _cost_since(
     before: tuple[int, int, int, float] | None, *models: Any
 ) -> str:
-    """What this run cost, as the difference from a snapshot.
-
-    A served client lives as long as the process, so its totals are the
-    server's lifetime rather than this review's - which is what the footer
-    was reporting.
-    """
+    """This run's cost, as the difference from a snapshot; served clients count for the whole process."""
     after = _usage_totals(*models)
     if before is None or after is None:
         return "cost not reported"
@@ -112,11 +101,7 @@ def _cost_since(
 
 
 def _turns(history: str | None) -> list[Turn]:
-    """Read the client's conversation, ignoring anything malformed.
-
-    The history is a convenience for retrieval, so a client that sends
-    nonsense gets a single-turn answer rather than an error.
-    """
+    """Read the client's conversation; anything malformed means no history."""
     if not history:
         return []
     try:
@@ -135,11 +120,7 @@ def _turns(history: str | None) -> list[Turn]:
 
 
 def match_to_dict(match: ChunkMatch) -> dict[str, Any]:
-    """Render one hit with everything needed to check it.
-
-    The locator, licence and source URL travel with the passage: a result the
-    reader cannot trace back is the failure mode this project exists to avoid.
-    """
+    """Render one hit with its locator, licence and source URL, so it can be checked."""
     chunk = match.chunk
     return {
         "chunk_id": chunk.chunk_id,
@@ -162,37 +143,24 @@ def create_app(
     encoder: Any = None,
     tool_caller: Any = None,
 ) -> Any:
-    """Build the application. Kept a factory so tests can point it at a fixture.
+    """Build the application; tests inject `completion` and `encoder`.
 
-    `completion` is the answering model and `encoder` the embedder; tests
-    inject scripted ones, so the suite never loads ONNX weights or needs
-    Ollama running. By default Ollama is constructed lazily on the first
-    question, so serving the search page never requires a model at all.
+    Models load lazily, so serving the search page never needs one.
     """
-    from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import HTMLResponse, StreamingResponse
 
     database = state or config.STATE_PATH
     model_name = embedding_model or config.EMBEDDING_MODEL
     resources: dict[str, Any] = {}
-    # The lazily built model and embedder are shared by every request thread
-    # and by the review worker, and building one takes seconds; without this
-    # two first callers can build two and race inside the ONNX loader.
+    # Guards the lazily built models, which request threads share.
     building = threading.Lock()
-    # A SQLite connection may only be used by the thread that opened it, and
-    # FastAPI serves synchronous endpoints from a pool, so consecutive requests
-    # arrive on different threads. One shared connection therefore fails as
-    # soon as a second thread is used - which is intermittent, and looked like
-    # a dropped connection in the browser. Each thread gets its own instead;
-    # the pool is small and long-lived, so this is a handful of readers.
+    # SQLite connections are per thread, and FastAPI serves requests from a
+    # thread pool, so each thread opens its own.
     stores = threading.local()
 
     @asynccontextmanager
     async def lifespan(_: Any) -> Any:
         yield
-        # Only this thread's connection can be closed from here, and the rest
-        # are released when the process exits. Closing another thread's is the
-        # same error this arrangement exists to avoid.
+        # Only this thread's connection can be closed here; the rest close at exit.
         store = getattr(stores, "corpus", None)
         if store is not None:
             store.close()
@@ -224,32 +192,22 @@ def create_app(
                 if completion is not None:
                     resources["completion"] = completion
                 else:
-                    from verbatim.answers import OllamaCompletion
-
                     resources["completion"] = OllamaCompletion(config.OLLAMA_MODEL)
             return resources["completion"]
 
     def routing() -> Any:
-        """The tool-choosing model the orchestrator's last rung needs.
-
-        Without one that rung retrieves nothing and the ladder's escalation
-        stops a step early, which is how it shipped: the route built an
-        orchestrator with no caller, so every streamed review had a dead rung.
-        """
+        """The tool-choosing model for the orchestrator's last rung."""
         with building:
             if "caller" not in resources:
                 if tool_caller is not None:
                     resources["caller"] = tool_caller
                 elif completion is not None:
-                    # An injected model is the whole backend for this app, so
-                    # a caller is not built behind its back: the suite must
-                    # not reach Ollama, and it may itself choose tools.
+                    # An injected model is the whole backend: never build an
+                    # Ollama caller behind it.
                     resources["caller"] = (
                         completion if hasattr(completion, "choose_tool") else None
                     )
                 else:
-                    from verbatim.answers import OllamaToolCaller
-
                     resources["caller"] = OllamaToolCaller(config.OLLAMA_MODEL)
             return resources["caller"]
 
@@ -259,8 +217,7 @@ def create_app(
 
     @app.get("/api/stats")
     def stats() -> dict[str, int]:
-        # The model is named, not loaded: the page asks for this on every visit
-        # and ONNX startup costs seconds.
+        # The model is named, not loaded, so this stays fast.
         return corpus().pipeline_stats(_fingerprint(), embedder().model_id)
 
     @app.get("/api/search")
@@ -276,9 +233,7 @@ def create_app(
             matches = hybrid_search(
                 corpus(), embedder(), q, limit=limit, arxiv_id=arxiv_id,
                 max_per_paper=3 if arxiv_id is None else None,
-                # The default every other front end runs. This route alone
-                # searched without it, so a definitional question got a
-                # different answer here than from the CLI or MCP.
+                # The default graph leg, as in every other front end.
                 use_graph=True,
             )
         return {
@@ -291,10 +246,7 @@ def create_app(
     def health() -> dict[str, Any]:
         """Whether this corpus is usable, and what its recent runs did.
 
-        Deliberately more than a 200: an empty corpus and a corpus whose last
-        ingest failed both serve pages perfectly well, and both are the thing
-        a check is asking about. The rates come from the run ledger rather
-        than being recomputed, so they describe what actually happened.
+        More than a 200: an empty corpus or a failed ingest still serves pages.
         """
         store = corpus()
         counts = store.pipeline_stats(_fingerprint(), embedder().model_id)
@@ -330,9 +282,7 @@ def create_app(
                 "runs": len(answered),
                 "citations_verified": cited,
                 "citations_rejected": refused,
-                # The share of citations a model produced that did not survive
-                # checking. It is a property of the model, not a fault: the
-                # check exists because models paraphrase.
+                # Share of the model's citations that failed verification.
                 "rejection_rate": round(refused / (cited + refused), 3) if cited + refused else None,
             },
         }
@@ -350,33 +300,21 @@ def create_app(
             ),
         ),
     ) -> Any:
-        """Write a sectioned review, streaming each section as it lands.
+        """Write a sectioned review, streaming each section as it is written.
 
-        A review is minutes of generation, so it streams for the same reason
-        an answer does. The events are the ask route's vocabulary extended by
-        one: `working` when a section starts, `section` when it is written and
-        checked, then `report` carrying the assembled markdown and the ledger,
-        then `done`.
-
-        The orchestration runs on a thread of its own with its own corpus
-        connection, and reaches this generator through a queue. It cannot run
-        inline: the work is a blocking loop and the events have to leave the
-        generator while it is still going.
+        Events: `working` when a section starts, `section` when it is checked,
+        `report` with the markdown and ledger, then `done`. The work runs on
+        its own thread and corpus connection, feeding the stream through a queue.
         """
-        from verbatim.orchestrator import orchestrate
-        from verbatim.report import render_markdown
-
         events: queue.Queue = queue.Queue()
         model = answering()
         encoder_for_run = embedder()
         caller = routing()
-        # This review's cost, not the server's since it started: usage
-        # accumulates on a client that lives as long as the process.
+        # This review's cost, not the server's lifetime total.
         before = _usage_totals(model, caller)
 
         def run() -> None:
-            # Its own store: this runs on a thread that has none, and a
-            # connection may only be used where it was opened.
+            # Its own connection: this runs on a new thread.
             try:
                 with CorpusStore(database) as own:
                     built, ledger = orchestrate(
@@ -403,17 +341,12 @@ def create_app(
                             "markdown": render_markdown(built, ledger=ledger),
                             "ledger_markdown": ledger.render_markdown(),
                             "escalations": ledger.escalations,
-                            # What each section actually came to. The count of
-                            # escalations alone cannot say this: a section can
-                            # be a gap on its first rung, having escalated
-                            # nowhere.
+                            # Each section's outcome; escalations alone cannot show it.
                             "outcomes": [entry.outcome for entry in ledger.sections],
                         },
                     ))
-            # Deliberately broad: the sentinel below ends the stream whatever
-            # happens, so an exception this did not name would close the
-            # stream with a `done` event and present a half-written review as
-            # a finished one.
+            # Broad on purpose: otherwise a failure would end the stream with
+            # `done` and a half-written review would look finished.
             except Exception as error:  # noqa: BLE001 - see above
                 events.put(("failed", {"message": f"{type(error).__name__}: {error}"}))
             finally:
@@ -444,19 +377,11 @@ def create_app(
         return found.to_dict()
 
     def _deep_answer(asked: str, original: str) -> Any:
-        """Answer one question by climbing the ladder, streaming each rung.
+        """Answer by climbing the ladder, streaming each rung rather than tokens.
 
-        Rungs rather than tokens: the ladder may write an answer, find no
-        citation survived, and retry - and a draft shown to a reader and then
-        withdrawn is worse than a slower page. So this streams what is being
-        *tried*, and the answer only once a rung is accepted.
-
-        The same worker-thread-and-queue shape as `/api/report`, and for the
-        same reason: the loop blocks, the events have to leave while it runs,
-        and a SQLite connection may only be used on the thread that opened it.
+        A draft that a retry replaces must never be shown, so the answer is sent
+        only once a rung is accepted. Runs on its own thread, as `/api/report` does.
         """
-        from verbatim.orchestrator import work_section
-
         events: queue.Queue = queue.Queue()
         model = answering()
         encoder_for_run = embedder()
@@ -504,17 +429,12 @@ def create_app(
                                 None if section.subject_closeness is None
                                 else round(section.subject_closeness, 3)
                             ),
-                            # The ladder already retried on a low subject
-                            # score, so the accepted answer is the best it
-                            # found. Reported, never warned about: warning
-                            # after escalating says the machine failed at
-                            # something it in fact did.
+                            # The ladder already retried on a low subject score,
+                            # so the accepted answer is not warned about.
                             "warn": False,
                         },
                     ))
-            # Broad on purpose: the sentinel below ends the stream whatever
-            # happens, so an unnamed exception would close with a normal
-            # `done` and present nothing as a finished answer.
+            # Broad on purpose, as in `/api/report`.
             except Exception as error:  # noqa: BLE001 - see above
                 events.put(("failed", {"message": str(error)}))
             finally:
@@ -562,27 +482,13 @@ def create_app(
     ) -> Any:
         """Answer a question as a stream of server-sent events.
 
-        A local model takes twenty seconds to write an answer, and a silent
-        page for twenty seconds reads as a broken one. The draft streams as
-        the model writes it; verification then runs on the finished reply
-        exactly as it does everywhere else, and the final `answer` event
-        replaces the draft with the verified text and its citations. Nothing
-        is accepted differently for having been streamed.
-
-        Retrieval happens here, before the stream begins, because SQLite
-        connections belong to the thread that made them and the streaming
-        generator may run on another.
-
-        A follow-up is resolved against `history` into a question that stands
-        alone, and that resolved question is what retrieval runs on and what
-        the answer is written to - as in deep mode, and shown to the reader.
-        The history itself never reaches the model that writes the answer:
-        that model may state only what a retrieved passage supports, and prose
-        from an earlier turn cannot be checked against any paper.
+        The draft streams as the model writes; the final `answer` event replaces
+        it with the verified text and citations. A follow-up is first resolved
+        against `history` into a standalone question, shown to the reader; the
+        history never reaches the model that writes the answer.
         """
         if deep and arxiv_id is not None:
-            # Refused rather than ignored, as the CLI refuses it: each rung of
-            # the ladder sets its own retrieval, so the scope could not hold.
+            # Refused rather than ignored, as in the CLI.
             raise HTTPException(
                 status_code=400,
                 detail="arxiv_id has no effect with deep: each rung of the "
@@ -605,8 +511,7 @@ def create_app(
 
         def events() -> Any:
             if asked != q:
-                # Shown because the reader should be able to see, and dispute,
-                # the question that was actually looked up.
+                # Show the question actually looked up, so the reader can dispute it.
                 yield _event("resolved", {"question": asked})
             yield _event(
                 "passages",
@@ -643,14 +548,9 @@ def create_app(
                     raise RuntimeError("The model did not answer in the expected format.")
                 answer = answer_from_payload(asked, matches, payload, papers)
                 yield _event("answer", answer.to_dict())
-                # After the answer, not before: the check costs a model call,
-                # and the reader should not wait on a warning that usually
-                # does not fire.
+                # After the answer: the check costs a model call and rarely warns.
                 subject, closeness = subject_check(answering(), embedder(), asked, matches)
-                # A model that named no subject leaves nothing to report. The
-                # event is still sent, so the page can stop waiting for it,
-                # but it never carries a warning built on a measurement that
-                # was not taken.
+                # Always sent, so the page stops waiting; no warning without a subject.
                 yield _event(
                     "subject",
                     {
@@ -676,8 +576,6 @@ def create_app(
 
 
 def _fingerprint() -> str:
-    from verbatim.chunking import chunker_fingerprint
-
     return chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
 
 
@@ -688,11 +586,7 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8000,
 ) -> None:
-    """Run the service. Bound to the loopback address by default.
-
-    The corpus is 26 GB of other people's papers under mixed licences, so it is
-    not served to the network unless someone says so explicitly.
-    """
+    """Run the service, bound to loopback unless `host` says otherwise."""
     import uvicorn
 
     uvicorn.run(create_app(state, embedding_model), host=host, port=port, log_level="info")
@@ -953,8 +847,7 @@ function show(tab) {
 for (const tab of Object.keys(PANELS)) $(tab).onclick = () => show(tab);
 
 // -- answers ----------------------------------------------------------
-// Markers point at the sources below, and a claim whose quote failed the
-// check says so rather than looking like a citation.
+// Markers point at the sources below; a failed quote says so.
 function renderAnswer(text, turn) {
   const marked = escapeHtml(text)
     .replace(/\\[unverified\\]/g, '<span class="unverified" title="this quote could not be checked">unverified</span>')
@@ -963,8 +856,7 @@ function renderAnswer(text, turn) {
     .split(/\\n\\s*\\n/)
     .map((para) => {
       const lines = para.split(/\\n/).filter((line) => line.trim());
-      // A catalogue listing - what a question about what is new is answered
-      // with - is rows, one per line, and has to read as rows.
+      // A catalogue listing (recency) is shown as rows.
       if (lines.length && lines.every((line) => /^\\s*- /.test(line))) {
         return "<ul>" + lines.map((line) => "<li>" + line.replace(/^\\s*- /, "") + "</li>").join("") + "</ul>";
       }
@@ -980,8 +872,7 @@ function whereIn(citation) {
   return heading ? heading : "section " + citation.page_number;
 }
 
-// Surnames, and "et al." only past three: how the CLI's bibliography names
-// them, so a source reads the same wherever it is shown.
+// Surnames, with "et al." past three, as in the CLI's bibliography.
 function formatAuthors(authors) {
   const surname = (name) => name.trim().split(/\\s+/).pop();
   if (authors.length > 3) return surname(authors[0]) + " et al.";
@@ -1004,8 +895,7 @@ function renderSources(citations, turn) {
   return '<div class="sources"><h3>Sources</h3>' + rows.join("") + "</div>";
 }
 
-// Plain words for the retrieval strategies, so the page does not ask the
-// reader to know what "hybrid" or "titles" mean.
+// Plain words for the retrieval strategies.
 const PLAIN = {
   hybrid: "the usual search", titles: "paper titles", compare: "a comparison search",
   agent: "letting the model pick the tool",
@@ -1028,14 +918,12 @@ function howBox(lines) {
 let asking = null;
 let thread = [];
 let turns = 0;
-// Set when you edit how a follow-up was read: that question is sent as
-// written, with no history, so nothing rewrites it a second time.
+// Set when a follow-up's reading is edited: that question is sent as written.
 let exact = false;
 const HINT = $("askhint").textContent;
 
 function resetThread() {
-  // An answer still arriving belongs to the conversation being thrown away.
-  // Left open, it landed in the new one as its first turn.
+  // Close an answer still arriving, or it would land in the new conversation.
   if (asking) {
     asking.close();
     asking = null;
@@ -1079,8 +967,7 @@ function runAsk(event) {
   const history = thread.length && !exact
     ? "&history=" + encodeURIComponent(JSON.stringify(thread))
     : "";
-  // "Asked exactly as written" described this one question; the next is a
-  // follow-up again.
+  // "Asked exactly as written" applied to one question only.
   exact = false;
   $("askhint").textContent = HINT;
   const deep = $("askdeep").checked;
@@ -1089,8 +976,7 @@ function runAsk(event) {
   );
 
   asking.addEventListener("resolved", (e) => {
-    // The rewrite is one model call and the single point of failure for a
-    // follow-up, so it is shown and can be corrected rather than guessed at.
+    // The rewrite is shown and can be corrected, since a follow-up depends on it.
     const readAs = JSON.parse(e.data).question;
     resolved.hidden = false;
     resolved.replaceChildren(document.createTextNode("Read as: " + readAs + " · "));

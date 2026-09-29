@@ -3,9 +3,13 @@ from hashlib import sha256
 
 import pytest
 
-from verbatim.chunking import chunk_text, extract_pdf_chunks
+from verbatim.chunking import chunk_page, extract_pdf_chunks
 from verbatim.downloads import DownloadedPaper
 from verbatim.storage import save_chunks
+
+
+def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
+    return [span.text for span in chunk_page(text, chunk_size=chunk_size, overlap=overlap)]
 
 
 def download(pdf_path: Path) -> DownloadedPaper:
@@ -189,9 +193,9 @@ def test_a_heading_continues_onto_the_next_page() -> None:
 
 
 def test_markdown_emphasis_is_stripped_from_text_and_headings() -> None:
-    from verbatim.chunking import parse_markdown_sections, strip_markdown
+    from verbatim.chunking import clean_markdown_text, parse_markdown_sections
 
-    assert strip_markdown("**Bold** and _italic_ and `code`") == "Bold and italic and code"
+    assert clean_markdown_text("**Bold** and _italic_ and `code`") == "Bold and italic and code"
     sections, _ = parse_markdown_sections("## **3 Results**\n\nWe found **flux**.", [])
     assert sections[0].path == ("3 Results",)
     assert sections[0].text == "We found flux."
@@ -228,12 +232,7 @@ def test_one_unencodable_paper_does_not_discard_a_whole_chunking_batch(tmp_path:
 
 
 def test_layout_extraction_is_abandoned_when_it_will_not_finish(tmp_path: Path) -> None:
-    """One paper here pinned a core for 46 minutes without returning.
-
-    It is C code with no internal limit, so a thread could not be abandoned
-    and a signal would not interrupt the call. Only a killable process bounds
-    it, and without that bound one file blocks the whole ingest.
-    """
+    """Layout extraction that never returns is abandoned at the timeout."""
     from verbatim.chunking import ExtractionTimeout, extract_pages_from_pdf
 
     pdf = tmp_path / "slow.pdf"

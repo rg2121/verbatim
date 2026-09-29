@@ -11,14 +11,9 @@ from verbatim.corpus import pack_vector
 
 VECTOR_TABLE = "vec_chunks"
 PAPER_VECTOR_TABLE = "vec_papers"
-# Filters live in the index as metadata columns rather than being applied by
-# passing chunk ids into the query: SQLite caps a statement at 32766 variables,
-# which a body-only filter would exceed at roughly 500 papers.
-VECTOR_COLUMNS = ("chunk_id", "arxiv_id", "kind", "embedding")
-# Which model's vectors each index currently holds. A vec0 table stores no
-# such thing, and without it an index is only comparable to `embeddings` by
-# counting rows - which cannot tell one model's vectors from another's of the
-# same width.
+# Filters are metadata columns inside the index; passing chunk ids into the
+# query instead would exceed SQLite's variable limit.
+# Which model and corpus generation each index holds; a vec0 table records neither.
 INDEX_STATE_TABLE = "vector_index_state"
 
 
@@ -28,11 +23,6 @@ def _ensure_state_table(connection: sqlite3.Connection) -> None:
             index_name TEXT PRIMARY KEY, model_id TEXT NOT NULL,
             generation INTEGER NOT NULL DEFAULT 0)"""
     )
-    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({INDEX_STATE_TABLE})")}
-    if "generation" not in columns:  # a state table written before this existed
-        connection.execute(
-            f"ALTER TABLE {INDEX_STATE_TABLE} ADD COLUMN generation INTEGER NOT NULL DEFAULT 0"
-        )
 
 
 def remember_model(
@@ -68,7 +58,7 @@ def _remembered(
             f"SELECT model_id, generation FROM {INDEX_STATE_TABLE} WHERE index_name = ?",
             (index_name,),
         ).fetchone()
-    except sqlite3.OperationalError:  # the table predates this record
+    except sqlite3.OperationalError:  # no index has been recorded yet
         return None, None
     return (None, None) if row is None else (str(row[0]), int(row[1]))
 
@@ -82,11 +72,7 @@ class IndexSync:
 
 
 class VectorIndex(Protocol):
-    """A nearest-neighbour index over chunk vectors.
-
-    Kept deliberately small: sqlite-vec is brute force, so a corpus far past a
-    few million vectors will want a different implementation behind this.
-    """
+    """A nearest-neighbour index over chunk vectors."""
 
     def count(self) -> int: ...
 
@@ -104,7 +90,6 @@ class VectorIndex(Protocol):
         *,
         limit: int,
         arxiv_id: str | None = None,
-        kind: str | None = None,
         exclude_kind: str | None = None,
     ) -> list[tuple[str, float]]: ...
 
@@ -115,41 +100,17 @@ def ensure_current(
     model_id: str,
     generation: int,
 ) -> bool:
-    """Bring the index in line with the stored embeddings, cheaply.
+    """Bring the index in line with the stored embeddings; returns whether it changed.
 
-    Identity is checked before size. `embeddings` is keyed by
-    (chunk_id, model_id) so two models' vectors coexist there, while the index
-    holds one set with no record of whose - and a count comparison cannot tell
-    them apart when the widths match, which they do for the variants this
-    project actually uses: `bge-small` and `bge-small+context` differ only in
-    what was embedded. Searching one model's index with another's query vector
-    returns confident nonsense and raises nothing, so a mismatch rebuilds.
-
-    An index that has never recorded a model is rebuilt once for the same
-    reason: it cannot be trusted to hold what the caller is about to ask for.
-
-    Past that, a count comparison is the fast path, so a search over an
-    up-to-date index costs one COUNT rather than two set-difference queries. On
-    a mismatch the index is synced incrementally, not rebuilt, so the cost
-    tracks what changed.
-
-    The count is the third check rather than the only one, and the two ahead of
-    it cover what it cannot see. Swapping equal numbers of vectors used to be
-    invisible here; it is now caught by the generation, because every chunk
-    write moves the corpus on. What remains outside all three is a vector
-    changed in place under the same model and generation, which nothing in this
-    pipeline does - `index --rebuild` is there for that and for any other
-    disagreement worth forcing.
+    A different model rebuilds it: same-width vectors from another model would
+    silently return nonsense. A different generation (chunks rewritten, perhaps
+    with new ids but the same count) or a count mismatch syncs it. An index that
+    is already current costs one COUNT.
     """
     if index.indexed_model() != model_id:
         index.rebuild(model_id, generation)
         return True
     if index.indexed_generation() != generation:
-        # Chunks were rewritten since this index was built. Ids are derived
-        # from the source checksum, so a paper whose source was replaced has
-        # entirely new ids and the same count - which the comparison below
-        # reads as up to date while every one of those passages has silently
-        # dropped out of vector search. Measured: a search returned 0 of 1.
         index.sync(model_id, generation)
         return True
     if index.count() == corpus_vectors:
@@ -159,13 +120,7 @@ def ensure_current(
 
 
 class SqliteVecIndex:
-    """sqlite-vec index living in the same file as the rest of the corpus.
-
-    Measured on this machine: 455,000 vectors of 384 dimensions answer a k=50
-    query in about 94 ms, filtered or not, in a 728 MB database. That covers a
-    corpus of roughly five thousand papers with room to spare, which is why
-    there is no separate vector server to run.
-    """
+    """sqlite-vec index in the corpus file; k=50 over 455,000 vectors takes about 94 ms."""
 
     def __init__(self, connection: sqlite3.Connection, dimensions: int) -> None:
         self.connection = connection
@@ -183,13 +138,7 @@ class SqliteVecIndex:
         return remembered_generation(self.connection, VECTOR_TABLE)
 
     def sync(self, model_id: str, generation: int | None = None) -> IndexSync:
-        """Add vectors the index is missing and drop ones it should not hold.
-
-        Work scales with what changed rather than with corpus size, which is
-        what keeps adding a paper cheap as the corpus grows: measured over
-        455,000 vectors, adding one paper's 91 chunks took 0.38s against 2.9s
-        to rebuild everything.
-        """
+        """Add the vectors the index is missing and drop the ones it should not hold."""
         with self.connection:
             added = self.connection.execute(
                 f"""
@@ -215,12 +164,7 @@ class SqliteVecIndex:
         return IndexSync(added=max(added, 0), removed=max(removed, 0))
 
     def rebuild(self, model_id: str, generation: int | None = None) -> int:
-        """Discard the index and rebuild it from scratch.
-
-        Only needed when the index may disagree with `embeddings` in a way the
-        incremental sync cannot see, such as after changing how metadata is
-        derived.
-        """
+        """Discard the index and rebuild it from `embeddings`."""
         with self.connection:
             self.connection.execute(f"DELETE FROM {VECTOR_TABLE}")
         return self.sync(model_id, generation).added
@@ -231,15 +175,11 @@ class SqliteVecIndex:
         *,
         limit: int,
         arxiv_id: str | None = None,
-        kind: str | None = None,
         exclude_kind: str | None = None,
     ) -> list[tuple[str, float]]:
-        """Return (chunk_id, distance) nearest first; smaller distance is closer.
+        """Return (chunk_id, distance), nearest first, filtering inside the KNN query.
 
-        Filters are applied inside the KNN query, so a restricted search costs
-        the same as an unrestricted one and stays exact. `exclude_kind` is
-        what retrieval uses: it names the one kind to keep out, so a kind
-        added later is searched rather than silently dropped.
+        `exclude_kind` names the one kind to keep out, so a new kind is searched.
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -252,9 +192,6 @@ class SqliteVecIndex:
         if arxiv_id is not None:
             clauses.append("arxiv_id = ?")
             parameters.append(arxiv_id)
-        if kind is not None:
-            clauses.append("kind = ?")
-            parameters.append(kind)
         if exclude_kind is not None:
             clauses.append("kind != ?")
             parameters.append(exclude_kind)
@@ -266,20 +203,12 @@ class SqliteVecIndex:
         return [(row["chunk_id"], float(row["distance"])) for row in rows]
 
     def _create_table(self) -> None:
-        # A table built before the metadata columns existed cannot be filtered,
-        # so replace it; the index is derived and rebuilds from `embeddings`.
-        # The same applies to its width: a vec0 table declares its dimension in
-        # its schema and CREATE IF NOT EXISTS silently keeps the old one, so
-        # opening a 384-wide index at 768 used to succeed and then fail deep
-        # inside an insert with a dimension mismatch nobody could act on.
+        # A vec0 table fixes its width in its schema, and CREATE IF NOT EXISTS
+        # would keep the old one, so an index of another width is replaced.
         existing = self.connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (VECTOR_TABLE,)
         ).fetchone()
-        stale = existing is not None and (
-            not all(column in existing[0] for column in VECTOR_COLUMNS)
-            or f"float[{self.dimensions}]" not in existing[0]
-        )
-        if stale:
+        if existing is not None and f"float[{self.dimensions}]" not in existing[0]:
             self.connection.execute(f"DROP TABLE {VECTOR_TABLE}")
         self.connection.execute(
             f"""
@@ -297,12 +226,9 @@ class SqliteVecIndex:
 
 
 class SqlitePaperIndex:
-    """Nearest-neighbour index over paper abstracts, not passages.
+    """Nearest-neighbour index over paper abstracts.
 
-    Answers "which papers are about this?" rather than "which passages mention
-    this?". The distinction is the point: a passage can mention a subject in
-    passing - a pretraining-data paper quoting sample text about nuclear
-    forces - while an abstract states what the work is actually about.
+    It answers which papers are about a subject, not which passages mention it.
     """
 
     def __init__(self, connection: sqlite3.Connection, dimensions: int) -> None:
@@ -314,8 +240,7 @@ class SqlitePaperIndex:
             (PAPER_VECTOR_TABLE,),
         ).fetchone()
         if existing is not None and f"float[{dimensions}]" not in existing[0]:
-            # Same reasoning as the passage index: the width is part of the
-            # schema, and a mismatch is a rebuild rather than an error later.
+            # A different width is replaced, as for the passage index.
             self.connection.execute(f"DROP TABLE {PAPER_VECTOR_TABLE}")
         self.connection.execute(
             f"""

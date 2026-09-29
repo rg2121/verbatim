@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import time
 
 from verbatim.arxiv import FeedPage, Paper, fetch_metadata_page
-from verbatim.corpus import CorpusStore, SyncSummary
+from verbatim.corpus import CorpusStore
 
 # arXiv asks callers to leave a gap between requests; this is the default pause.
 REQUEST_DELAY = 3.0
@@ -40,12 +40,9 @@ def sync_category(
     sleep: Callable[[float], None] = time.sleep,
     on_page: Callable[[int, int], None] | None = None,
 ) -> SyncReport:
-    """Page through a category, newest first, stopping once already covered.
+    """Page through a category, most recently updated first, until the stored watermark.
 
-    Results are sorted by last-updated so a revision resurfaces as well as a
-    new paper.  Paging stops at the stored watermark, which is what makes a
-    repeat sync cost one request instead of walking the category again; `full`
-    ignores the watermark and re-walks everything.
+    `full` ignores the watermark and re-walks the category.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -71,11 +68,7 @@ def sync_category(
                 page_size=min(page_size, limit - fetched),
             )
         except (OSError, RuntimeError, ValueError) as error:
-            # Stop cleanly rather than raising: papers from earlier pages are
-            # already committed. The watermark is deliberately *not* advanced
-            # below - see the note there - because pages this run never
-            # reached hold older papers, and moving the mark past them would
-            # put them permanently behind it.
+            # Stop cleanly: earlier pages are already committed.
             stopped = f"failed after {requests} request(s): {error}"
             failed = True
             break
@@ -108,15 +101,8 @@ def sync_category(
             stopped = "exhausted the category"
             break
 
-    # A run that failed part-way records what it fetched and leaves the
-    # watermark where it was. Papers arrive newest-first, so a run that stopped
-    # early has the newest pages and not the older ones; advancing the mark to
-    # the newest paper seen would make the next run stop immediately and skip
-    # everything the failure prevented it from reaching - permanently, since
-    # the mark only moves forward. Passing None preserves the stored value,
-    # because record_sync takes the greater of the two. Re-walking the pages
-    # that did succeed costs one request each and refreshes rather than
-    # duplicates them.
+    # After a failure the watermark stays put: the pages not reached hold older
+    # papers, and moving the mark past them would skip them for good.
     corpus.record_sync(category, None if failed else newest_seen, fetched)
     return SyncReport(
         category=category,
@@ -136,6 +122,3 @@ def format_sync_report(report: SyncReport) -> str:
         f"in {report.requests} request(s); stopped after it {report.stopped_because}"
         + (f"; {report.total_available:,} exist in this category" if report.total_available else "")
     )
-
-
-__all__ = ["SyncReport", "SyncSummary", "format_sync_report", "sync_category"]

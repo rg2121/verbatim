@@ -1,11 +1,4 @@
-"""The LangGraph supervisor, and whether it agrees with the built-in one.
-
-The point of a second implementation is not that a framework is better. It is
-that two implementations behind one set of role contracts is the only thing
-that shows the contracts are a real boundary. So the test that matters is
-equivalence: given the same corpus, the same scripted model and the same
-ladder, both supervisors must reach the same section by the same route.
-"""
+"""The LangGraph supervisor, and whether it agrees with the built-in one."""
 
 from pathlib import Path
 
@@ -48,12 +41,7 @@ def both_supervisors(corpus, payloads, question, ladder):
 def test_both_supervisors_reach_the_same_section_by_the_same_route(
     tmp_path: Path,
 ) -> None:
-    """The equivalence that makes the comparison meaningful.
-
-    A first strategy whose quote cannot be verified, then one whose quote can.
-    Both must retry rather than accept, both must land on the second rung, and
-    both must keep the same answer.
-    """
+    """The equivalence that makes the comparison meaningful."""
     with flux_corpus(tmp_path) as corpus:
         chunk = list(corpus.iter_chunks())[0]
         payloads = [
@@ -125,12 +113,7 @@ def test_a_rung_that_raises_is_contained_in_the_graph_too(tmp_path: Path) -> Non
 
 
 def test_the_reported_nodes_are_the_roles(tmp_path: Path) -> None:
-    """The graph's shape is the argument for it, so it is asserted.
-
-    Retriever, writer and verifier are separate nodes rather than one step,
-    because they are separate Protocols. If they were fused the graph would
-    say nothing the `for` loop does not.
-    """
+    """The graph's shape is the argument for it, so it is asserted."""
     from verbatim.graph_supervisor import build_graph
 
     with flux_corpus(tmp_path) as corpus:
@@ -164,12 +147,7 @@ def test_a_missing_extra_says_how_to_install_it(monkeypatch, tmp_path: Path) -> 
 def test_orchestrate_can_drive_the_graph_with_every_option_it_passes(
     tmp_path: Path,
 ) -> None:
-    """`report --agents --supervisor langgraph` crashed before any section ran.
-
-    orchestrate hands every supervisor the critic's options, and the graph did
-    not accept them - a TypeError on the command the README shows. Each
-    supervisor was tested on its own, so nothing ran the two together.
-    """
+    """The graph supervisor accepts every option orchestrate passes."""
     from verbatim.orchestrator import orchestrate
 
     with flux_corpus(tmp_path) as corpus:

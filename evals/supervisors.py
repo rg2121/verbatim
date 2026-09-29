@@ -1,16 +1,8 @@
-"""The two supervisors over the same held-out questions.
+"""The built-in and LangGraph supervisors over the same held-out questions.
 
-They share every role, the ladder, the verifier and the selection rule, and
-differ only in control flow - a `for` loop against a LangGraph state machine.
-So the expected result is that they are indistinguishable, and the value of
-running it is that "indistinguishable" is then a measurement rather than an
-assumption. If they diverge, the role contracts leak somewhere and the per
-question routes below say where.
-
-Generation is not deterministic, so a single question can differ between the
-arms for reasons that have nothing to do with the supervisor. What is compared
-is therefore the distribution: how often a ladder accepts, how far it climbs,
-and what it costs.
+They differ only in control flow, so they should be indistinguishable; this
+measures it. Generation is not deterministic, so the distributions are
+compared: acceptance, rungs climbed and cost.
 """
 
 from __future__ import annotations
@@ -110,8 +102,7 @@ def main() -> int:
         a, b = column(fn)
         print(f"  {label:<22}{a:>12}{b:>12}")
 
-    # The claim is that they route identically. Non-determinism can still make
-    # one question differ, so the number that matters is how many.
+    # Non-determinism can still split a question, so count how many differ.
     by_question: dict[str, dict[str, list]] = collections.defaultdict(dict)
     for row in rows:
         by_question[row["question"]][row["supervisor"]] = row["route"]

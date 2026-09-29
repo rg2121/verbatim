@@ -1,15 +1,7 @@
-"""Rewriting a question before it reaches retrieval.
+"""Query rewriting before retrieval: model rephrasings fused by rank, and HyDE.
 
-Retrieval here fuses BM25 and vector search, and both are given the user's
-words exactly as typed. That is a weak point for two kinds of question: one
-phrased differently from the literature ("how do you stop a model memorising
-its training data" against papers that say "regularisation"), and one so short
-that it carries little signal ("entropy?").
-
-Two standard treatments, both kept behind flags and off until measured on this
-corpus, which is the same discipline the reranker and the contextual embedding
-prefix are held to. Retrieval here already puts the right passage first most
-of the time, so a change that is not measured is as likely to cost as to gain.
+Both are opt-in, for questions phrased unlike the literature or too short to
+carry much signal.
 """
 
 from __future__ import annotations
@@ -20,14 +12,12 @@ import re
 
 from verbatim.corpus import ChunkMatch
 
-# The same constant the retrieval fusion uses, for the same reason: large
-# enough that the top few ranks do not dominate.
+# Reciprocal Rank Fusion constant: the top few ranks do not dominate, and deep
+# results still fade out.
 RRF_SMOOTHING = 60
 MAX_VARIANTS = 5
-# What a model puts in front of a list item: a bullet, or a number followed by
-# "." or ")" - bolded or not - and then a space. Only that. A line can itself
-# begin with a number, and stripping every leading digit turned "4-bit
-# quantization" into "bit quantization" and "3D" into "D".
+# A bullet or list number (possibly bold) and a space. Not every leading digit:
+# "4-bit quantization" must keep its 4.
 LIST_MARKER = re.compile(r"^\s*(?:[-*•+]|\**\d+[.)]\**)\s+")
 
 REWRITE_SYSTEM = (
@@ -45,12 +35,7 @@ HYDE_SYSTEM = (
 def rewrite_query(
     complete: Callable[[str, str], str], question: str, *, variants: int = 3
 ) -> list[str]:
-    """Ask a model for alternative phrasings of a question.
-
-    The original is always kept and always first: a rewrite can drop the term
-    that actually mattered, and fusion should never be able to lose the words
-    the user chose.
-    """
+    """Alternative phrasings from a model, with the original always kept first."""
     if variants < 1:
         raise ValueError("variants must be at least 1")
     try:
@@ -62,13 +47,7 @@ def rewrite_query(
 
 
 def hypothetical_answer(complete: Callable[[str, str], str], question: str) -> str:
-    """Write the sentence a paper answering this question would contain.
-
-    Embedding an answer rather than a question puts the query in the same
-    register as the passages being searched, which is what HyDE is for. The
-    question is returned unchanged if the model gives nothing usable, so this
-    can only add signal.
-    """
+    """The sentence a paper answering this would contain (HyDE), or the question on failure."""
     try:
         reply = complete(HYDE_SYSTEM, question)
     except (RuntimeError, OSError):
@@ -80,12 +59,7 @@ def hypothetical_answer(complete: Callable[[str, str], str], question: str) -> s
 def fuse_rankings(
     rankings: Sequence[Sequence[ChunkMatch]], *, smoothing: int = RRF_SMOOTHING
 ) -> list[ChunkMatch]:
-    """Combine several rankings of the same corpus by position.
-
-    Reciprocal Rank Fusion again, for the same reason as in hybrid search: the
-    rankings come from different queries and their scores are not comparable,
-    but their positions are.
-    """
+    """Combine rankings from different queries by position (Reciprocal Rank Fusion)."""
     fused: dict[str, float] = defaultdict(float)
     best: dict[str, ChunkMatch] = {}
     for ranking in rankings:
@@ -99,12 +73,7 @@ def fuse_rankings(
 
 
 def strip_list_marker(line: str) -> str:
-    """One line of a model's list, without the bullet or number in front.
-
-    Shared by every reader of one-item-per-line replies - rewrites, plans,
-    report sections, the critic's subjects - so none of them can strip
-    differently from the others.
-    """
+    """One line of a model's list without its bullet or number; shared by every list reader."""
     return LIST_MARKER.sub("", line, count=1).strip()
 
 

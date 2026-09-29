@@ -1,10 +1,4 @@
-"""The critic: describes, then has everything it says checked.
-
-Seven attempts to make a model judge whether evidence supports an answer
-measured 0/6, and the largest model was the worst. So nothing here asks that.
-The model proposes candidates and the code decides which are real, which is
-the shape of the one check that did work - the subject check.
-"""
+"""The critic: describes, then has everything it says checked."""
 
 from verbatim.answers import Answer
 from verbatim.chunking import Chunk

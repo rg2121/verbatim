@@ -1,14 +1,7 @@
-"""Whether letting table passages back into retrieval costs anything.
+"""Whether letting table passages into retrieval costs anything.
 
-Tables have been carried as passages of their own since HTML ingest learned to
-read them (64,742 in the full corpus). They were never retrieved: the filter
-that keeps bibliographies out was written as "body only" a fortnight before a
-third kind existed, so it kept tables out too. Nobody decided that, and
-nothing measured it. This measures what letting them in does.
-
-The same held-out key, the same retrieval the `eval` table reports as the
-default (hybrid+graph, top 10), run twice - once on the code before the fix
-and once after - and compared case by case.
+The same held-out key and default retrieval (hybrid+graph, top 10), run on the
+code before and after the change and compared case by case.
 
 DECISION RULE, written before either arm ran: tables ship in the default if
 the fixed arm is not worse on held-out mrr by a two-sided sign test at
@@ -20,7 +13,7 @@ not expected to.
     uv run python evals/tables_ab.py --arm after    # on the fixed code
     uv run python evals/tables_ab.py --compare
 
-Per-case ranks go to evals/results/, which is gitignored.
+Per-case ranks go to evals/results/, which git ignores.
 """
 
 from __future__ import annotations

@@ -9,25 +9,18 @@ import re
 from verbatim.chunking import REFERENCES
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
-from verbatim.graph import anchored_matches
 from verbatim.expansion import (
+    RRF_SMOOTHING,
     dedupe_queries,
     fuse_rankings,
     hypothetical_answer,
     rewrite_query,
 )
+from verbatim.graph import anchored_matches
 from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
 
-# Standard RRF constant: large enough that the top few ranks are not dominated
-# by a single leg, small enough that deep results still fade out.
-RRF_SMOOTHING = 60
-
-# Questions that set two named things against each other. Deliberately about
-# vocabulary, not structure: "compare A and B" and "how does A differ from B"
-# announce themselves, and a parse of which words are A and which are B is not
-# needed because the title leg searches the whole question anyway. "different"
-# is only comparative with "from" - "the different approaches to X" is a
-# single-subject phrasing.
+# Questions setting two named things against each other, recognised by vocabulary.
+# "different" counts only with "from": "the different approaches to X" is one subject.
 COMPARISON_SHAPE = re.compile(
     r"\b(?:compare|comparison|contrast|versus|vs\.?|differs?|difference)\b"
     r"|\bdifferent\s+from\b",
@@ -36,14 +29,10 @@ COMPARISON_SHAPE = re.compile(
 
 
 def comparison_shaped(question: str) -> bool:
-    """Whether a question names things to set against each other.
-
-    The gate for the compound title leg, in the mould of the definitional
-    gate: the always-on title leg was measured worse on single-subject
-    questions and best-in-class on compound ones, so the shape of the question
-    decides whether it runs.
-    """
+    """Whether a question names things to set against each other; gates the title leg."""
     return COMPARISON_SHAPE.search(question) is not None
+
+
 # How much wider to search when a paper filter will discard results afterwards.
 FILTER_OVERFETCH = 8
 
@@ -59,16 +48,10 @@ def vector_search(
     index: VectorIndex | None = None,
     papers: PaperFilter | None = None,
 ) -> list[ChunkMatch]:
-    """Rank passages by embedding similarity rather than shared words.
+    """Rank passages by embedding similarity; higher scores are better.
 
-    Scores are similarity, so higher is better, matching the keyword path.
-
-    A paper filter is applied after the index returns, because the vector
-    index carries only chunk_id, arxiv_id and kind as metadata: filtering on
-    publication date or subject would mean rebuilding it with those columns.
-    The search over-fetches instead, so a narrow filter can still come back
-    with fewer than `limit` results rather than silently ranking the wrong
-    papers.
+    A paper filter is applied after the index returns, so the search over-fetches
+    and may return fewer than `limit` results.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -81,9 +64,8 @@ def vector_search(
     fetch = limit * FILTER_OVERFETCH if papers else limit
     ensure_current(index, stored, model.model_id, corpus.chunk_generation())
 
-    # Filters are pushed into the index rather than applied to a list of chunk
-    # ids: SQLite caps a statement at 32766 variables, so passing every body
-    # chunk id would fail at roughly 500 papers.
+    # Filters go into the index query; a list of chunk ids would exceed SQLite's
+    # variable limit.
     hits = index.search(
         embedder.embed_query(query),
         limit=fetch,
@@ -129,24 +111,11 @@ def hybrid_search(
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
 
-    RRF combines rankings by position rather than by score, so BM25 relevance
-    and cosine similarity — which share no scale — never have to be reconciled.
-
-    The keyword leg matches any term rather than all: requiring every word of a
-    natural-language question matches nothing, which would silently reduce
-    hybrid search to vector-only.
-
-    `use_graph` adds passages from the paper a definitional question is named
-    after, chosen by title match backed by in-corpus citations. It contributes
-    nothing to any other kind of question - that gate is what separates it
-    from `use_titles`, which runs everywhere and was measured worse overall.
-
-    `use_compare` runs the same title leg as `use_titles`, but only on
-    comparison-shaped questions ("compare A and B", "how does A differ from
-    B") - the shape that names its papers almost by title, where the leg was
-    measured best-in-class. Like the graph leg, the title leg stands down
-    whenever the caller scoped the search to one paper or filtered the
-    papers, because it names papers of its own.
+    RRF combines rankings by position, so BM25 and cosine scores never need a
+    common scale. The keyword leg matches any term. `use_graph` adds passages
+    from the paper a definitional question is named after; `use_compare` adds
+    title matches on comparison-shaped questions, `use_titles` on every
+    question. Those legs stand down when the search is scoped or filtered.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -169,10 +138,8 @@ def hybrid_search(
         papers=papers,
     )
 
-    # The title and anchor legs name papers of their own, so they stand down
-    # whenever the caller has already said which papers are allowed: a search
-    # scoped to one paper or filtered by date or category must not be handed
-    # passages from outside that scope, however well-shaped the question.
+    # The title and graph legs name papers of their own, so they stand down when
+    # the caller has restricted which papers are allowed.
     unscoped = arxiv_id is None and not papers
     titled = use_titles or (use_compare and comparison_shaped(query))
     titles = (
@@ -221,15 +188,7 @@ def title_search(
     per_paper: int = 3,
     include_references: bool = False,
 ) -> list[ChunkMatch]:
-    """Passages from the papers whose *titles* match the question.
-
-    A third kind of evidence, and the only one that can answer a definitional
-    question. "What is the Adam optimizer" is drowned in passage space - 3,152
-    papers here mention Adam and the one that defines it holds 53 passages -
-    but the paper called "Adam: A Method for Stochastic Optimization" is the
-    first title match. Within each paper the query still chooses the passages,
-    so a title match contributes evidence rather than an arbitrary excerpt.
-    """
+    """Passages from the papers whose titles match the question, chosen within each by the query."""
     matches: list[ChunkMatch] = []
     for arxiv_id, _ in corpus.search_titles(query, limit=papers):
         matches.extend(
@@ -255,15 +214,9 @@ def expanded_search(
     limit: int = 10,
     **options: object,
 ) -> list[ChunkMatch]:
-    """Hybrid search over several phrasings of the same question.
+    """Hybrid search over several phrasings, fused by rank; the original wording is always one.
 
-    Each phrasing is retrieved for separately and the rankings are fused, so a
-    passage found by more than one phrasing rises. The user's own words are
-    always among the phrasings and are never displaced.
-
-    With `hyde`, the vector leg is additionally given the sentence a paper
-    answering the question would contain, which puts the query in the register
-    of the passages rather than of the question.
+    With `hyde`, a hypothetical answer sentence is searched too.
     """
     queries = (
         rewrite_query(complete, query, variants=rewrites) if rewrites else [query]
@@ -284,11 +237,7 @@ def expanded_search(
 
 
 def cap_per_paper(matches: list[ChunkMatch], max_per_paper: int) -> list[ChunkMatch]:
-    """Keep at most N passages per paper, preserving rank order.
-
-    Without this, one verbose paper with a well-matching section fills every
-    slot and a corpus-wide question is answered from a single source.
-    """
+    """Keep at most `max_per_paper` passages per paper, preserving rank order."""
     if max_per_paper < 1:
         raise ValueError("max_per_paper must be at least 1")
     seen: dict[str, int] = defaultdict(int)
@@ -303,11 +252,7 @@ def cap_per_paper(matches: list[ChunkMatch], max_per_paper: int) -> list[ChunkMa
 
 
 def _similarity(distance: float) -> float:
-    """Map L2 distance between unit vectors to cosine similarity.
-
-    For unit-length vectors ||a-b||^2 = 2 - 2*cos, so this is exact rather than
-    a monotonic stand-in.
-    """
+    """Cosine similarity from the L2 distance between unit vectors (exact: |a-b|^2 = 2 - 2cos)."""
     return 1.0 - (distance * distance) / 2.0
 
 

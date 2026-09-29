@@ -1,24 +1,8 @@
-"""A shared evidence board: what the team has established, and what it has not.
+"""A shared evidence board for the `team` workers.
 
-The orchestrator's roles are stages in a ladder. Output flows one way, and
-nothing a role discovers changes what another role does next - which is a
-workflow, not a team. This is the state that makes the difference: workers
-append structured records, and what gets done next is read off the board
-rather than decided in advance.
-
-Two rules keep it from becoming a place to hide judgements.
-
-**Append-only, and structured.** An agent may add an `Evidence` row naming a
-chunk and a quote, or a `Claim` naming the evidence it rests on. It may not
-write prose onto the board, and it may not delete or edit what another agent
-put there. A role that can only append typed records cannot smuggle an opinion
-past the verifier, which is the same reason this project's critic describes
-and lets code decide.
-
-**Nothing here judges.** Every question the board answers - which tasks have no
-evidence, which are thinner than they asked, what has not been attempted -
-is arithmetic over the records. The board says what is missing. It never says
-whether what is present is any good.
+Workers append typed records - tasks, evidence, claims - and the coordinator
+decides what to do next from what is missing. Records are never edited or
+deleted, and the board only counts: it never judges whether evidence is good.
 """
 
 from __future__ import annotations
@@ -47,13 +31,10 @@ class Task:
 
 @dataclass(frozen=True)
 class Evidence:
-    """A passage a worker put forward, and what it was looking for.
+    """A passage a worker put forward for a task.
 
-    `stance` records what the worker was *seeking*, not what the passage
-    proves. A worker searching for limitations files what it finds as
-    `adversarial`, which means "an adversarial query returned this" and
-    nothing more. Whether the passage contradicts anything is a judgement this
-    board will not make, and the label deliberately does not imply it.
+    `stance` records what the worker was looking for, such as counter-evidence,
+    not what the passage proves.
     """
 
     evidence_id: str
@@ -122,12 +103,9 @@ class ResearchState:
         found_by: str,
         stance: str = DIRECT,
     ) -> Evidence | None:
-        """Append one passage. Returns None if this chunk is already on the board.
+        """Append one passage, or return None if the task already has this chunk.
 
-        Deduplicated by (task, chunk) because two workers searching the same
-        task will find the same passage, and a task's evidence count is used to
-        decide whether it is satisfied - counting one passage twice would
-        close a task nobody finished.
+        A duplicate would inflate the count that decides whether a task is done.
         """
         if any(
             e.task_id == task_id and e.chunk_id == chunk_id for e in self.evidence
@@ -143,16 +121,7 @@ class ResearchState:
     def add_claim(
         self, task_id: str, statement: str, evidence_ids: Sequence[str]
     ) -> Claim | None:
-        """Append a claim. Refused unless every evidence id was filed for its task.
-
-        The one place the board enforces rather than records: a claim resting
-        on an evidence id nobody filed is unfalsifiable by construction, and
-        the whole point of the board is that a statement can be traced to the
-        rows it came from. The evidence must also belong to the claim's own
-        task - a passage gathered while looking for something else is not
-        evidence for this claim. The one caller passes same-task rows; this
-        makes sure no future worker can mix them.
-        """
+        """Append a claim, or return None unless all its evidence was filed for its task."""
         known = {e.evidence_id for e in self.evidence if e.task_id == task_id}
         if not evidence_ids or not set(evidence_ids) <= known:
             return None
@@ -190,12 +159,7 @@ class ResearchState:
         return [t for t in self.tasks if t.status == OPEN]
 
     def attempted(self, task_id: str, worker: str) -> bool:
-        """Whether a worker has already been sent at this task.
-
-        Read from the decisions rather than from the evidence: a worker that
-        ran and found nothing has still been tried, and sending it again would
-        be the blind retry this project's own sources warn against.
-        """
+        """Whether a worker was already sent at this task, whatever it found."""
         return any(
             d.task_id == task_id and d.action == worker for d in self.decisions
         )

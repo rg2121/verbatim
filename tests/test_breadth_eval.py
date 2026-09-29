@@ -173,13 +173,7 @@ def test_agreement_uses_only_answers_both_raters_scored() -> None:
     assert agreed["balance"]["exact"] == pytest.approx(0.0)
 
 
-# -- blinding that can be audited, not only promised -------------------------
-#
-# The first sheet shuffled with a seed written in the code, so anyone holding
-# the repository could rebuild which arm wrote which letter. Now the seed is
-# secret, the mapping lives outside the repository, and a manifest committed
-# before scoring holds its hash - so a revealed mapping can be checked against
-# what was fixed before any score existed.
+# -- blinding that can be audited ------------------------------------------
 
 
 def test_each_blinding_draws_a_seed_nobody_can_read_from_the_code() -> None:

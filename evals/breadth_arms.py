@@ -1,21 +1,9 @@
-"""Run the three arms over the frozen breadth questions, and keep every answer.
+"""Run the three arms (baseline, ladder, team) over the frozen breadth questions.
 
-Written under evals/breadth/PROTOCOL.md. It refuses to run against a question
-file that is not committed and unchanged, because the protocol's whole claim
-is that the questions existed, exactly as they are, before any arm touched
-them.
-
-Each arm is the command as it ships: baseline is `ask`, ladder is
-`ask --deep` with its tool-choosing rung live, team is `team` with its
-defaults.
-
-Arms run interleaved - all three on one question before the next - so a model
-server that slows or rate-limits over an hour weighs on every arm alike,
-rather than on whichever arm happened to run last.
-
-Answers go to evals/results/, which is gitignored: they quote papers under
-mixed licences, and a public repository is no place for them. What gets
-committed later is scores and aggregates, never the text.
+Written under evals/breadth/PROTOCOL.md; refuses to run unless the question file
+is committed and unchanged. The arms are interleaved per question, so a slowing
+model server affects all three alike. Answers go to evals/results/, which git
+ignores because they quote papers.
 """
 
 from __future__ import annotations
@@ -26,8 +14,7 @@ import subprocess
 from pathlib import Path
 
 from verbatim import config
-from verbatim.answers import OllamaToolCaller
-from verbatim.answers import OllamaCompletion, answer_from_matches
+from verbatim.answers import OllamaCompletion, OllamaToolCaller, answer_from_matches
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.evaluation import load_cases
@@ -106,9 +93,7 @@ def main() -> int:
                             max_per_paper=config.ASK_MAX_PER_PAPER,
                         )
                         if ledger.outcome.startswith("failed"):
-                            # The ladder contains a dead model as a declined
-                            # section. Recording that as the ladder's answer
-                            # would score an outage as a result.
+                            # A dead model shows up as a declined section: an outage, not an answer.
                             raise RuntimeError(ledger.outcome)
                         answer = section.answer
                     else:

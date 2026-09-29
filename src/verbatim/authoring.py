@@ -1,25 +1,10 @@
-"""Authoring held-out evaluation cases without letting the system see them.
+"""Writes held-out evaluation questions without running retrieval on them.
 
-The development key in `evals/retrieval.jsonl` was written alongside the
-retrieval it scores, so a question that retrieved badly could be reworded
-until it did not. Its numbers cannot rule that out, and the gap is measured:
-0.869 on the development key against 0.758 held out, on the same system.
-
-So a held-out case is authored under one rule - **from the paper's title and
-abstract only, with no retrieval run against the question until the file is
-committed.** This module exists to keep that rule mechanical rather than
-remembered. It imports nothing from `retrieval` or `vectors`, and a test
-asserts that it never will: a module that cannot search cannot be tempted to
-check whether a question retrieves well before keeping it.
-
-Generating questions with a model adds one hazard hand-authoring did not
-have. A person paraphrases; a model reaches for the abstract's own words, and
-abstracts are passages in this corpus, so a question sharing a distinctive
-span with one is found by keyword search for that reason alone. Measured
-against the 88 hand-authored cases, a question shares a median run of 2 words
-with its paper's abstract and at most 6; only 4 of the 88 share 5 or more.
-Cases sharing 5 or more are therefore rejected here, which makes a generated
-set no leakier than the hand-authored one, and slightly stricter.
+A model writes each question from a paper's title and abstract only. This
+module imports nothing that can search (a test enforces it), so no question is
+kept or dropped by how well it retrieves. A question sharing a run of
+MAX_SHARED_RUN words with its abstract is rejected, because keyword search
+would find it by that phrase alone.
 """
 
 from __future__ import annotations
@@ -27,18 +12,18 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 
 from verbatim.conversation import refers_back
-from verbatim.corpus import CorpusStore, split_arxiv_version
+from verbatim.corpus import VERSION_PATTERN, CorpusStore
 from verbatim.distill import bibliographic, standalone
 
-# Set from the hand-authored key rather than chosen: see the module docstring.
+# Only 4 of the 88 hand-written questions share a 5-word run with their abstract.
 MAX_SHARED_RUN = 5
 
-# The band the original held-out papers were drawn from. A paper with a
-# handful of passages is a note, and one with hundreds is a survey whose
-# abstract promises more than any single passage delivers.
+# Short papers are notes; long ones are surveys whose abstracts promise more
+# than any one passage delivers.
 MIN_PASSAGES = 25
 MAX_PASSAGES = 90
 
@@ -82,20 +67,28 @@ def words(text: str) -> list[str]:
     return WORD.findall(text.lower())
 
 
-def longest_shared_run(question: str, abstract: str) -> int:
-    """The longest run of consecutive words the two have in common.
+def _base_id(arxiv_id: str) -> str:
+    """The identifier without its version suffix, if it has one."""
+    match = VERSION_PATTERN.fullmatch(arxiv_id)
+    return match.group("base") if match else arxiv_id
 
-    Runs rather than bag-of-words overlap: a question and an abstract about
-    the same subject necessarily share vocabulary, and penalising that would
-    reject every real question. What matters is borrowed *phrasing*, which is
-    what a keyword index rewards.
+
+def _count(counts: dict[str, int], reason: str) -> None:
+    counts[reason] = counts.get(reason, 0) + 1
+
+
+def longest_shared_run(question: str, abstract: str) -> int:
+    """The longest run of consecutive words the two share.
+
+    Runs rather than word overlap: shared vocabulary is expected, borrowed
+    phrasing is not.
     """
     asked, given = words(question), words(abstract)
     if not asked or not given:
         return 0
-    grams = lambda source, n: {
-        tuple(source[i : i + n]) for i in range(len(source) - n + 1)
-    }
+
+    def grams(source: list[str], n: int) -> set[tuple[str, ...]]:
+        return {tuple(source[i : i + n]) for i in range(len(source) - n + 1)}
     longest = 0
     for size in range(1, min(len(asked), len(given)) + 1):
         if grams(asked, size) & grams(given, size):
@@ -106,12 +99,7 @@ def longest_shared_run(question: str, abstract: str) -> int:
 
 
 def why_unusable(question: str, *abstracts: str) -> str | None:
-    """Why a generated question may not join a frozen key, or None if it may.
-
-    The rule in one place. Every authoring loop calls this, so the tests that
-    check it check what the loops actually do - they used to test a copy the
-    loops had each written out again for themselves.
-    """
+    """Why a generated question may not join a key, or None if it may."""
     if not standalone(question):
         return "does not stand alone"
     if bibliographic(question):
@@ -123,15 +111,11 @@ def why_unusable(question: str, *abstracts: str) -> str | None:
 
 
 def excluded_papers(paths: Iterable[str]) -> set[str]:
-    """Every paper already named by an existing key, so sets never overlap.
-
-    A paper scored in the development key cannot also be held out: the system
-    was tuned while looking at it.
-    """
+    """Every paper named by an existing key, so keys never overlap."""
     seen: set[str] = set()
     for path in paths:
         try:
-            text = open(path, encoding="utf-8").read()
+            text = Path(path).read_text(encoding="utf-8")
         except OSError:
             continue
         for line in text.splitlines():
@@ -141,12 +125,10 @@ def excluded_papers(paths: Iterable[str]) -> set[str]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Both shapes of key name their papers: `expect_papers` is "any of
-            # these", `require_papers` "all of these". A paper in either has
-            # been scored already and cannot also be held out.
+            # `expect_papers` means any of these, `require_papers` all of them.
             for arxiv_id in (row.get("expect_papers") or []) + (row.get("require_papers") or []):
                 seen.add(str(arxiv_id))
-                seen.add(str(arxiv_id).split("v")[0])
+                seen.add(_base_id(str(arxiv_id)))
     return seen
 
 
@@ -159,12 +141,10 @@ def candidate_papers(
     max_passages: int = MAX_PASSAGES,
     stride: int = 7,
 ) -> list[tuple[str, str, str]]:
-    """Papers to author from, chosen before any question exists.
+    """Papers to write questions from, as (arxiv_id, title, abstract).
 
-    Returned as (arxiv_id, title, abstract). The selection is a fixed stride
-    through papers grouped by primary category, so the set spans the corpus
-    rather than its largest category, and so the same call returns the same
-    papers - a frozen key that changes when it is regenerated is not frozen.
+    A fixed stride through papers grouped by primary category, so the set spans
+    the corpus and the same call always returns the same papers.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -185,7 +165,7 @@ def candidate_papers(
     by_category: dict[str, list[tuple[str, str, str]]] = {}
     for row in rows:
         arxiv_id = row["arxiv_id"]
-        if arxiv_id in exclude or arxiv_id.split("v")[0] in exclude:
+        if arxiv_id in exclude or _base_id(arxiv_id) in exclude:
             continue
         try:
             primary = (json.loads(row["categories_json"]) or ["unknown"])[0]
@@ -238,20 +218,18 @@ def author(
     if cases < 1:
         raise ValueError("cases must be at least 1")
     counts = rejected if rejected is not None else {}
-    bump = lambda reason: counts.__setitem__(reason, counts.get(reason, 0) + 1)
     written = 0
-    # Over-draw: most candidates survive, but a run that quietly returns fewer
-    # cases than asked for is the failure this project already made once.
+    # Over-draw, so rejections do not leave the set short.
     for arxiv_id, title, abstract in candidate_papers(
         corpus, exclude=exclude, limit=cases * 3, stride=stride
     ):
         question = question_for(complete, title, abstract)
         if question is None:
-            bump("no question written")
+            _count(counts, "no question written")
             continue
         reason = why_unusable(question, abstract)
         if reason is not None:
-            bump(reason)
+            _count(counts, reason)
             continue
         written += 1
         yield Case(
@@ -271,13 +249,8 @@ def render_rejections(counts: dict[str, int]) -> str:
     )
 
 
-# --- two-paper questions, for the breadth evaluation ----------------------
-#
-# Held-out cases are written from one abstract, so they reward finding one
-# paper. The team exists for questions that need several, and the only honest
-# way to test it on those is to write them under the same blind rule: titles
-# and abstracts only, no retrieval, frozen before anything runs. See
-# evals/breadth/PROTOCOL.md, which fixed all of this before any question existed.
+# --- two-paper questions for the breadth evaluation ----------------------
+# Written under the same rule, from two abstracts; see evals/breadth/PROTOCOL.md.
 
 PAIR_KINDS: tuple[str, ...] = ("comparison", "limitation", "synthesis")
 
@@ -324,9 +297,7 @@ class PairCase:
     shared_run: int
 
     def to_row(self) -> str:
-        # require_papers alone: the key format reads it as "all of these", and
-        # refuses a case that also lists expect_papers ("any of these"), since
-        # the two contradict each other.
+        # require_papers only: the key format rejects a case with both fields.
         return json.dumps({
             "question": self.question,
             "require_papers": list(self.arxiv_ids),
@@ -346,14 +317,10 @@ def candidate_pairs(
     max_passages: int = MAX_PASSAGES,
     stride: int = 3,
 ) -> list[tuple[tuple[str, str, str], tuple[str, str, str]]]:
-    """Pairs of related papers, chosen before any question exists.
+    """Pairs where one paper cites the other, chosen before any question exists.
 
-    Related by the corpus's own record: one holds the other in its
-    bibliography. That keeps "these two bear on each other" out of anyone's
-    judgement, a model's included. Each pair is ((id, title, abstract) of the
-    cited paper, the same for the citing one), taken in a fixed order at a
-    fixed stride, with no paper in two pairs - a paper reused across questions
-    would weight its subject twice.
+    Each pair is ((id, title, abstract) of the cited paper, the same for the
+    citing one), taken at a fixed stride, with no paper in two pairs.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -382,7 +349,7 @@ def candidate_pairs(
     ).fetchall()
 
     def excluded(arxiv_id: str) -> bool:
-        return arxiv_id in exclude or split_arxiv_version(arxiv_id)[0] in exclude
+        return arxiv_id in exclude or _base_id(arxiv_id) in exclude
 
     usable = [
         row for row in rows
@@ -435,7 +402,6 @@ def author_pairs(
     if per_kind < 1:
         raise ValueError("per_kind must be at least 1")
     counts = rejected if rejected is not None else {}
-    bump = lambda reason: counts.__setitem__(reason, counts.get(reason, 0) + 1)
     wanted = {kind: per_kind for kind in PAIR_KINDS}
     for first, second in candidate_pairs(
         corpus, exclude=exclude, limit=per_kind * len(PAIR_KINDS) * 4, stride=stride,
@@ -443,16 +409,15 @@ def author_pairs(
         open_kinds = [kind for kind in PAIR_KINDS if wanted[kind]]
         if not open_kinds:
             return
-        # The kind still needing the most goes next, so every kind fills at the
-        # same pace and no kind is starved by rejections in the others.
+        # Serve the kind that needs most, so all kinds fill at the same pace.
         kind = max(open_kinds, key=lambda k: wanted[k])
         question = question_for_pair(complete, kind, first, second)
         if question is None:
-            bump("no question written")
+            _count(counts, "no question written")
             continue
         reason = why_unusable(question, first[2], second[2])
         if reason is not None:
-            bump(reason)
+            _count(counts, reason)
             continue
         run = max(
             longest_shared_run(question, first[2]),
@@ -466,14 +431,8 @@ def author_pairs(
 
 
 # --- two-turn questions, for measuring follow-ups -------------------------
-#
-# Every key here is single-turn, so "did the follow-up still find the right
-# paper" has no measurement. These cases are pairs: a question that stands on
-# its own, and a follow-up that only makes sense after it. Both are answered
-# by the same paper, so retrieval for the second turn can be scored exactly as
-# the first - which is the point, since a follow-up is where retrieval loses
-# the subject. Written under the same blind rule: titles and abstracts only,
-# no retrieval, frozen before anything is scored.
+# An opening question and a follow-up that only makes sense after it, both
+# answered by the same paper, so the second turn's retrieval can be scored.
 
 CONVERSATION_SYSTEM = """You are given the title and abstract of a research paper.
 
@@ -518,17 +477,10 @@ class ConversationCase:
 
 
 def usable_follow_up(follow_up: str) -> bool:
-    """Whether a second turn genuinely depends on the first.
+    """Whether a follow-up depends on the question before it.
 
-    A follow-up that names its own subject measures nothing: retrieval would
-    find the paper from that turn alone and the conversation would never be
-    consulted. So it has to point backwards - which is the same test the web
-    page uses to decide whether to resolve a question at all, and a question
-    naming its subject fails it.
-
-    Not `standalone()`: that rejects a question pointing at *its source* ("what
-    does this paper show"), which is a different fault and says nothing about
-    whether a turn depends on the one before it.
+    It must refer back rather than name its subject, or retrieval would find
+    the paper from the follow-up alone.
     """
     return refers_back(follow_up) and not bibliographic(follow_up)
 
@@ -546,7 +498,6 @@ def author_conversations(
     if cases < 1:
         raise ValueError("cases must be at least 1")
     counts = rejected if rejected is not None else {}
-    bump = lambda reason: counts.__setitem__(reason, counts.get(reason, 0) + 1)
     written = 0
     for arxiv_id, title, abstract in candidate_papers(
         corpus, exclude=exclude, limit=cases * 3, stride=stride
@@ -555,24 +506,23 @@ def author_conversations(
         opening = FIRST_LINE.search(reply or "")
         follow_up = FOLLOW_UP_LINE.search(reply or "")
         if opening is None or follow_up is None:
-            bump("no exchange written")
+            _count(counts, "no exchange written")
             continue
         question, second = opening.group(1), follow_up.group(1)
         reason = why_unusable(question, abstract)
         if reason is not None:
-            bump(f"opening {reason}")
+            _count(counts, f"opening {reason}")
             continue
         if not usable_follow_up(second):
-            bump("follow-up does not depend on the opening")
+            _count(counts, "follow-up does not depend on the opening")
             continue
-        # The follow-up is held to the same leakage bar; standing alone is
-        # exactly what it must not do, so only the shared run applies to it.
+        # The follow-up must not stand alone, so only the phrase limit applies.
         run = max(
             longest_shared_run(question, abstract),
             longest_shared_run(second, abstract),
         )
         if run >= MAX_SHARED_RUN:
-            bump(f"borrowed a {run}-word phrase")
+            _count(counts, f"borrowed a {run}-word phrase")
             continue
         written += 1
         yield ConversationCase(

@@ -1,28 +1,12 @@
-"""Baseline retrieval against the role-based workflow, over the whole held-out set.
+"""Baseline against the orchestrator workflow over every answerable held-out question.
 
-The orchestrator has been justified by argument and by one report on one
-topic. This is the comparison that decides whether it is worth its cost: the
-same frozen held-out questions put through each arm, scored on what the
-answers turned out to be rather than on which paper retrieval named.
+  baseline   one retrieval, one answer (`ask`)
+  workflow   route by shape, verify, escalate (`ask --deep`)
+  +critic    the workflow plus the critic; off by default, measured worse at 4x cost
 
-  baseline   one retrieval, one answer - what `ask` does
-  workflow   the ladder: route by shape, verify, escalate to the next strategy
-  +critic    the same, plus the critic, which escalates an uncovered subject
-
-The arms share their first rung, so on any question the baseline answers well
-the workflow does exactly the same work and costs the same. The difference can
-only appear where the baseline fails.
-
-The first version of this ran the first 20 questions in file order and reported
-that the workflow recovered one of three baseline failures. Three is not a
-sample, and the first twenty of a file authored in batches is not a draw from
-the set. So: every answerable held-out question by default, a paired bootstrap
-interval on the difference, and a checkpoint after every single answer, because
-a three-hour run that dies at hour two must not cost three hours.
-
-The critic is not in the default arms. It was measured worse at four times the
-cost; re-running it here would treble the wall clock to re-decide a question
-that is already decided. `--arms baseline,workflow,+critic` puts it back.
+The arms share their first rung, so they can differ only where the baseline
+fails. Results carry a paired bootstrap interval and are checkpointed after
+every answer, so an interrupted run resumes.
 """
 
 from __future__ import annotations
@@ -194,9 +178,7 @@ def report(
         cells.append(f"{calls:.0f} calls {tokens / 1000:.0f}k")
     print(f"  {'cost per run':<26}" + "".join(f"{c:>{width}}" for c in cells))
 
-    # Per question, the share of runs that got a verified citation. Averaging
-    # inside the question first keeps the pairing: the arms are compared on the
-    # same questions, so the bootstrap resamples questions, not answers.
+    # Average within each question first, so the bootstrap resamples questions.
     rate: dict[str, dict[str, float]] = {arm: {} for arm in arms}
     for arm in arms:
         for question in questions:
@@ -218,8 +200,7 @@ def report(
         mean = sum(diffs) / max(len(diffs), 1)
         lo, hi, at_or_below = ci(diffs)
         wins, losses, p = sign_test(diffs)
-        # Both tests have to agree before this says anything. The bootstrap
-        # interval on its own put a verdict on the RNG seed once already.
+        # Both tests must agree before a verdict is printed.
         verdict = (
             "distinguishable" if at_or_below < 0.025 and p < 0.05
             else "NOT distinguishable"
@@ -295,9 +276,7 @@ def main() -> int:
         ]
         print(f"{len(todo)} answer(s) to generate"
               f" ({len(questions)} questions x {len(arms)} arms x {args.runs} runs)")
-        # `todo` is ordered run, then arm, then question, so each arm's work is
-        # one contiguous block and its cost is the usage across that block. A
-        # single snapshot taken up front would charge every arm for all of them.
+        # `todo` runs each arm as one contiguous block, so its cost is that block's usage.
         stopped: str | None = None
         with CorpusStore(config.STATE_PATH) as corpus, args.out.open("a") as sink:
             block: tuple[int, str] | None = None
@@ -314,10 +293,8 @@ def main() -> int:
                         key.question,
                     )
                 except (RuntimeError, OSError) as error:
-                    # The model server went away. Everything answered so far is
-                    # already flushed, so the run stops cleanly and the same
-                    # command resumes it - rather than raising a traceback that
-                    # says nothing about what survived.
+                    # The model server went away: everything so far is flushed, so stop
+                    # cleanly; the same command resumes.
                     stopped = f"{type(error).__name__}: {error}"
                     break
                 case = AnsweredCase(
@@ -332,9 +309,7 @@ def main() -> int:
                     print(f"  {done}/{len(todo)}", flush=True)
             if block is not None:
                 costs[block[1]].append(completion.usage.since(started))
-        # A resumed run generates only part of an arm, so what it spent is not
-        # that arm's cost. An arm's cost is reportable only when every one of
-        # its answers was generated here rather than read from the checkpoint.
+        # An arm's cost is reported only when all its answers were generated in this run.
         generated = {key for key in todo if key in answered}
         for arm in arms:
             if any(Key(run, arm, question) not in generated

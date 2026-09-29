@@ -26,12 +26,7 @@ ABSTRACT = (
 
 
 def test_the_authoring_module_cannot_search() -> None:
-    """The contamination rule, made structural instead of remembered.
-
-    A held-out question must be authored without knowing how it retrieves. A
-    module that cannot search cannot be tempted to check first, so the rule is
-    enforced by what this file is allowed to import rather than by discipline.
-    """
+    """The contamination rule, made structural instead of remembered."""
     source = Path("src/verbatim/authoring.py").read_text()
     imported = {
         node.module
@@ -59,12 +54,7 @@ def test_the_authoring_module_cannot_search() -> None:
 def test_longest_shared_run_counts_borrowed_phrasing(
     question: str, expected: int
 ) -> None:
-    """Runs, not vocabulary overlap.
-
-    A question about a subject necessarily shares words with an abstract about
-    that subject; penalising that would reject every real question. What a
-    keyword index rewards is borrowed *phrasing*, so that is what is counted.
-    """
+    """Runs, not vocabulary overlap."""
     assert longest_shared_run(question, ABSTRACT) == expected
 
 
@@ -77,11 +67,7 @@ def test_a_question_that_copies_the_abstract_is_refused() -> None:
 
 
 def test_every_authoring_loop_applies_the_one_rule(tmp_path) -> None:
-    """The loops each wrote the rule out again, so its tests checked a copy.
-
-    Driven through the held-out loop itself: a question that copies its
-    abstract is refused there with the reason the rule gives.
-    """
+    """Every authoring loop uses the one rule, so its tests check what runs."""
     from helpers import corpus_with
 
     corpus = corpus_with(
@@ -107,12 +93,7 @@ def test_every_authoring_loop_applies_the_one_rule(tmp_path) -> None:
 
 
 def test_the_threshold_is_the_one_the_hand_authored_set_sets() -> None:
-    """Documented so it cannot drift into an arbitrary number.
-
-    Measured over the 88 hand-authored cases: median shared run 2, max 6, and
-    4 of 88 at 5 or more. Rejecting 5-or-more makes a generated set no leakier
-    than the hand-authored one.
-    """
+    """Documented so it cannot drift into an arbitrary number."""
     assert MAX_SHARED_RUN == 5
 
 
@@ -135,6 +116,15 @@ def test_papers_already_scored_elsewhere_are_excluded(tmp_path: Path) -> None:
         "2608.00001v1", "2608.00001",
         "2608.00002v1", "2608.00002",
         "2608.00003v2", "2608.00003",
+    }
+
+
+def test_an_old_style_id_keeps_its_archive_name(tmp_path: Path) -> None:
+    key = tmp_path / "key.jsonl"
+    key.write_text('{"question": "q", "expect_papers": ["solv-int/9901001v2", "hep-th/9901002"]}\n')
+
+    assert excluded_papers([str(key)]) == {
+        "solv-int/9901001v2", "solv-int/9901001", "hep-th/9901002",
     }
 
 
@@ -215,11 +205,7 @@ def linked_corpus(tmp_path: Path, links: list[tuple[str, str]], papers: int):
 
 
 def test_pairs_are_linked_by_citation_and_never_reuse_a_paper(tmp_path: Path) -> None:
-    """Related by the corpus's own record, and no subject weighted twice.
-
-    Paper 1 cites both 2 and 3. Only one of those pairs may be kept, because a
-    paper in two questions weights its subject twice.
-    """
+    """Related by the corpus's own record, and no subject weighted twice."""
     from verbatim.authoring import candidate_pairs
 
     links = [("2608.00001v1", "2608.00002"), ("2608.00001v1", "2608.00003"),
@@ -277,12 +263,7 @@ def test_pair_questions_are_filtered_and_every_kind_fills(tmp_path: Path) -> Non
 
 
 def test_a_follow_up_case_must_depend_on_its_opening(tmp_path: Path) -> None:
-    """A follow-up that names its own subject measures nothing.
-
-    Retrieval would find the paper from that turn alone, and the conversation
-    would never be consulted - which is exactly what these cases exist to
-    test.
-    """
+    """A follow-up that names its own subject measures nothing."""
     import json
 
     from verbatim.authoring import author_conversations, usable_follow_up

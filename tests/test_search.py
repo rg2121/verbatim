@@ -259,11 +259,7 @@ def test_an_empty_filter_changes_nothing(tmp_path: Path) -> None:
 
 
 def test_search_can_be_restricted_to_a_list_of_papers(tmp_path: Path) -> None:
-    """The opposite of hiding papers: searching only within known ones.
-
-    A follow-up in a conversation has lost the subject; the papers the
-    previous turn rested on are the obvious place to look for it.
-    """
+    """The opposite of hiding papers: searching only within known ones."""
     from verbatim.corpus import PaperFilter
 
     with filtered_corpus(tmp_path) as corpus:

@@ -310,15 +310,7 @@ def test_the_plain_report_is_the_orchestrator_with_one_rung(tmp_path: Path) -> N
 def test_a_finished_section_is_handed_over_before_the_next_one_starts(
     tmp_path: Path,
 ) -> None:
-    """What makes a review streamable rather than something to wait for.
-
-    The HTTP route pushes each on_section_done into a queue the SSE generator
-    drains, so this is the property that decides whether a reader sees section
-    one while section two is still being written. Section two is held shut
-    until section one has been handed over, and refuses to proceed if it never
-    was - so an orchestrator that assembled everything first would deadlock
-    here rather than pass quietly.
-    """
+    """What makes a review streamable rather than something to wait for."""
     import threading
 
     handed_over = threading.Event()
@@ -395,13 +387,7 @@ def test_sections_are_handed_over_from_parallel_workers_too(tmp_path: Path) -> N
 def test_the_critic_escalates_a_coverage_gap_but_not_an_uncited_sentence(
     tmp_path: Path,
 ) -> None:
-    """Only one of the critic's findings is a retrieval problem.
-
-    A different strategy can find a subject no passage covers. It cannot fix a
-    sentence the writer left uncited, so that is reported to the reader rather
-    than retried - otherwise every section with a loose sentence would climb
-    the whole ladder for nothing.
-    """
+    """Only one of the critic's findings is a retrieval problem."""
     with flux_corpus(tmp_path) as corpus:
         chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
         payload = cite(chunk.chunk_id, "Magnetic flux threads the ring.")
@@ -489,9 +475,7 @@ def test_a_run_stops_when_its_budget_is_spent(tmp_path: Path) -> None:
     assert spent == [1, 2]
     stopped = ledger.sections[1].attempts[-1]
     assert "budget:" in stopped.error and "attempts reached the limit" in stopped.error
-    # The budget stops further work; it does not discard work already done, so
-    # the section the reader gets is the one that actually retrieved something
-    # rather than the placeholder that recorded the stop.
+    # The budget stops further work but keeps the attempt that retrieved something.
     assert report.sections[1].answer.text == "Nothing verifiable."
     assert report.sections[1].answer.declined is False
 
@@ -507,14 +491,7 @@ class ListingCaller:
 
 
 def test_a_recency_question_is_answered_from_the_catalogue(tmp_path: Path) -> None:
-    """The recency ladder starts with the agent because only it can list what
-    is new - and the list was being thrown away.
-
-    The agent's listing arrived as records, not passages, and the ladder kept
-    passages only: the rung wrote "no passages match", was retried, and a
-    question about what is new was answered by passage search, which has no
-    notion of new. `ask --tools` answered it from the records all along.
-    """
+    """The recency ladder starts with the agent, the only rung that can list what is new."""
     with flux_corpus(tmp_path) as corpus:
         # Empty: nothing may be generated, because a listing is not prose.
         section, ledger = work_section(

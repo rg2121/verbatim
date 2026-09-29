@@ -1,27 +1,9 @@
-"""Workers that redirect each other through the board, and code that delegates.
+"""The `team` command: workers around a shared evidence board.
 
-The ladder retries a fixed sequence of strategies. This does something
-different: workers append to a shared board, code reads the board for what is
-structurally missing, and *that* decides which worker runs next. A worker's
-finding therefore changes another worker's next action, which is the line
-between a workflow and a team.
-
-**The coordinator plans with a model and delegates without one.** Turning a
-question into tasks is writing, which models do well. Choosing what to do next
-is routing, and routing by model was measured here to lose to routing by rule -
-so the choice is made by reading the board. That also makes the loop
-reproducible: the same board always produces the same next action.
-
-**The critic is arithmetic.** It reports tasks with no evidence, tasks thinner
-than they asked to be, and tasks where no adversarial search has run. It
-does not report that evidence is weak, or that a claim rests on one paper -
-that second one was measured here firing on 5 of 14 good answers while catching
-2 of 6 bad ones, so it is not a gap worth acting on and is not raised.
-
-**A worker is never sent twice at the same task.** Blind retry reproduces the
-fault that caused the first failure; every dispatch here is a worker that has
-not yet been tried on that task, and a task whose workers are exhausted is
-abandoned rather than reattempted.
+A model plans the tasks. After that, code reads the board for what is missing
+(no evidence, too little, no adversarial search yet) and sends the matching
+worker, so one worker's findings decide the next dispatch. A worker is never
+sent twice at the same task; a task whose workers are exhausted is abandoned.
 """
 
 from __future__ import annotations
@@ -99,12 +81,8 @@ class TeamReport:
     def redirections(self) -> int:
         """Dispatches the board caused after every task had been tried once.
 
-        The number that says whether the board is doing anything. A run where
-        every task is satisfied by its first retrieval has a board that
-        recorded work rather than directing it, and this reports zero.
-
-        Abandoning a task dispatches nothing, so it is not counted. It used to
-        be, which inflated the number on exactly the runs that gave up.
+        Zero means the board recorded work rather than directing it. Abandoning
+        a task dispatches nothing and is not counted.
         """
         seen: set[str] = set()
         extra = 0
@@ -118,13 +96,7 @@ class TeamReport:
 
     @property
     def citations_from_adversarial(self) -> tuple[int, int]:
-        """Citations resting on a passage an adversarial search found, of the total.
-
-        The number that says whether the adversarial worker earns its
-        cost. It can file as many rows as it likes; what matters is whether
-        the written answer rests on any of them. Zero means the board paid for
-        a search whose results nothing used.
-        """
+        """Citations resting on a passage only the adversarial search found, and the total."""
         adversarial_chunks = {
             e.chunk_id for e in self.state.evidence if e.stance == ADVERSARIAL
         }
@@ -180,12 +152,8 @@ def inspect(state: ResearchState) -> list[Missing]:
             ))
             continue
         if not state.attempted(task.task_id, ADVERSARIAL_SEARCH):
-            # Sought, not found. An adversarial search that turns up only the
-            # passages the supporting search already filed has done its job and
-            # come back empty, and the board dedupes by passage - so asking
-            # whether adversarial rows exist would send the worker out for ever on
-            # a task where there is genuinely nothing against. The gap is
-            # closed by the attempt, which is what its name says.
+            # The attempt closes this gap, even if it found nothing new: the
+            # board dedupes by passage, so rows alone could never close it.
             missing.append(Missing(
                 task.task_id, NO_ADVERSARIAL, "an adversarial search has not run"
             ))
@@ -232,10 +200,8 @@ def adversarial_worker(
 ) -> int:
     """Search for what would undermine the task, and file it as adversarial.
 
-    It files what it finds; it does not decide that a passage contradicts
-    anything. Asking a model whether evidence undermines a claim is the
-    judgement this project has measured failing, so the model's job here ends
-    at writing adversarial queries - which is retrieval, and it is good at it.
+    The model only writes the queries; it never judges whether a passage
+    contradicts the claim.
     """
     reply = complete(ADVERSARIAL_SYSTEM, f"CLAIM: {task.objective}")
     searches = list(dict.fromkeys(
@@ -280,8 +246,7 @@ def run_team(
         worker = worker_for(gap.kind)
         task = next(t for t in state.tasks if t.task_id == gap.task_id)
         if state.attempted(gap.task_id, worker):
-            # Every worker this gap implies has already run on this task.
-            # Retrying the same one is the blind retry the ledger forbids.
+            # This worker already ran on this task; retrying it would be blind.
             state.record(ABANDON, gap.task_id, f"{gap.kind}; {worker} already ran")
             state.close(gap.task_id, ABANDONED)
             continue
@@ -306,24 +271,10 @@ def write_final(
     *,
     limit: int = 12,
 ) -> Answer:
-    """One answer to the question that was asked, from approved evidence only.
+    """One answer to the original question, from passages a task answer already cited.
 
-    The per-task answers are working notes: they answer what the coordinator
-    decided to establish, not what the reader asked. This writes the answer to
-    the original question.
-
-    "Approved" is doing real work in that sentence. The passages offered here
-    are only those a per-task answer *cited* - which means each one already
-    carried a quote through verification. Evidence a worker filed and no task
-    answer used is left out, so a passage that survived retrieval but nothing
-    else cannot reach the final text.
-
-    When nothing was approved, the answer is a declined one in words - never
-    nothing. The first version returned None there, and the three-arm run
-    caught it: on one question in thirty the team handed the reader working
-    notes and no answer, where both simpler arms always answered, even if only
-    to say nothing matched. Falling back to unapproved evidence would have
-    filled the gap by breaking the rule above, so the fix is to decline.
+    Only cited passages are offered, so every one already passed verification.
+    When there are none, the answer is an explicit decline.
     """
     approved = {
         citation.chunk_id for answer in answers.values() for citation in answer.citations
@@ -349,13 +300,7 @@ def write_final(
 
 
 def why_nothing_was_cited(state: ResearchState) -> str:
-    """Say what actually happened, not what usually happens.
-
-    "Every task came back without a verified citation" is only true when every
-    task was worked. A run that hit its step limit first has tasks no worker
-    was ever sent to, and saying they came back empty describes work that
-    never happened - which an audit caught with `--max-steps 0`.
-    """
+    """Why no passage was cited, distinguishing unfinished tasks from empty ones."""
     unfinished = state.open_tasks()
     finished = len(state.tasks) - len(unfinished)
     if not state.decisions:
@@ -378,12 +323,7 @@ def inspect_task(state: ResearchState, task: Task) -> list[Missing]:
 def write_answers(
     corpus: CorpusStore, completion: Completion, state: ResearchState
 ) -> dict[str, Answer]:
-    """Answer each task from the evidence on the board and nothing else.
-
-    The writer is handed the board's rows rebuilt as passages, so it cannot
-    reach for anything a worker did not file, and every quote still goes
-    through the same verification as the rest of the project.
-    """
+    """Answer each task only from the evidence filed for it on the board."""
     answers: dict[str, Answer] = {}
     for task in state.tasks:
         rows = state.evidence_for(task.task_id)

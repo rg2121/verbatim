@@ -1,19 +1,9 @@
-"""Running the ingest stages until there is nothing left to do.
+"""Run the ingest stages in rounds until nothing is left to do.
 
-Each stage creates work for the ones after it: growing the corpus leaves PDFs
-to download, downloading leaves renderings to fetch, fetching leaves papers to
-chunk, and chunking leaves passages to embed. Running each stage once, in
-order, therefore does not finish the job - it leaves behind whatever arrived
-after its stage had already run. Done by hand overnight, that stranded 81
-papers unchecked and 350 unchunked. (It also appeared to strand 69
-bibliographies, but those were not an ordering problem: they parse to no
-entries, and until a read was recorded as such they stayed pending however
-often the stage ran.)
-
-So the stages are run in rounds until the pending counts stop falling. Stages
-run as separate processes for two reasons: chunking is memory-hungry and is
-better bounded by a process boundary, and a stage that dies - a DNS failure
-took out a licence run here - must not take the driver down with it.
+Each stage creates work for the next, so one pass in order leaves work behind.
+Rounds repeat until the pending counts stop falling. Each stage runs as its
+own process, so a stage that fails or uses a lot of memory cannot take the
+driver down.
 """
 
 from __future__ import annotations
@@ -23,8 +13,7 @@ from dataclasses import dataclass, field
 import subprocess
 import sys
 
-# Ordered so that each stage's output is the next one's input. `index` last,
-# because it reconciles the vector index with whatever embedding produced.
+# Each stage's output is the next one's input; `index` reconciles the vectors last.
 STAGES: tuple[tuple[str, str], ...] = (
     ("download", "downloads_pending"),
     ("html", "html_pending"),
@@ -36,10 +25,9 @@ STAGES: tuple[tuple[str, str], ...] = (
 )
 # Extra arguments a stage needs to be safe inside a loop.
 STAGE_ARGUMENTS: dict[str, tuple[str, ...]] = {
-    # Reading a paper from its PDF before its rendering has been looked for is
-    # work that re-chunking will throw away.
+    # Wait for the HTML check, so a later rendering does not discard PDF chunks.
     "chunk": ("--only-checked",),
-    # Likewise, embedding a passage an older chunker produced.
+    # Skip chunks an older chunker made; re-chunking would discard their vectors.
     "embed": ("--only-current",),
 }
 MAX_ROUNDS = 8
@@ -69,12 +57,7 @@ class RoundResult:
 
 
 def run_stage(name: str, arguments: Sequence[str], *, state: str) -> tuple[bool, str]:
-    """Run one stage as its own process, and report whether it succeeded.
-
-    A stage is allowed to fail. Its failure is recorded and the driver carries
-    on, because the alternative - stopping the whole ingest because arXiv was
-    briefly unreachable - is what this exists to prevent.
-    """
+    """Run one stage as its own process; a failure is reported, not raised."""
     command = [sys.executable, "-m", "verbatim.cli", name, "--state", state, *arguments]
     try:
         finished = subprocess.run(
@@ -88,9 +71,7 @@ def run_stage(name: str, arguments: Sequence[str], *, state: str) -> tuple[bool,
         stderr = (finished.stderr or "").strip().splitlines()
         return False, stderr[-1] if stderr else detail
     if not output:
-        # Every stage prints what it did. Silence means it did not run at all,
-        # which is how a missing __main__ guard turned each stage into a no-op
-        # that reported success.
+        # Every stage prints what it did; silence means it never ran.
         return False, "stage produced no output; it may not have run"
     return True, detail
 
@@ -105,15 +86,10 @@ def run_pipeline(
     on_stage: Callable[[StageResult], None] | None = None,
     stage_arguments: dict[str, tuple[str, ...]] | None = None,
 ) -> list[RoundResult]:
-    """Run the stages in rounds until nothing is pending or nothing improves.
+    """Run the stages in rounds until nothing is pending or a round changes nothing.
 
-    Two stopping conditions, and the second matters more: some work never
-    completes. Thirty-three papers in this corpus return a truncated PDF every
-    time they are asked for, so "pending reaches zero" would loop for ever. A
-    round that changes no count is the real signal that the ingest is done.
-
-    `stage_arguments` adds to a stage's own arguments for this run - the
-    embedding model, which the pending counts are taken against too.
+    Some work never completes (a PDF that is always truncated), so a round with
+    no progress ends the run. `stage_arguments` adds arguments per stage.
     """
     if max_rounds < 1:
         raise ValueError("max_rounds must be at least 1")
@@ -124,8 +100,7 @@ def run_pipeline(
         result = RoundResult(number=number)
         for name, counter in stages:
             before = pending().get(counter, 0) if counter else 0
-            # A stage with nothing to do is skipped rather than started, so a
-            # settled corpus costs one query per stage instead of a process.
+            # A stage with nothing to do is skipped rather than started.
             if counter and before == 0:
                 continue
             arguments = (
@@ -149,7 +124,7 @@ def render_rounds(rounds: Sequence[RoundResult]) -> str:
     for round_result in rounds:
         lines.append(f"  round {round_result.number}")
         for stage in round_result.stages:
-            # Signed against the pending count, so work done reads as a fall.
+            # Negative means work was done.
             moved = stage.pending_after - stage.pending_before
             status = "ok " if stage.ok else "FAILED"
             lines.append(

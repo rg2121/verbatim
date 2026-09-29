@@ -1,29 +1,10 @@
-"""Whether an answer is supported, rather than whether it named the right paper.
+"""Answer-level evaluation: is the answer supported, not just the right paper.
 
-Retrieval is scored by asking whether an expected arXiv id appeared. That
-understates the system and always will: each held-out question names one
-acceptable paper because it was written from one abstract, so an answer drawn
-from an equally good neighbouring paper is counted a miss. The measured
-consequence is that 0.758 is a floor rather than an estimate.
-
-What is wanted instead is whether the answer the system produced actually
-answers the question, on evidence that supports it. Most of that is countable
-and needs no judgement at all: whether it declined, whether any citation
-survived verification, whether every claim-carrying sentence carries a marker,
-whether it rejected quotes along the way.
-
-The part that is not countable is whether a cited quote supports the claim it
-is attached to. Asking a model that is exactly the move this project has
-measured failing seven times - handed evidence and asked to grade it, every
-model says yes. So the judge here is never trusted on its word. Every real
-(claim, quote) pair is scored alongside a **control pair**: the same claim
-against a quote drawn from a different question's answer, which by
-construction does not support it. A judge that calls both supported has told
-us nothing, and the report says so rather than reporting the first number
-alone.
-
-That control is the whole design. It converts "we asked a model" into a
-measurement of whether asking was worth anything.
+Most of it is counted without a model: declines, verified citations, uncited
+sentences, rejected quotes. Whether a quote supports its claim needs a judge,
+so each real (claim, quote) pair is scored beside control pairs whose quote
+cannot support the claim. A judge that accepts both tells us nothing, and the
+report says so.
 """
 
 from __future__ import annotations
@@ -37,9 +18,7 @@ from verbatim.answers import Answer
 from verbatim.citations import Citation
 from verbatim.critique import MARKER, SENTENCE, uncited_sentences
 
-# Forced choice, and deliberately not a yes/no: "does this support it" invites
-# agreement, while naming which relation holds makes the unrelated case an
-# available answer rather than a refusal.
+# Forced choice rather than yes/no, so "unrelated" is an answer, not a refusal.
 SUPPORT_SYSTEM = """You are given a CLAIM and a QUOTE taken from a research paper.
 
 Say how the quote relates to the claim. Reply with exactly one word:
@@ -84,7 +63,8 @@ class AnswerScore:
     rejected_citations: int
 
     def render(self) -> str:
-        share = lambda n: f"{n}/{self.cases} ({n / max(self.cases, 1):.0%})"
+        def share(n: int) -> str:
+            return f"{n}/{self.cases} ({n / max(self.cases, 1):.0%})"
         return "\n".join([
             f"  {self.cases} questions answered",
             f"    declined outright              {share(self.declined)}",
@@ -97,14 +77,11 @@ class AnswerScore:
 
 @dataclass(frozen=True)
 class JudgeReport:
-    """How the judge scored real pairs against two kinds of mismatched one.
+    """How the judge scored real pairs against two controls.
 
-    The easy control borrows a quote from a different question's answer, which
-    is usually about another field entirely - a judge separating those has
-    shown only that it can tell physics from recommender systems. The hard
-    control borrows from the *same* answer, so the quote is on the same
-    subject, from the same paper, and still does not support this particular
-    claim. That is the adversary worth reporting.
+    The easy control borrows a quote from another question's answer. The hard
+    control borrows one from the same answer, so the subject matches but the
+    quote still does not support the claim.
     """
 
     real_pairs: int
@@ -116,11 +93,7 @@ class JudgeReport:
 
     @property
     def discriminates(self) -> bool:
-        """Whether the judge separates real pairs from the *hard* control.
-
-        Deliberately judged on the hard control where there is one: separating
-        the easy control is a low bar that a topic classifier would clear.
-        """
+        """Whether real pairs score clearly above the hard control, if there is one."""
         against = self.hard_rate if self.hard_pairs else self.control_rate
         return (self.real_rate - against) > 0.15
 
@@ -205,18 +178,8 @@ def judge_with_control(
     *,
     seed: int = 0,
 ) -> JudgeReport:
-    """Score real (claim, quote) pairs and an equal number of mismatched ones.
-
-    A control pair takes a claim from one question and a quote cited by a
-    different one, so nothing in it can be supported except by accident. The
-    two rates together say whether the judge is measuring anything; the real
-    rate alone never could.
-    """
-    # Each real pair remembers which answer it came from, so a control pair
-    # can be guaranteed to come from a different one. Without that the control
-    # can accidentally pair a claim with a quote from its own answer, which
-    # would be a real pair wearing a control's label and would flatter the
-    # judge exactly where it is being tested.
+    """Score the real (claim, quote) pairs and their mismatched controls."""
+    # Track each pair's answer so a control never borrows from its own answer.
     real: list[tuple[int, str, str]] = []
     quotes_by_case: dict[int, list[str]] = {}
     for index, case in enumerate(cases):
@@ -235,8 +198,7 @@ def judge_with_control(
         if elsewhere:
             borrowed = quotes_by_case[rng.choice(elsewhere)]
             control.append((claim, rng.choice(borrowed)))
-        # The same answer's other quotes: same subject, same papers, and still
-        # not what this claim rests on.
+        # Hard control: another quote from the same answer.
         siblings = [q for q in quotes_by_case.get(owner, []) if q != quote]
         if siblings:
             hard.append((claim, rng.choice(siblings)))

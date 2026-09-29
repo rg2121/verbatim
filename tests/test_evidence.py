@@ -1,9 +1,4 @@
-"""Saying what an answer rests on.
-
-Seven detectors have failed at the covered-but-unanswered case. These tests
-cover the alternative: not a verdict, but facts a reader can weigh - and, as
-much, the fact deliberately left unsaid.
-"""
+"""Saying what an answer rests on."""
 
 from pathlib import Path
 
@@ -42,10 +37,7 @@ def test_a_paper_the_subject_is_named_after_is_named() -> None:
 
 
 def test_the_absence_of_a_named_paper_is_left_unsaid() -> None:
-    """The negative was built and measured: it fired on all 4 no_answer cases
-    and on 13 of 19 definition-shaped answerable ones. True every time, and at
-    a 68% fire rate on good answers it is a line readers learn to skip - the
-    same reason the subject threshold was not raised to 0.79."""
+    """The negative line was measured and dropped: it fired on most good answers too."""
     evidence = Evidence(passages=6, papers=4, definitional_subject="nuclear fusion")
 
     # The fact is still available to a caller, just not printed.

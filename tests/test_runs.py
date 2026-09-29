@@ -1,9 +1,4 @@
-"""The ledger of what each command did.
-
-The corpus records what it holds; until this existed nothing recorded how it
-got there, which is the question an unattended nightly ingest raises and
-`stats` cannot answer.
-"""
+"""The ledger of what each command did."""
 
 from pathlib import Path
 

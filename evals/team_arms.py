@@ -1,21 +1,10 @@
-"""Three ways to answer the same held-out questions, and what each costs.
+"""Baseline, ladder and team over the same held-out questions, with their costs.
 
-The team is tested but its quality gain is not measured, which is the one
-criticism this project cannot wave away. So:
+  baseline   one retrieval, one answer (`ask`)
+  ladder     route by shape, verify, escalate (`ask --deep`)
+  team       tasks on a shared board with an adversarial worker (`team`)
 
-  baseline   one retrieval, one answer - what `ask` does
-  ladder     route by shape, verify, escalate - what `ask --deep` does
-  team       tasks on a shared board, an adversarial worker dispatched by what
-             the board shows missing, one answer from approved evidence
-
-Scored on the answer, not on which paper retrieval named. The team's *final*
-answer is the one compared, because that is the thing a reader gets; its
-per-task answers are working notes.
-
-The team costs more by construction - it plans, retrieves per task, searches
-adversarially and synthesises. The question is not whether it costs more but
-whether anything is bought, so cost is reported beside quality rather than
-underneath it.
+Scored on the answers (the team's final one), with cost reported beside quality.
 """
 
 from __future__ import annotations
@@ -88,9 +77,7 @@ def main() -> int:
                         answer = report.final
                         adversarial_used.append(report.citations_from_adversarial)
                 except (RuntimeError, OSError) as error:
-                    # Stop the whole run, not just this arm. Carrying on would
-                    # score the remaining arms against a dead model server and
-                    # print them as though every arm had seen every question.
+                    # Stop the whole run: later arms would be scored against a dead server.
                     stopped = f"{arm}: {error}"
                     break
                 spent = completion.usage.since(before)
@@ -125,9 +112,7 @@ def main() -> int:
         ("verified citation", lambda s: s.with_verified_citation),
         ("every claim marked", lambda s: s.fully_cited),
         ("cited expected paper", lambda s: s.cited_expected_paper),
-        # Compared on "no verified citation", because arms say nothing in
-        # different ways: the team declines explicitly, while the baseline
-        # answers in prose that cites nothing and is not marked declined.
+        # Compared on "no verified citation", since arms decline in different ways.
         ("no verified citation", lambda s: s.cases - s.with_verified_citation),
         ("  of which declined outright", lambda s: s.declined),
         ("citations rejected", lambda s: s.rejected_citations),

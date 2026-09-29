@@ -149,13 +149,7 @@ def test_a_citation_from_html_says_section_not_page() -> None:
 
 
 def test_maths_in_a_skipped_region_does_not_silence_the_rest_of_the_paper() -> None:
-    """A table of contents sits inside <nav> and routinely contains maths.
-
-    Its <math> tags used to be counted as open while their end tags were
-    discarded with the rest of the skipped region, so the parser believed it
-    was inside an equation for the remainder of the file and dropped every
-    heading and every character after it. One paper lost 89% of its text.
-    """
+    """A table of contents sits inside <nav> and routinely contains maths."""
     from verbatim.html_source import parse_html_sections
 
     sections = parse_html_sections(
@@ -179,11 +173,7 @@ def test_a_nested_element_does_not_close_a_skipped_region_early() -> None:
 
 
 def test_latex_subscripts_and_operators_survive_intact() -> None:
-    """Markdown cleaning read _ as emphasis and ate every subscript.
-
-    $g_{\\mu\\nu}$ was stored as $g{\\mu\\nu}$ - a different tensor, and not one
-    the author wrote. HTML carries no Markdown, so it must not be stripped.
-    """
+    """Markdown cleaning must not read _ in LaTeX as emphasis."""
     from verbatim.html_source import parse_html_sections
 
     (section,) = parse_html_sections(

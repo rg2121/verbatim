@@ -21,12 +21,8 @@ class Embedder(Protocol):
 
     @property
     def model_id(self) -> str:
-        """The identity of the vectors this embedder makes, without loading it.
-
-        Callers that only need to name the vectors - counting them, syncing the
-        index - should not pay seconds of ONNX startup to ask.
-        """
-        return f"{self.model_name}+context" if self.with_context else self.model_name
+        """The identity of the vectors this embedder makes, known without loading it."""
+        ...
 
     @property
     def model(self) -> EmbeddingModel: ...
@@ -38,30 +34,18 @@ class Embedder(Protocol):
 
 @dataclass
 class FastEmbedEmbedder:
-    """ONNX-backed embedder: no torch, and the weights are ~130MB.
-
-    Loading is deferred until the first call so that importing this module -
-    which the CLI does for every command - stays cheap.
-    """
+    """ONNX-backed embedder (no torch, about 130 MB of weights), loaded on first use."""
 
     model_name: str = DEFAULT_MODEL_NAME
-    # Whether passages were embedded with their title and section in front.
-    # Part of the model's identity, not a switch beside it: vectors made with
-    # and without context are not interchangeable, and `pending_embeddings`
-    # keys on the model id, so a shared id would let a flipped flag leave the
-    # corpus holding a silent mixture of the two. Separate ids also mean the
-    # two can be measured side by side without either being thrown away.
+    # Part of the model id: vectors made with and without context are stored
+    # apart, so they never mix and can be compared.
     with_context: bool = config.EMBED_WITH_CONTEXT
     _encoder: object | None = None
     _model: EmbeddingModel | None = None
 
     @property
     def model_id(self) -> str:
-        """The identity of the vectors this embedder makes, without loading it.
-
-        Callers that only need to name the vectors - counting them, syncing the
-        index - should not pay seconds of ONNX startup to ask.
-        """
+        """The identity of the vectors this embedder makes, known without loading it."""
         return f"{self.model_name}+context" if self.with_context else self.model_name
 
     @property
@@ -113,11 +97,9 @@ def embed_pending(
     chunker_version: str | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Embed every chunk that has no vector from this model yet.
+    """Embed every chunk with no vector from this model yet, returning how many.
 
-    Returns the number embedded, so a caller can tell a fresh run from a no-op.
-    `chunker_version` skips passages an older chunker produced, which are due
-    to be replaced and whose vectors would be discarded with them.
+    `chunker_version` skips chunks from an older chunker, which are due to be replaced.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
@@ -151,19 +133,9 @@ def embed_pending(
 
 
 def passage_text(chunk: Chunk, title: str = "") -> str:
-    """The text embedded for one passage, with the context it sits in.
+    """One passage prefixed by its paper title and section heading.
 
-    A passage is embedded alone by default, which loses what it is part of: a
-    paragraph reading "we improve on this by 4 points" carries no sign of the
-    subject, and a section heading and paper title are exactly the missing
-    words. This is the cheap form of contextual retrieval - the published
-    version writes a context sentence per chunk with a model, which is one
-    inference call per chunk and not affordable over a corpus this size, while
-    the title and section path are already stored and cost nothing.
-
-    Off by default until measured on this corpus, because prefixing every
-    passage with the same title also makes a paper's passages resemble each
-    other, which could cost precision within a paper.
+    Used only with `with_context`, off by default because measuring it was inconclusive.
     """
     heading = chunk.section_path.split(" > ")[-1].strip()
     context = " ".join(part for part in (title.strip(), heading) if part)
@@ -171,11 +143,7 @@ def passage_text(chunk: Chunk, title: str = "") -> str:
 
 
 def paper_subject_text(paper: Paper) -> str:
-    """The text that states what a paper is about.
-
-    Title and abstract together: the title alone is too short to embed well,
-    and the abstract alone loses terms that only appear in the title.
-    """
+    """A paper's title and abstract, embedded together as what the paper is about."""
     return f"{paper.title.strip()}\n\n{paper.summary.strip()}"
 
 
@@ -187,11 +155,7 @@ def embed_pending_papers(
     limit: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> int:
-    """Embed the title and abstract of every paper that has no vector yet.
-
-    Mirrors embed_pending, and is incremental on the same terms: a paper is
-    embedded only if it has no vector for this model.
-    """
+    """Embed the title and abstract of every current paper with no vector yet."""
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
     model = embedder.model

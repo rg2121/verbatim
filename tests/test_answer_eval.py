@@ -1,11 +1,4 @@
-"""Scoring the answers, and measuring the judge that scores them.
-
-Asking a model whether evidence supports an answer measured 0/6 seven times.
-So every judged number here is reported beside a control: the same claims
-against quotes from other answers, which cannot be supported. If the judge
-calls both supported it has told us nothing, and the report must say so
-rather than quoting the first figure alone.
-"""
+"""Scoring the answers, and measuring the judge that scores them."""
 
 from verbatim.answer_eval import (
     AnsweredCase,
@@ -141,11 +134,7 @@ def test_no_citations_anywhere_produces_an_empty_report() -> None:
 
 
 def test_the_hard_control_borrows_from_the_same_answer() -> None:
-    """A judge separating physics from recommender systems has shown nothing.
-
-    The adversary that matters is a quote on the same subject, from the same
-    paper, that still does not support this particular claim.
-    """
+    """A judge separating physics from recommender systems has shown nothing."""
     seen = []
 
     def record(system, user):

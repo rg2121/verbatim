@@ -22,69 +22,30 @@ SCHEMA_VERSION = "12"
 # '*' for prefix matching and double quotes for phrases.
 FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 
-# Columns added to existing databases after their table was first created.
-ADDED_COLUMNS: dict[str, dict[str, str]] = {
-    "chunks": {
-        "source_sha256": "TEXT NOT NULL DEFAULT ''",
-        "kind": "TEXT NOT NULL DEFAULT 'body'",
-        "source_kind": "TEXT NOT NULL DEFAULT 'pdf'",
-        "section_path": "TEXT NOT NULL DEFAULT ''",
-    },
-    "papers": {"license_checked_at": "TEXT", "license_class": "TEXT"},
-    "html_sources": {
-        "usable": "INTEGER NOT NULL DEFAULT 1",
-        "note": "TEXT",
-    },
-    "downloads": {
-        "chunked_at": "TEXT",
-        "chunked_with": "TEXT",
-        "chunked_sha256": "TEXT",
-    },
-}
-# Passages loaded for a reader carry their paper's licence, joined in under
-# this name and preferred by _chunk_from_row - see there for why the chunk's
-# own column is not enough.
+# Passages carry their paper's licence, joined in under this name.
 CHUNK_COLUMNS = "c.*, lic.license_url AS paper_license_url"
 PAPER_LICENCE_JOIN = "LEFT JOIN papers AS lic ON lic.arxiv_id = c.arxiv_id"
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Bibliographies that were read, at the checksum they were read from. Needed
 # for the ones that yield no entries, which otherwise look unread for ever.
 BIBLIOGRAPHIES_READ = "bibliographies_read"
-# Long enough for one stage's write to finish while another stage waits.
-# Chunking commits in large batches and holds the write lock for a long time
-# while its FTS triggers run. A minute was not enough: it killed a six-hour
-# HTML fetch outright.
+# Long enough for one stage's write to finish while another waits: chunking
+# holds the write lock for minutes.
 BUSY_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
 class PaperFilter:
-    """Restrict retrieval to papers by date or subject.
-
-    Similarity search has no notion of recency and a keyword index has no
-    notion of subject, so "what came out in cs.CL this month" is a question
-    neither can answer on its own. This narrows the corpus first, and both
-    legs then rank within it.
-    """
+    """Restrict retrieval by date, subject, licence or paper; both legs rank within it."""
 
     since: str | None = None
     category: str | None = None
-    # What a paper's licence permits, from arXiv's OAI-PMH records. Retrieval
-    # normally ignores licences - reading a paper and quoting it with
-    # attribution needs no permission. Generating training data from it does,
-    # so `distill` narrows to the eligible classes here rather than discarding
-    # ineligible papers after the fact: a passage that was never retrieved
-    # cannot leak into an example through a path someone forgot to filter.
+    # Licence classes allowed. `distill` filters here, so an ineligible paper is
+    # never retrieved at all.
     license_classes: tuple[str, ...] = ()
-    # Papers to restrict retrieval to, which is the opposite of exclude_ids
-    # and needed for the same kind of reason: a follow-up in a conversation
-    # can be searched within the papers the previous turn rested on, rather
-    # than across a corpus that no longer knows what "it" refers to.
+    # Only these papers, such as the ones a previous turn rested on.
     include_ids: tuple[str, ...] = ()
-    # Papers to pretend the corpus does not hold. Used to plant a known gap:
-    # hiding a paper and asking whether anything notices is the only way to
-    # give an absence-detector a ground truth, and deleting the paper to do it
-    # would be both destructive and unrepeatable.
+    # Papers to treat as absent, to plant a known gap without deleting anything.
     exclude_ids: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
@@ -94,17 +55,7 @@ class PaperFilter:
         )
 
     def conditions(self, table: str = "p") -> tuple[list[str], list[object]]:
-        """The predicate, once, for every leg that has to apply it.
-
-        The keyword leg filters with a correlated EXISTS and the vector leg
-        filters a list of ids the index already returned, so the same rule is
-        needed in two shapes. It used to be written out in both, plus a third
-        time in a `matches()` that had no callers - and the third copy could
-        not have expressed a licence gate at all, because it was handed only a
-        date and a category. Adding a dimension to one copy of three is how a
-        filter silently stops filtering, which for `license_classes` would
-        mean an ineligible paper reaching a training example.
-        """
+        """The filter as SQL conditions on `table`, shared by every retrieval leg."""
         conditions: list[str] = []
         parameters: list[object] = []
         if self.since:
@@ -130,10 +81,9 @@ class PaperFilter:
         return conditions, parameters
 
     def clause(self, alias: str = "c") -> tuple[str, list[object]]:
-        """A SQL fragment restricting `alias` to matching papers.
+        """An EXISTS clause restricting `alias` to matching papers.
 
-        Written as EXISTS rather than an id list because SQLite caps a
-        statement at 32,766 variables, which any useful filter would exceed.
+        EXISTS rather than an id list, which could exceed SQLite's variable limit.
         """
         if not self:
             return "", []
@@ -163,7 +113,7 @@ class EmbeddingModel:
 
 @dataclass(frozen=True)
 class ChunkMatch:
-    """One keyword hit, carrying everything a citation needs."""
+    """One retrieved passage, carrying everything a citation needs."""
 
     chunk: Chunk
     score: float
@@ -181,12 +131,8 @@ class CorpusStore:
         self.connection = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
-        # Stages run for hours, and the point of `stats` is to watch one while
-        # it runs. Under the default rollback journal a reader and a writer
-        # cannot overlap at all, and a second writer fails at once rather than
-        # waiting - which is how a licence backfill and a chunking run
-        # collided. WAL lets readers proceed during a write, and the busy
-        # timeout makes a second writer wait its turn instead of failing.
+        # WAL lets `stats` read while a long stage writes; the busy timeout makes a
+        # second writer wait rather than fail.
         self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
         self._initialize()
@@ -236,11 +182,7 @@ class CorpusStore:
                         updated = excluded.updated,
                         source_url = excluded.source_url,
                         pdf_url = excluded.pdf_url,
-                        -- The query API never returns a licence, so a sync
-                        -- that reports none is saying nothing, not that the
-                        -- paper has none. Overwriting erased what `licenses`
-                        -- had found, and the paper, already marked checked,
-                        -- was never looked up again.
+                        -- The query API never returns a licence, so keep the stored one.
                         license_url = COALESCE(excluded.license_url, papers.license_url),
                         license_class = CASE
                             WHEN excluded.license_url IS NULL THEN papers.license_class
@@ -282,12 +224,7 @@ class CorpusStore:
         require_license: bool = False,
         license_classes: Sequence[str] | None = None,
     ) -> list[Paper]:
-        """Return newest current versions that do not yet have a local PDF.
-
-        `license_classes` gates on what a licence *permits*, which is not the
-        same as having one: arXiv's default grants arXiv distribution rights
-        and grants the caller nothing.
-        """
+        """Newest current versions with no local PDF, optionally limited by licence class."""
         if limit < 1:
             raise ValueError("limit must be at least 1")
         clauses = [
@@ -361,12 +298,7 @@ class CorpusStore:
     def record_html_source(
         self, source: HtmlSource, *, usable: bool = True, note: str | None = None
     ) -> None:
-        """Record one locally held HTML rendering.
-
-        An unusable rendering is kept, with its checksum and the reason: the
-        bytes are evidence for the decision and allow it to be revisited when
-        arXiv re-renders the paper.
-        """
+        """Record one locally held HTML rendering; an unusable one is kept with its reason."""
         with self.connection:
             self.connection.execute(
                 """
@@ -384,12 +316,7 @@ class CorpusStore:
             )
 
     def record_html_absent(self, arxiv_id: str, url: str) -> None:
-        """Record that arXiv publishes no HTML rendering of this paper.
-
-        Without this the paper looks unchecked forever, and every later run
-        asks arXiv for a page that has already been shown not to exist. The
-        absence is a finding, so it is stored like any other.
-        """
+        """Record that arXiv publishes no HTML rendering, so it is not asked for again."""
         with self.connection:
             self.connection.execute(
                 """
@@ -462,17 +389,10 @@ class CorpusStore:
         limit: int | None = None,
         require_html_checked: bool = False,
     ) -> list[DownloadedPaper]:
-        """Return PDFs whose stored chunks do not match the current chunker.
-
-        Re-chunking is needed when a PDF has never been chunked, when the
-        chunker version or its parameters changed, or when the file on disk was
-        replaced since it was last chunked.
+        """PDFs whose chunks are missing, from another chunker, or from a replaced file.
 
         `require_html_checked` holds back papers whose HTML has not been looked
-        for yet. Without it, chunking during an unfinished `html` run reads a
-        paper from its PDF, and the rendering that arrives minutes later throws
-        that work away along with every vector made from it. It is off by
-        default because a corpus where `html` is never run must still chunk.
+        for, so a rendering that arrives later does not discard their chunks.
         """
         rows = self.connection.execute(
             f"""
@@ -480,10 +400,7 @@ class CorpusStore:
             WHERE {"EXISTS (SELECT 1 FROM html_sources AS c WHERE c.arxiv_id = d.arxiv_id) AND"
                    if require_html_checked else ""}
             NOT EXISTS (
-                -- HTML is the better source where it exists, so a paper with
-                -- one is never chunked from its PDF. A row with no checksum
-                -- records that arXiv has no rendering, and such a paper must
-                -- still be chunked from its PDF or it is never chunked at all.
+                -- A paper with a usable HTML rendering is chunked from that, not its PDF.
                 SELECT 1 FROM html_sources AS h
                 WHERE h.arxiv_id = d.arxiv_id AND h.usable = 1
             )
@@ -498,10 +415,7 @@ class CorpusStore:
         return [_download_from_row(row) for row in rows]
 
     def mark_chunked(self, downloads: list[DownloadedPaper], fingerprint: str) -> None:
-        """Record a completed chunking pass, including passes that yielded nothing.
-
-        Without this a PDF with no extractable text would be retried forever.
-        """
+        """Record a chunking pass, even one that yielded nothing, so it is not retried."""
         now = _timestamp()
         with self.connection:
             self.connection.executemany(
@@ -516,28 +430,16 @@ class CorpusStore:
     def record_chunks(
         self, chunks: list[Chunk], for_papers: Sequence[str] | None = None
     ) -> None:
-        """Replace the stored chunks for every paper this pass covered.
+        """Replace the stored chunks of every paper this pass covered.
 
-        A paper is held as exactly one chunking, from one source. Deleting only
-        the chunks sharing a checksum would leave a paper's PDF chunks behind
-        when it was re-read from its HTML, so the same passages would sit in
-        the index twice, under two sources, and be retrieved twice.
-
-        `for_papers` is the papers that were *attempted*, which is not the same
-        as the papers that produced something. Derived from the chunks alone, a
-        re-chunk that yielded nothing deleted nothing: a paper whose PDF now
-        fails to extract - or exceeds the layout timeout, which is recorded as
-        chunked so it is not retried for ever - kept its old passages and their
-        vectors, still searchable and still citable, under a checksum the file
-        no longer has. Callers that know what they attempted should say so.
+        A paper holds one chunking from one source. `for_papers` names the papers
+        attempted, so one that now yields nothing loses its old passages.
         """
         now = _timestamp()
         covered = set(for_papers or ()) | {chunk.arxiv_id for chunk in chunks}
         with self.connection:
-            # Every chunk write moves the corpus on. Chunk ids are derived from
-            # the source checksum, so replacing a paper's source changes all of
-            # its ids while leaving the count alone - and a vector index that
-            # decides freshness by counting cannot see that. The counter can.
+            # Bump the generation: a new source changes chunk ids but not their
+            # count, which a count-based index check cannot see.
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('chunk_generation', '1')
@@ -585,11 +487,7 @@ class CorpusStore:
         return 0 if row is None else int(row["value"])
 
     def base_ids_missing_license(self, limit: int) -> list[str]:
-        """Base identifiers whose licence has never been looked up.
-
-        Keyed on the base id because OAI-PMH is: one lookup covers every
-        version of a paper.
-        """
+        """Base identifiers whose licence was never looked up; OAI-PMH is keyed on them."""
         rows = self.connection.execute(
             """
             SELECT base_arxiv_id FROM papers
@@ -603,10 +501,9 @@ class CorpusStore:
         return [row["base_arxiv_id"] for row in rows]
 
     def record_license(self, base_arxiv_id: str, license_url: str | None) -> None:
-        """Store a looked-up licence against every version of one paper.
+        """Store a licence on every version of one paper.
 
-        The checked timestamp is written even when no licence came back, so a
-        paper that predates the field is not looked up again on every run.
+        Marked checked even when none came back, so it is not looked up again.
         """
         with self.connection:
             self.connection.execute(
@@ -621,12 +518,10 @@ class CorpusStore:
             )
 
     def pipeline_stats(self, chunker_fingerprint: str, model_id: str) -> dict[str, int]:
-        """Counts for each stage, and how much work each has left.
+        """Counts for each stage and the work each has left."""
 
-        One query set rather than several calls, so a long ingest can be
-        watched without loading the corpus into memory.
-        """
-        scalar = lambda sql, args=(): int(self.connection.execute(sql, args).fetchone()[0])
+        def scalar(sql: str, args: tuple = ()) -> int:
+            return int(self.connection.execute(sql, args).fetchone()[0])
         return {
             "papers": scalar("SELECT COUNT(*) FROM papers"),
             "papers_current": scalar("SELECT COUNT(*) FROM papers WHERE is_latest = 1"),
@@ -699,12 +594,7 @@ class CorpusStore:
         limit: int = 20,
         latest_only: bool = True,
     ) -> list[Paper]:
-        """Papers by recency — the question vector search cannot answer.
-
-        Similarity search returns things that resemble a query; it has no
-        notion of "this week" and cannot promise completeness. Recency and
-        exhaustiveness are SQL questions, so they are answered in SQL.
-        """
+        """Papers by recency, which similarity search cannot answer."""
         clauses: list[str] = []
         parameters: list[object] = []
         if latest_only:
@@ -724,12 +614,7 @@ class CorpusStore:
         return [_paper_from_row(row) for row in rows]
 
     def latest_version_of(self, base_arxiv_id: str) -> Paper | None:
-        """Resolve a version-less identifier to the current version.
-
-        People and models both write "2608.05440" while the catalogue keys on
-        "2608.05440v1", so an exact-match-only lookup fails on the form
-        everyone actually uses.
-        """
+        """Resolve a version-less identifier, as people write it, to the current version."""
         row = self.connection.execute(
             """
             SELECT * FROM papers WHERE base_arxiv_id = ?
@@ -800,11 +685,7 @@ class CorpusStore:
         return [_chunk_from_row(row) for row in rows]
 
     def iter_chunks(self):
-        """Yield every chunk in a stable, citable order, one at a time.
-
-        A generator because the corpus is hundreds of thousands of passages,
-        and exporting it must not hold them all in memory.
-        """
+        """Yield every chunk in a stable order, without holding them all in memory."""
         cursor = self.connection.execute(
             """
             SELECT c.*, p.license_url AS paper_license_url FROM chunks AS c
@@ -816,22 +697,14 @@ class CorpusStore:
             yield _chunk_from_row(row)
 
     def sync_watermark(self, category: str) -> str | None:
-        """The newest `updated` timestamp already ingested for a category.
-
-        Paging stops once results are older than this, so a repeat sync costs
-        one request rather than walking the whole category again.
-        """
+        """The newest `updated` timestamp ingested for a category; paging stops there."""
         row = self.connection.execute(
             "SELECT newest_updated FROM sync_state WHERE category = ?", (category,)
         ).fetchone()
         return None if row is None else row["newest_updated"]
 
     def record_sync(self, category: str, newest_updated: str | None, papers_seen: int) -> None:
-        """Advance the watermark, never retreat it.
-
-        A sync bounded by --limit can return older papers than a previous run
-        already covered; taking the max keeps the mark monotonic.
-        """
+        """Advance the watermark; it never moves back."""
         with self.connection:
             self.connection.execute(
                 """
@@ -855,10 +728,9 @@ class CorpusStore:
         return [(r["category"], r["newest_updated"], r["papers_seen"]) for r in rows]
 
     def register_embedding_model(self, model: EmbeddingModel) -> None:
-        """Record which model produced a set of vectors, so they can be swapped.
+        """Record which model produced a set of vectors.
 
-        Re-registering with a different dimension or revision is rejected: those
-        vectors are not comparable with the ones already stored.
+        A different dimension or revision under the same id is rejected.
         """
         existing = self.connection.execute(
             "SELECT dimensions, revision FROM embedding_models WHERE model_id = ?",
@@ -889,18 +761,10 @@ class CorpusStore:
         limit: int | None = None,
         chunker_version: str | None = None,
     ) -> list[Chunk]:
-        """Return chunks that have no vector from this model yet.
+        """Chunks with no vector from this model yet.
 
-        `chunker_version` restricts the work to passages the current chunker
-        actually produces. A chunk left over from an older chunker is going to
-        be deleted the next time its paper is chunked, and the vector made from
-        it deleted with it: embedding one is work that is guaranteed to be
-        thrown away. Measured mid-migration here, 490,620 of 729,347 chunks
-        were in that state, which is around eleven hours of embedding.
-
-        Off by default, because those chunks are still the only ones a paper
-        has until it is re-chunked, and a corpus that is not mid-migration
-        should embed everything it holds.
+        `chunker_version` skips chunks from an older chunker, whose vectors the
+        next re-chunk would discard.
         """
         rows = self.connection.execute(
             """
@@ -958,13 +822,8 @@ class CorpusStore:
     ) -> None:
         """Replace the stored bibliography of every paper this pass covered.
 
-        `for_papers` is the papers that were *read*, which is not the same as
-        the papers that produced entries - the lesson `record_chunks` learned
-        first. Derived from the entries alone, a bibliography that parses to
-        nothing recorded nothing: the paper stayed pending and was re-read on
-        every run, and a re-read that found nothing left the old entries in
-        place. A read is also written down, at the checksum it read, so
-        finding nothing is an answer that is kept.
+        `for_papers` names the papers read. Each read is recorded at its checksum,
+        so a bibliography with no entries is not re-read every run.
         """
         now = _timestamp()
         covered = set(for_papers or ()) | {r.citing_arxiv_id for r in references}
@@ -974,10 +833,7 @@ class CorpusStore:
                     "DELETE FROM paper_references WHERE citing_arxiv_id = ?", (citing,)
                 )
             if for_papers:
-                # Created on first use rather than with the schema, like the
-                # run ledger: opening a corpus must not change it, and the
-                # committed sample would otherwise be rewritten the first time
-                # anyone searched it.
+                # Created on first use, so opening the committed sample never changes it.
                 self.connection.execute(
                     f"CREATE TABLE IF NOT EXISTS {BIBLIOGRAPHIES_READ} ("
                     " arxiv_id TEXT PRIMARY KEY, source_sha256 TEXT NOT NULL,"
@@ -1020,14 +876,7 @@ class CorpusStore:
         return [row["arxiv_id"] for row in rows]
 
     def _unread_bibliography(self, alias: str) -> str:
-        """The condition for a rendering whose bibliography has not been read.
-
-        Read means either entries stored from this rendering, or a recorded
-        read of it that found none. The second is checked only where the
-        record exists, because a corpus that has never run `references` since
-        it was introduced has no such table - and entries alone still say
-        which bibliographies were read before it was.
-        """
+        """SQL condition: a usable rendering whose bibliography is unread at its checksum."""
         condition = (
             f"{alias}.usable = 1 AND NOT EXISTS ("
             f" SELECT 1 FROM paper_references AS r"
@@ -1043,12 +892,7 @@ class CorpusStore:
         return condition
 
     def most_cited_absent_papers(self, *, limit: int = 50) -> list[tuple[str, int]]:
-        """arXiv papers this corpus cites often and does not hold.
-
-        The corpus is a slice of the newest papers in each category, so the work
-        it rests on is mostly outside it. This is the reading list that would
-        fix that, ordered by how many held papers ask for each one.
-        """
+        """arXiv papers this corpus cites most and does not hold: its reading list."""
         rows = self.connection.execute(
             """
             SELECT r.cited_arxiv_id, COUNT(DISTINCT r.citing_arxiv_id) AS citations
@@ -1069,13 +913,7 @@ class CorpusStore:
         )
 
     def papers_citing(self, base_arxiv_id: str, *, limit: int = 25) -> list[Paper]:
-        """Held papers whose bibliography cites this paper, newest first.
-
-        Keyed on the base identifier because that is what a bibliography names:
-        a reference to "arXiv:1412.6980" is a claim about the paper, not about
-        any one version of it. Self-citations are excluded - a preprint listing
-        its own identifier is provenance, not influence.
-        """
+        """Held papers citing this base identifier, newest first, without self-citations."""
         rows = self.connection.execute(
             """
             SELECT p.* FROM papers AS p
@@ -1088,9 +926,7 @@ class CorpusStore:
             """,
             (base_arxiv_id, base_arxiv_id),
         ).fetchall()
-        # The corpus can hold several versions of a citing paper, each with its
-        # own stored bibliography; one paper still cites, however many times it
-        # was read. Newest-first order makes this keep the current version.
+        # One entry per citing paper, keeping its newest version.
         citers: dict[str, Paper] = {}
         for row in rows:
             citers.setdefault(row["base_arxiv_id"], _paper_from_row(row))
@@ -1099,12 +935,7 @@ class CorpusStore:
         return list(citers.values())
 
     def papers_cited_by(self, arxiv_id: str, *, limit: int = 50) -> list[Paper]:
-        """Held papers this paper's bibliography resolves to, in citation order.
-
-        The outward half of the graph: what a paper builds on, as far as the
-        corpus holds it. References to absent papers are `grow`'s business and
-        do not appear here.
-        """
+        """Held papers this paper's bibliography resolves to, in citation order."""
         base_arxiv_id, _ = split_arxiv_version(arxiv_id)
         rows = self.connection.execute(
             """
@@ -1122,12 +953,7 @@ class CorpusStore:
         return [_paper_from_row(row) for row in rows]
 
     def citation_counts(self, base_arxiv_ids: Sequence[str]) -> dict[str, int]:
-        """How many held papers cite each of these, keyed by base identifier.
-
-        Counts distinct citing papers, not bibliography rows, so a paper held
-        at two versions - each with its stored bibliography - counts once.
-        Identifiers nothing cites are simply absent from the result.
-        """
+        """How many distinct held papers cite each of these base identifiers."""
         if not base_arxiv_ids:
             return {}
         unique = list(dict.fromkeys(base_arxiv_ids))
@@ -1147,13 +973,7 @@ class CorpusStore:
         return {row["cited"]: int(row["citations"]) for row in rows}
 
     def most_cited_held_papers(self, *, limit: int = 25) -> list[tuple[Paper, int]]:
-        """The papers this corpus itself cites most, with their citer counts.
-
-        The held-paper counterpart of most_cited_absent_papers: that one is a
-        reading list, this one is an authority ranking. "What is the most
-        influential paper on X here" is a graph question, and no similarity
-        score answers it.
-        """
+        """The held papers this corpus cites most, with their citer counts."""
         rows = self.connection.execute(
             """
             SELECT held.*, COUNT(DISTINCT citer.base_arxiv_id) AS citations
@@ -1171,12 +991,7 @@ class CorpusStore:
         return [(_paper_from_row(row), int(row["citations"])) for row in rows]
 
     def citation_graph_stats(self) -> dict[str, int]:
-        """The size and reach of the internal citation graph.
-
-        An edge is one held paper citing another, counted once regardless of
-        how many versions of the citer were read. Connected means touching at
-        least one edge in either direction.
-        """
+        """Edges between held papers, papers touching one, and the paper total."""
         edges_sql = """
             SELECT DISTINCT citer.base_arxiv_id AS citing, r.cited_arxiv_id AS cited
             FROM paper_references AS r
@@ -1210,11 +1025,7 @@ class CorpusStore:
     def pending_paper_embeddings(
         self, model_id: str, *, limit: int | None = None
     ) -> list[Paper]:
-        """Current papers with no abstract vector for this model.
-
-        Only current versions: an abstract index exists to say what the corpus
-        is about, and superseded versions would answer that twice.
-        """
+        """Current papers with no abstract vector for this model."""
         rows = self.connection.execute(
             """
             SELECT p.* FROM papers AS p
@@ -1270,11 +1081,7 @@ class CorpusStore:
         include_references: bool = False,
         papers: PaperFilter | None = None,
     ) -> list[ChunkMatch]:
-        """Rank chunks by BM25 relevance to a keyword query.
-
-        `arxiv_id` and `papers` filter before ranking, so scores are not
-        diluted by matches in papers the caller already excluded.
-        """
+        """Rank chunks by BM25 against a keyword query, filtering before ranking."""
         if limit < 1:
             raise ValueError("limit must be at least 1")
         expression = build_fts_query(query, match=match)
@@ -1286,9 +1093,7 @@ class CorpusStore:
             clauses.append("c.arxiv_id = ?")
             parameters.append(arxiv_id)
         if not include_references:
-            # Named as what is kept out, not what is let in. Written as "body
-            # only" when body and bibliography were the only kinds, it kept
-            # tables out too once they arrived, and none was ever returned.
+            # Exclude bibliographies rather than select body text, so tables stay in.
             clauses.append("c.kind != ?")
             parameters.append(REFERENCES)
         if papers:
@@ -1322,10 +1127,8 @@ class CorpusStore:
         ]
 
     def _initialize(self) -> None:
-        # Checked before the schema runs: CREATE VIRTUAL TABLE IF NOT EXISTS
-        # cannot report whether it created the index, and COUNT(*) on an
-        # external-content FTS5 table reads the content table rather than the
-        # index, so neither can tell us the index needs a backfill.
+        # Checked first: after the schema runs, nothing can tell whether an FTS
+        # index was just created and needs a backfill.
         search_index_existed = self._table_exists("chunks_fts")
         title_index_existed = self._table_exists("papers_fts")
         with self.connection:
@@ -1384,8 +1187,7 @@ class CorpusStore:
                     char_start INTEGER NOT NULL,
                     char_end INTEGER NOT NULL,
                     text TEXT NOT NULL,
-                    -- Nothing reads or writes this. Kept because dropping a
-                    -- column means rebuilding this table and its search index.
+                    -- Unused; dropping it would mean rebuilding the table and its index.
                     context TEXT,
                     kind TEXT NOT NULL DEFAULT 'body',
                     source_kind TEXT NOT NULL DEFAULT 'pdf',
@@ -1401,16 +1203,11 @@ class CorpusStore:
                 CREATE TABLE IF NOT EXISTS html_sources (
                     arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
                     url TEXT NOT NULL,
-                    -- NULL in all three means arXiv has no rendering for this
-                    -- paper: it was checked and ruled out, so it is not asked
-                    -- for again. The PDF stays its source.
+                    -- All three NULL: arXiv has no rendering, so the PDF is the source.
                     local_path TEXT,
                     sha256 TEXT,
                     byte_count INTEGER,
-                    -- Whether this rendering is fit to be the paper's source.
-                    -- 0 covers both "arXiv has none" and "arXiv has one but it
-                    -- is truncated"; either way the PDF is used instead, and
-                    -- note says which it was.
+                    -- 0 when there is no rendering or it is truncated; note says which.
                     usable INTEGER NOT NULL DEFAULT 1,
                     note TEXT,
                     fetched_at TEXT NOT NULL,
@@ -1434,18 +1231,15 @@ class CorpusStore:
                     created_at TEXT NOT NULL
                 );
 
-                -- Papers arXiv has no PDF for at the version we hold. Kept
-                -- so they are not asked for again on every run and not
-                -- reported as outstanding work for ever.
+                -- Papers arXiv has no PDF for, so they are not asked for again.
                 CREATE TABLE IF NOT EXISTS download_failures (
                     arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
                     pdf_url TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     failed_at TEXT NOT NULL
                 );
-                -- One row per bibliography entry. cited_arxiv_id is set only
-                -- when the entry states an identifier; a reference resolved by
-                -- title similarity would be a guess recorded as a fact.
+                -- One row per bibliography entry. cited_arxiv_id is set only when the
+                -- entry states an identifier, never guessed from a title.
                 CREATE TABLE IF NOT EXISTS paper_references (
                     citing_arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
                     ordinal INTEGER NOT NULL,
@@ -1458,11 +1252,8 @@ class CorpusStore:
                 );
                 CREATE INDEX IF NOT EXISTS references_by_cited
                     ON paper_references (cited_arxiv_id);
-                -- One vector per paper, over its title and abstract. Separate
-                -- from `embeddings` because it answers a different question:
-                -- a chunk vector says what a passage mentions, a paper vector
-                -- says what the paper is about. A paper can mention anything
-                -- in passing; its abstract states its subject.
+                -- One vector per paper, over its title and abstract: what the paper is
+                -- about, where a chunk vector says what a passage mentions.
                 CREATE TABLE IF NOT EXISTS paper_embeddings (
                     arxiv_id TEXT NOT NULL
                         REFERENCES papers(arxiv_id) ON DELETE CASCADE,
@@ -1482,11 +1273,8 @@ class CorpusStore:
 
                 CREATE INDEX IF NOT EXISTS embeddings_by_model ON embeddings (model_id);
 
-                -- Titles, searched separately from passages. A definitional
-                -- question loses to the papers that merely use the thing:
-                -- 3,152 papers here mention Adam and the one that defines it
-                -- holds 53 passages. A title says what a paper is called,
-                -- which is the signal a passage cannot carry.
+                -- Titles, searched apart from passages: for a definitional question the
+                -- paper named after the thing beats the many that merely use it.
                 CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
                     title,
                     content='papers',
@@ -1544,16 +1332,6 @@ class CorpusStore:
                 self.connection.execute(
                     "INSERT INTO papers_fts (papers_fts) VALUES ('rebuild')"
                 )
-            self._add_missing_columns()
-            self._retire_renamed_columns()
-            self._relax_html_source_nullability()
-            # `usable` defaults to 1, which is wrong for rows written before it
-            # existed to record that arXiv has no rendering at all.
-            self.connection.execute(
-                "UPDATE html_sources SET usable = 0,"
-                " note = COALESCE(note, 'arXiv publishes no HTML rendering')"
-                " WHERE sha256 IS NULL AND usable = 1"
-            )
             self.connection.execute(
                 """
                 INSERT INTO schema_metadata (key, value) VALUES ('schema_version', ?)
@@ -1572,12 +1350,7 @@ class CorpusStore:
     def papers_matching(
         self, papers: "PaperFilter", arxiv_ids: Sequence[str]
     ) -> set[str]:
-        """Which of these papers pass the filter.
-
-        Asked in one query over a bounded list - the ids the vector index just
-        returned - rather than over the corpus, so it stays well inside
-        SQLite's limit on statement variables.
-        """
+        """Which of these papers pass the filter, in one bounded query."""
         if not papers or not arxiv_ids:
             return set(arxiv_ids)
         unique = list(dict.fromkeys(arxiv_ids))
@@ -1590,14 +1363,7 @@ class CorpusStore:
         return {row["arxiv_id"] for row in rows}
 
     def search_titles(self, query: str, *, limit: int = 10) -> list[tuple[str, float]]:
-        """Papers whose title matches the query, best first.
-
-        Separate from passage search because it answers a different question.
-        A passage says what a paper mentions; a title says what it is called,
-        and for "what is the Adam optimizer" the paper called "Adam: A Method
-        for Stochastic Optimization" is the answer while three thousand papers
-        that merely used Adam are not.
-        """
+        """Papers whose title matches the query, best first."""
         expression = build_title_query(query)
         if not expression:
             return []
@@ -1614,152 +1380,13 @@ class CorpusStore:
                 (expression, limit),
             ).fetchall()
         except sqlite3.OperationalError:
-            # Same guard as passage search: a query that FTS5 cannot parse is
-            # a miss, not a crash.
+            # A query FTS5 cannot parse is a miss, not a crash.
             return []
         return [(row["arxiv_id"], float(row["relevance"])) for row in rows]
 
     def _backfill_search_index(self) -> None:
-        """Index chunks stored before the search index existed.
-
-        The triggers only cover writes made after they were created, so a
-        database upgraded in place would otherwise never match its own chunks.
-        """
+        """Rebuild the passage search index from the chunks table."""
         self.connection.execute("INSERT INTO chunks_fts (chunks_fts) VALUES ('rebuild')")
-
-    def _relax_html_source_nullability(self) -> None:
-        """Let html_sources record a paper arXiv publishes no rendering for.
-
-        The first version of the table required a path and a checksum, so the
-        only representable state was "we hold this rendering". A paper with no
-        rendering could not be written down, and so looked unchecked forever.
-        """
-        columns = self.connection.execute("PRAGMA table_info(html_sources)").fetchall()
-        if not any(c["name"] == "sha256" and c["notnull"] for c in columns):
-            return
-        self.connection.executescript(
-            """
-            CREATE TABLE html_sources_rebuilt (
-                arxiv_id TEXT PRIMARY KEY REFERENCES papers(arxiv_id),
-                url TEXT NOT NULL,
-                local_path TEXT,
-                sha256 TEXT,
-                byte_count INTEGER,
-                fetched_at TEXT NOT NULL,
-                chunked_at TEXT,
-                chunked_with TEXT,
-                chunked_sha256 TEXT
-            );
-            INSERT INTO html_sources_rebuilt
-                SELECT arxiv_id, url, local_path, sha256, byte_count,
-                       fetched_at, chunked_at, chunked_with, chunked_sha256
-                FROM html_sources;
-            DROP TABLE html_sources;
-            ALTER TABLE html_sources_rebuilt RENAME TO html_sources;
-            """
-        )
-
-    def _retire_renamed_columns(self) -> None:
-        """Finish the pdf_sha256 -> source_sha256 rename on an older database.
-
-        Adding the new column is not enough: the old one is NOT NULL, so every
-        insert fails on a constraint for a field the code no longer sets. Nor
-        can it simply be dropped, because it sits inside a UNIQUE constraint,
-        which SQLite refuses to alter.
-
-        So the table is rebuilt. That also corrects the constraint itself: it
-        keyed on the source checksum alone, but a paper may now hold both a PDF
-        chunking and an HTML one, so source_kind belongs in the key. Values are
-        carried across first, and the row count is checked before the old table
-        is dropped.
-        """
-        present = {row["name"] for row in self.connection.execute("PRAGMA table_info(chunks)")}
-        if "pdf_sha256" not in present or "source_sha256" not in present:
-            return
-        before = self.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        embeddings_before = self.connection.execute(
-            "SELECT COUNT(*) FROM embeddings"
-        ).fetchone()[0]
-        # embeddings.chunk_id cascades on delete, so dropping the old chunks
-        # table would take every vector with it - hours of work, silently. The
-        # rows are still valid because chunk_id is preserved by the copy, so
-        # the constraint is suspended for the swap rather than obeyed.
-        self.connection.execute("PRAGMA foreign_keys = OFF")
-        self.connection.executescript(
-            """
-            DROP TRIGGER IF EXISTS chunks_fts_after_insert;
-            DROP TRIGGER IF EXISTS chunks_fts_after_delete;
-            DROP TRIGGER IF EXISTS chunks_fts_after_update;
-
-            CREATE TABLE chunks_rebuilt (
-                chunk_id TEXT PRIMARY KEY,
-                arxiv_id TEXT NOT NULL REFERENCES papers(arxiv_id),
-                source_sha256 TEXT NOT NULL,
-                source_url TEXT NOT NULL,
-                license_url TEXT,
-                page_number INTEGER NOT NULL,
-                chunk_index INTEGER NOT NULL,
-                char_start INTEGER NOT NULL,
-                char_end INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                context TEXT,
-                chunker_version TEXT NOT NULL,
-                kind TEXT NOT NULL DEFAULT 'body',
-                section_path TEXT NOT NULL DEFAULT '',
-                source_kind TEXT NOT NULL DEFAULT 'pdf',
-                created_at TEXT NOT NULL,
-                UNIQUE (arxiv_id, source_kind, source_sha256, page_number, chunk_index)
-            );
-
-            INSERT INTO chunks_rebuilt
-            SELECT chunk_id, arxiv_id,
-                   CASE WHEN source_sha256 = '' THEN pdf_sha256 ELSE source_sha256 END,
-                   source_url, license_url, page_number, chunk_index, char_start,
-                   char_end, text, context, chunker_version, kind, section_path,
-                   source_kind, created_at
-            FROM chunks;
-            """
-        )
-        after = self.connection.execute("SELECT COUNT(*) FROM chunks_rebuilt").fetchone()[0]
-        if after != before:
-            self.connection.execute("DROP TABLE chunks_rebuilt")
-            raise RuntimeError(
-                f"Refusing to migrate chunks: rebuilt {after} rows from {before}"
-            )
-        self.connection.executescript(
-            """
-            DROP TABLE chunks;
-            ALTER TABLE chunks_rebuilt RENAME TO chunks;
-            CREATE INDEX IF NOT EXISTS chunks_by_paper
-                ON chunks (arxiv_id, page_number, chunk_index);
-            """
-        )
-        self.connection.execute("PRAGMA foreign_keys = ON")
-        embeddings_after = self.connection.execute(
-            "SELECT COUNT(*) FROM embeddings"
-        ).fetchone()[0]
-        if embeddings_after != embeddings_before:
-            raise RuntimeError(
-                f"Migration lost embeddings: {embeddings_before} -> {embeddings_after}"
-            )
-        # Rowids changed, so the external-content search index must be reloaded.
-        self._backfill_search_index()
-
-    def _add_missing_columns(self) -> None:
-        """Bring databases created by an earlier schema up to date.
-
-        Every change so far has been additive, so adding the absent columns is
-        the whole migration.
-        """
-        for table, columns in ADDED_COLUMNS.items():
-            present = {
-                row["name"] for row in self.connection.execute(f"PRAGMA table_info({table})")
-            }
-            for name, declaration in columns.items():
-                if name not in present:
-                    self.connection.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
-                    )
 
 
 def split_arxiv_version(arxiv_id: str) -> tuple[str, int]:
@@ -1794,10 +1421,8 @@ def unpack_vector(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(blob) // 4}f", blob))
 
 
-# A title is a handful of words, so a match on "what" or "is" carries almost
-# no information and yet dominates BM25 over so short a field. Passage search
-# does not need this: a match on a stopword inside 1,200 characters is diluted
-# by everything around it.
+# Question words dominate BM25 over a field as short as a title, so they are
+# dropped there; in a 1,200-character passage they are diluted anyway.
 TITLE_STOPWORDS = frozenset(
     """a an and are as at be by can do does for from how in into is it its of on
     or that the their there this to was were what when where which who why with
@@ -1806,11 +1431,7 @@ TITLE_STOPWORDS = frozenset(
 
 
 def build_title_query(query: str) -> str:
-    """An FTS5 expression over titles, with the question words removed.
-
-    Returns an empty string when nothing but stopwords is left, which is a
-    question with no subject to match a title against.
-    """
+    """An FTS5 expression over titles with question words removed; empty if none remain."""
     content = [
         word
         for word in re.findall(r"[\w'-]+", query.lower())
@@ -1822,15 +1443,9 @@ def build_title_query(query: str) -> str:
 def build_fts_query(query: str, *, match: str = "all") -> str:
     """Turn a user query into a safe FTS5 MATCH expression.
 
-    Terms are quoted so that punctuation common in scientific text — hyphens,
-    colons, arXiv identifiers — cannot be read as FTS5 operators and raise a
-    syntax error.  A trailing '*' still means prefix search, and double-quoted
-    input is preserved as a phrase.
-
-    `match="all"` requires every term, which suits an explicit keyword search.
-    `match="any"` ranks by how many and how rare the matched terms are, which is
-    what a natural-language question needs — requiring every word of "how does a
-    changing field induce current" matches nothing at all.
+    Terms are quoted so hyphens, colons and arXiv ids are not read as operators;
+    a trailing '*' still means prefix search. `match="all"` requires every term,
+    `match="any"` ranks by matched terms, which natural-language questions need.
     """
     if match not in {"all", "any"}:
         raise ValueError("match must be 'all' or 'any'")
@@ -1858,11 +1473,8 @@ def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:
 
 
 def _chunk_from_row(row: sqlite3.Row) -> Chunk:
-    # A chunk stores a licence only if its download record had one when it was
-    # chunked, and an HTML chunk never does - while `licenses` usually runs
-    # after both. Measured on the full corpus that left 0 of 835,743 passages
-    # with a licence and 7,869 of 7,921 papers with one. The paper's record is
-    # the authority, so it wins wherever the query joined it in.
+    # The paper's licence is the authority: HTML chunks never store one, and
+    # licences are usually looked up after chunking.
     license_url = row["license_url"]
     if "paper_license_url" in row.keys() and row["paper_license_url"] is not None:
         license_url = row["paper_license_url"]

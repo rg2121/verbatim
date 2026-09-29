@@ -1,15 +1,8 @@
-"""A real model against the real sample corpus. Opt-in, never offline.
-
-Every other test here injects its model, which is what keeps the suite at two
-seconds with no network. That also means nothing in the suite has ever proved
-the whole path works against a model that can say anything. This does, when
-asked:
+"""A real model against the sample corpus. Opt-in; skipped unless a model is named:
 
     VERBATIM_LIVE_MODEL=gemma4:e4b-mlx uv run pytest tests/test_live.py -v
 
-It runs against a copy of the sample, never the committed file: opening a
-SQLite database writes beside it, and a smoke test that dirties the repository
-is a worse problem than the one it checks for.
+It runs on a copy of the sample, so the committed file is never modified.
 """
 
 from __future__ import annotations
@@ -45,11 +38,7 @@ def ask(monkeypatch, capsys, tmp_path: Path, question: str) -> str:
 def test_the_flagship_question_gets_a_verified_answer(
     monkeypatch, capsys, tmp_path: Path
 ) -> None:
-    """The README's first demo, run for real.
-
-    The sample holds the QLoRA paper, so a working pipeline answers this with
-    at least one citation that survived verification.
-    """
+    """The README's first demo, run for real."""
     out = ask(monkeypatch, capsys, tmp_path, "what problem does QLoRA solve?")
 
     assert "References" in out, out[-1500:]
@@ -59,14 +48,7 @@ def test_the_flagship_question_gets_a_verified_answer(
 def test_every_reference_is_a_paper_the_sample_actually_holds(
     monkeypatch, capsys, tmp_path: Path
 ) -> None:
-    """The README's second demo, with an assertion that can fail.
-
-    Forty papers include nothing on neural Turing machines. A real model may
-    decline or may cite nearby passages; either is allowed. What is not allowed
-    is a reference to a paper outside the sample - that would mean a citation
-    reached the reader without coming from the corpus, which is the one thing
-    this project promises cannot happen.
-    """
+    """The README's second demo, with an assertion that can fail."""
     import re
     import sqlite3
 

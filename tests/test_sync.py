@@ -109,15 +109,7 @@ def test_sync_stops_when_the_category_runs_out(tmp_path: Path) -> None:
 def test_a_limited_run_marks_what_it_took_and_leaves_the_rest_behind(
     tmp_path: Path,
 ) -> None:
-    """A deliberate limit is a slice of the newest papers, not a pause.
-
-    This test used to be called "the next run resumes" and never ran a second
-    sync. The name was also wrong: papers arrive newest-first and the mark only
-    moves forward, so everything older than a limited run is behind the mark
-    for good and a later, larger run fetches nothing. `--full` is what reaches
-    it. That is a real property of the design and is documented in docs/architecture.md;
-    it is asserted here so the name cannot drift from the behaviour again.
-    """
+    """A deliberate limit is a slice of the newest papers, not a pause."""
     feed = FakeArxiv(200)
     with CorpusStore(tmp_path / "corpus.db") as corpus:
         first = sync_category(
@@ -208,22 +200,13 @@ def test_a_failing_page_keeps_the_papers_already_ingested(tmp_path: Path) -> Non
     assert report.fetched == 200  # two pages committed before the failure
     assert stored == 200
     assert "failed after" in report.stopped_because
-    # The watermark stays where it was. This assertion used to read
-    # `is not None`, on the reasoning that a recorded mark lets the next run
-    # resume - but the mark is the *newest* paper seen, and papers arrive
-    # newest-first, so advancing it does not resume anything: it puts every
-    # page the failure prevented this run from reaching permanently behind the
-    # mark. See the test below, which walks that through.
+    # The watermark stays where it was: advancing it would put the pages this run
+    # never reached permanently behind it.
     assert watermark is None
 
 
 def test_a_failed_run_does_not_strand_the_pages_it_never_reached(tmp_path: Path) -> None:
-    """The papers a failure prevented must still arrive on the next run.
-
-    Papers are fetched newest-first and the watermark only moves forward, so a
-    failed run that advanced it would make the following run stop at the first
-    paper it saw and skip the rest of the category for good.
-    """
+    """The papers a failure prevented must still arrive on the next run."""
     feed = FakeArxiv(300)
     calls = {"n": 0}
 
@@ -252,17 +235,7 @@ def test_a_failed_run_does_not_strand_the_pages_it_never_reached(tmp_path: Path)
 def test_a_failed_deep_walk_starts_from_the_newest_paper_again(
     tmp_path: Path,
 ) -> None:
-    """`--full` is not resumable, and this is the shape of that.
-
-    A deep backfill is the run most likely to need resuming - arXiv returns
-    503 under load - and it is the one that cannot. Nothing records how deep a
-    walk reached, so the next one pages from the newest paper again and
-    re-requests what is already held before it reaches anything new.
-
-    Asserted rather than fixed: docs/architecture.md describes the backfill
-    cursor that would fix it and says why it is not built yet. If that changes, this test
-    is where the old behaviour is written down.
-    """
+    """`--full` is not resumable, and this is the shape of that."""
     feed = FakeArxiv(300)
     calls = {"n": 0}
 
@@ -284,7 +257,6 @@ def test_a_failed_deep_walk_starts_from_the_newest_paper_again(
         )
 
     assert first.fetched == 200  # the two newest pages, then the failure
-    # The retry does not pick up at page three. It asks for the newest papers
-    # first, which it already has, and pays for them again.
+    # The retry starts again from the newest papers, which it already has.
     assert feed.requests[0] == (0, 100)
     assert second.fetched == 300

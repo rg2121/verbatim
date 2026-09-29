@@ -91,9 +91,7 @@ def test_the_sample_prefers_a_cited_neighborhood_over_strangers(tmp_path: Path) 
                 source_sha256="abc123",
             )
 
-    # Eight slots leave two (8 // 4) for the neighborhood: the hub and one
-    # citer must both be present even though the round-robin alone might
-    # have taken neither.
+    # Eight slots leave two (8 // 4) for the neighbourhood: the hub and one citer.
     export_sample(source, tmp_path / "sample.db", papers=8, model_id="stub")
 
     with CorpusStore(tmp_path / "sample.db") as sample:
@@ -114,11 +112,7 @@ def test_a_sampled_passage_is_searchable(tmp_path: Path) -> None:
 
 
 def test_columns_are_copied_by_name_not_position(tmp_path: Path) -> None:
-    """This corpus has a rebuilt chunks table, so the orders disagree.
-
-    Copying positionally puts each value in the wrong column and reports
-    success, which is worse than failing.
-    """
+    """Column order can differ between databases, so rows are copied by name."""
     source = seeded(tmp_path)
 
     export_sample(source, tmp_path / "sample.db", papers=1, model_id="stub")
@@ -146,12 +140,7 @@ def test_papers_must_be_at_least_one(tmp_path: Path) -> None:
 
 
 def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
-    """A sample ships the papers' own words, which is redistribution.
-
-    arXiv's default licence grants that right to arXiv, not to us, so a sample
-    holding an arxiv-nonexclusive paper publishes text this project has no
-    right to publish. The first sample built here held 20 of them.
-    """
+    """A sample ships the papers' own words, so only `open` papers qualify."""
     import sqlite3
 
     from verbatim.sampling import choose_papers
@@ -177,9 +166,7 @@ def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
             "INSERT INTO papers VALUES (?, ?, 1, '[\"cs.CL\"]', ?)",
             (arxiv_id, arxiv_id.split("v")[0], licence),
         )
-        # Everyone cites the non-open papers, which must still keep them out:
-        # the neighborhood picker shares the same licence gate as the
-        # round-robin, and this is the test that proves it.
+        # Everyone cites the non-open papers, yet the shared licence gate keeps them out.
         source.execute(
             "INSERT INTO paper_references VALUES (?, '2608.22222')", (arxiv_id,)
         )

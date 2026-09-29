@@ -1,16 +1,8 @@
-"""The operations a research assistant can perform, as callable tools.
+"""The corpus operations offered as tools to `ask --tools` and MCP clients.
 
-Three kinds of question reach a literature assistant, and only one of them is a
-retrieval problem:
-
-- "What do papers say about X?" — similarity search over passages.
-- "What does paper X say about Y?" — resolve the paper, then search within it.
-- "What came out this week?" — a SQL question. Similarity search returns things
-  that *resemble* a query; it has no notion of recency and cannot promise
-  completeness, so answering this with a vector index would quietly lie.
-
-Each tool is a plain function over the corpus, so it is useful directly and
-testable without a model. The schemas below describe them to one.
+Passage search answers what the literature says; a recency question ("what
+came out this week") is a catalogue query, which similarity search cannot
+answer. Each tool is a plain function, testable without a model.
 """
 
 from __future__ import annotations
@@ -41,11 +33,7 @@ def search_chunks(
         limit=min(limit, MAX_RESULTS),
         arxiv_id=arxiv_id,
         max_per_paper=3 if arxiv_id is None else None,
-        # The measured default, and it was reaching only the CLI: every caller
-        # of this tool - MCP clients, `ask --tools`, the orchestrator's agent
-        # rung - was searching without the leg the README calls default-on.
-        # It gates itself to definition-shaped questions, so nothing else
-        # changes.
+        # The default graph leg; it only fires on definition-shaped questions.
         use_graph=True,
     )
     return [
@@ -61,11 +49,7 @@ def search_chunks(
 
 
 def get_paper(corpus: CorpusStore, identifier: str) -> dict[str, Any] | None:
-    """Look up one paper by arXiv ID, with or without a version, or by title.
-
-    Tried in order of confidence: the exact versioned id, then the base id
-    resolved to its current version, then an approximate title match.
-    """
+    """Look up one paper by versioned id, base id (current version) or approximate title."""
     wanted = identifier.strip().removeprefix("arXiv:").removeprefix("arxiv:").strip()
     paper = corpus.get_paper(wanted) or corpus.latest_version_of(wanted)
     if paper is None:
@@ -94,10 +78,7 @@ def list_papers(
     category: str | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """List papers by recency, newest first.
-
-    `days` is relative to now, which is how the question is usually asked.
-    """
+    """List papers by recency, newest first; `days` counts back from now."""
     if days is not None and since is None:
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     papers = corpus.papers_updated_since(
@@ -122,13 +103,7 @@ def get_citations(
     direction: str = "cited_by",
     limit: int = 20,
 ) -> dict[str, Any] | None:
-    """What cites a paper, or what it builds on, within the corpus.
-
-    A graph question, not a retrieval one: influence and lineage live in the
-    bibliographies, and no similarity score can answer "what builds on this".
-    Only citations that resolve to held papers appear - the corpus can only
-    testify about itself.
-    """
+    """What cites a paper, or what it builds on, among the papers held here."""
     if direction not in ("cited_by", "references"):
         raise ValueError("direction must be 'cited_by' or 'references'")
     found = get_paper(corpus, identifier)
@@ -271,8 +246,6 @@ def call_tool(
         return list_papers(
             corpus,
             days=int(days) if days is not None else None,
-            # Passed through rather than dropped: silently ignoring it would
-            # return an unfiltered list that looks like a filtered one.
             since=arguments.get("since"),
             category=arguments.get("category"),
             limit=int(arguments.get("limit", 20)),

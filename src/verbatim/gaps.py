@@ -1,53 +1,14 @@
-"""Claims of absence, and an agent paid to destroy them.
+"""Claims of absence ("no paper does X"), tested by an agent trying to refute them.
 
-This project has never been able to say what its corpus does *not* contain.
-Seven detectors have been measured on it and all seven scored zero: handed a
-question nothing answers, every one of them answered anyway. The reason is
-always the same. Absence is not a property of any passage, so no amount of
-looking at passages reveals it, and a model asked "is this covered?" says yes
-because the passages it was given match.
+The Prospector reads what the corpus holds on a topic and proposes specific
+gaps. The Falsifier writes its own queries to find one paper that disproves
+each. Code decides the verdict:
 
-A gap is exactly a claim of absence. So the design here is not another
-detector. It is two agents with opposing goals:
-
-  **Prospector**  reads what the corpus holds on a topic and asserts a gap -
-                  something a researcher would expect to find and which is not
-                  there.
-  **Falsifier**   is given only the gap, its own retrieval budget and its own
-                  queries, and is rewarded for destroying it. One paper is
-                  enough.
-
-A claim that survives a genuine attempt to refute it is evidence in a way that
-"I looked and did not find it" never is. That asymmetry is the whole argument
-for two agents: the Prospector cannot establish absence and is not asked to.
-It proposes; the Falsifier disposes.
-
-**The referee is arithmetic.** A Falsifier that runs one lazy query and gives
-up would confirm every gap handed to it, which is the failure this design
-exists to avoid. So a gap is only *confirmed* when the Falsifier demonstrably
-tried - distinct queries run, distinct papers examined - and is otherwise
-reported as unproven. No model decides whether the attempt was serious.
-
-**A refutation must verify.** The Falsifier cannot refute a gap by asserting
-it found something; it has to quote a passage, and the quote goes through the
-same mechanical check every citation in this project goes through. A
-refutation is a citation or it is nothing.
-
-**What a verdict does and does not establish.** The quote check proves the
-quoted words are in the passage named. It does not prove the passage is
-*responsive* to the claim - that judgement is the model's, and this project
-has measured seven times that models judge relevance badly. So:
-
-- `REFUTED` means a passage was cited as filling the gap and the quote is real.
-  The planted-gap experiment is what tests the judgement behind it, and there
-  22 of 25 refutations cited the very paper the claim had been built from.
-- `STANDS` means the claim survived a bounded adversarial search. It is **not**
-  proof that the literature lacks the thing. It is the strongest statement
-  available about absence, and it is weaker than absence.
-- `UNPROVEN` means the search was too thin for its failure to mean anything.
-
-Read `STANDS` as "nothing found, by an opponent who tried" - never as "this
-does not exist".
+- REFUTED: a passage was cited as filling the gap and its quote verified.
+  Whether it truly fills the gap remains the model's judgement.
+- STANDS: the gap survived a search that met the effort floor. That is not
+  proof the literature lacks it.
+- UNPROVEN: the search was too thin for its failure to mean anything.
 """
 
 from __future__ import annotations
@@ -62,9 +23,7 @@ from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.embedding import Embedder
 from verbatim.retrieval import hybrid_search
 
-# What the Falsifier must do before its failure counts for anything. Set so a
-# single query cannot confirm a gap; not tuned, because the point is a floor
-# on effort rather than an optimum.
+# The effort a failed refutation needs before it counts: a floor, not a tuned value.
 MIN_QUERIES = 3
 MIN_PAPERS = 8
 
@@ -72,9 +31,7 @@ REFUTED = "refuted"
 STANDS = "stands"
 UNPROVEN = "unproven"
 
-# A gap has to be checkable. "More work is needed on evaluation" cannot be
-# refuted by any paper, so a Falsifier can never destroy it and it would stand
-# for ever - the most dangerous kind of false positive this design can produce.
+# Unfalsifiable phrasing ("more work is needed"): no paper could ever refute it.
 VAGUE = re.compile(
     r"\b(?:more|further|additional|future)\s+(?:work|research|study|studies|"
     r"investigation|exploration)\b"
@@ -84,11 +41,8 @@ VAGUE = re.compile(
 )
 MIN_GAP_WORDS = 6
 
-# A gap claim that points at the prompt instead of naming a subject. Narrower
-# than the check `distill` applies to questions, and deliberately so: that one
-# rejects "here", because a retrieval question must stand alone without its
-# passage. A gap claim is a statement *about this corpus*, so "nothing here
-# measures X" is exactly the right phrasing and must survive.
+# Claims pointing at the prompt instead of a subject. Unlike the `distill` check,
+# "here" is allowed: "nothing here measures X" is a fine claim.
 POINTS_AT_THE_PROMPT = re.compile(
     r"\b(?:these|those|the)\s+(?:passages?|excerpts?|papers|list|above)\b"
     r"|^\s*(?:this|it|that)\b",
@@ -202,12 +156,7 @@ class Finding:
 
 
 def checkable(claim: str) -> bool:
-    """Whether a single paper could disprove this claim.
-
-    The one filter that matters. An unfalsifiable gap survives every attempt
-    to refute it and would be reported as confirmed absence, which is worse
-    than proposing nothing.
-    """
+    """Whether a single paper could disprove this claim."""
     if len(claim.split()) < MIN_GAP_WORDS:
         return False
     if VAGUE.search(claim):
@@ -228,12 +177,7 @@ def propose_gaps(
     passages: int = 12,
     limit: int = 5,
 ) -> tuple[list[Gap], list[str]]:
-    """The Prospector: read what is there, say what is not.
-
-    Returns the gaps it proposed and the claims that were rejected as
-    unfalsifiable, because the rejection rate is the signal that the
-    instruction is being followed.
-    """
+    """The Prospector: propose gaps, returning them and the claims rejected as unfalsifiable."""
     matches = hybrid_search(corpus, embedder, topic, limit=passages, max_per_paper=2)
     if not matches:
         return [], []
@@ -263,11 +207,9 @@ def falsify(
     per_query: int = 6,
     hidden: Sequence[str] = (),
 ) -> Finding:
-    """The Falsifier: try to destroy one gap, and record the attempt.
+    """The Falsifier: try to refute one gap and record the effort.
 
-    `hidden` removes papers from its reach, which is how a gap with a known
-    answer is planted for the experiment. Nothing is deleted; the papers are
-    filtered out of retrieval so the Falsifier genuinely cannot reach them.
+    `hidden` papers are filtered out of retrieval, to plant a gap with a known answer.
     """
     reply = complete(FALSIFIER_SYSTEM, f"CLAIM: {gap.claim}")
     searches = [m.group(1) for m in QUERY_LINE.finditer(reply or "")]
@@ -295,8 +237,7 @@ def falsify(
             corpus, completion, gap.as_question(), list(seen.values())
         )
     if answer is not None and answer.citations:
-        # A refutation is a citation whose quote survived verification, or it
-        # is not a refutation.
+        # A refutation is a verified citation or nothing.
         return Finding(
             gap=gap, verdict=REFUTED, effort=effort, citation=answer.citations[0],
             reason=(

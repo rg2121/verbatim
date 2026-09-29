@@ -1,14 +1,8 @@
-"""One loop that picks how to answer, instead of the caller picking a command.
+"""Tool-routed answering: the model picks a tool, code runs it.
 
-The routing is the point. A question about recency is a SQL question, one about
-a named paper is a lookup followed by a scoped search, and one about the
-literature is passage retrieval. Making the model choose the tool is what lets
-a single `ask` serve all three.
-
-What the model is *not* allowed to do is write an unverified citation. Tools
-gather evidence; the answer is then produced by the existing verified-citation
-path, so a claim still cannot be shown unless its quoted words are in the
-passage it names.
+Recency questions go to the catalogue, a named paper to a lookup and scoped
+search, anything else to passage retrieval. The answer itself still goes
+through the verified-citation path.
 """
 
 from __future__ import annotations
@@ -54,12 +48,7 @@ def gather(
     *,
     max_steps: int = MAX_STEPS,
 ) -> tuple[list[ChunkMatch], AgentTrace]:
-    """Let the model call tools until it has evidence, or runs out of steps.
-
-    Passages are collected across every call, so a question answered by first
-    resolving a paper and then searching inside it still ends up with citable
-    evidence.
-    """
+    """Call tools until one returns passages or `max_steps` runs out."""
     trace = AgentTrace()
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     seen: dict[str, Chunk] = {}
@@ -72,8 +61,7 @@ def gather(
         try:
             result = call_tool(name, arguments, corpus, embedder)
         except (ValueError, TypeError) as error:
-            # A malformed call is the model's mistake, not a crash: report it
-            # back so it can try a different tool.
+            # A malformed call goes back to the model as an error, not a crash.
             result = {"error": str(error)}
         trace.steps.append((name, arguments))
 
@@ -106,9 +94,7 @@ def answer_question(
     """Route the question, then answer it with citations that are verified."""
     matches, trace = gather(corpus, embedder, caller, question, max_steps=max_steps)
     if not matches and not trace.metadata and trace.steps:
-        # A tool ran and found nothing. Saying "no passages match" here would be
-        # wrong: for a recency question nothing was searched, the window was
-        # simply empty, and conflating the two hides which it was.
+        # A tool ran but matched nothing: say which, rather than "no passages match".
         used = ", ".join(dict.fromkeys(name for name, _ in trace.steps))
         return (
             Answer(
@@ -125,12 +111,10 @@ def answer_question(
 
 
 def records_answer(question: str, records: list[dict[str, Any]]) -> Answer:
-    """Answer from catalogue rows, which is how a recency question is answered.
+    """Answer a metadata question, such as recency, by listing catalogue records.
 
-    A metadata question - "what is new" - has no passages to quote. The records
-    are reported rather than handed to a model to narrate, which would invite
-    claims nothing supports. Shared with the orchestrator's agent rung, so a
-    question gets the same answer from `ask --tools` as from the ladder.
+    The records are listed rather than narrated by a model, so nothing unsupported
+    is claimed. The orchestrator's agent rung uses this too.
     """
     return Answer(
         question=question,

@@ -1,21 +1,8 @@
-"""Carrying a conversation without letting it become evidence.
+"""Follow-up questions: the conversation decides what is looked up, never what is said.
 
-A follow-up question is rarely self-contained. "Why does it clip?" means
-nothing on its own, and retrieval given those four words returns nothing
-useful, so a single-turn assistant forces the reader to restate the subject
-every time.
-
-The obvious fix - hand the conversation to the model that writes the answer -
-would break the guarantee this project exists for. That model may only state
-what a retrieved passage supports, because every claim it makes is checked
-against the passage it cites. Text from earlier turns cannot be checked
-against anything: it is the model's own prose, and letting it back in would
-mean a claim could enter an answer without ever having come from a paper.
-
-So the conversation is used for exactly one thing: turning a follow-up into a
-question that can stand alone, before retrieval sees it. The answering path is
-untouched and still sees only passages. History decides what is looked up; it
-never decides what may be said.
+A follow-up such as "why does it clip?" is rewritten into a standalone question
+before retrieval. The answering model still sees only passages, because text
+from earlier turns cannot be checked against a source.
 """
 
 from __future__ import annotations
@@ -24,17 +11,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import re
 
-# Enough for the subject to survive several turns, short enough that a local
-# model rewrites in about a second rather than re-reading an essay.
+# Enough history to keep the subject; short enough for a fast rewrite.
 MAX_TURNS = 6
 MAX_TURN_CHARS = 400
 
-# A question that already stands on its own needs no rewrite. The call costs a
-# second, and a model asked to rewrite a complete question can narrow it or
-# drop the term that mattered - so the history is only consulted for a
-# question that actually points back at something. The test is deliberately
-# generous: anything that might refer back is rewritten, because an
-# unnecessary rewrite is shown to the reader and a missed one is not.
+# Only a question that may point back is rewritten; a complete question can be
+# narrowed by a rewrite. The test is generous, since an unneeded rewrite is
+# shown to the reader and a missed one is not.
 BACK_REFERENCE = re.compile(
     r"\b(it|its|it's|they|them|their|theirs|this|that|these|those|he|him|his|she|her)\b"
     r"|\bthe\s+(paper|study|work|method|approach|model|system|authors?|result|results|"
@@ -42,8 +25,7 @@ BACK_REFERENCE = re.compile(
     r"|\b(same|above|previous|earlier|latter|former)\b",
     re.IGNORECASE,
 )
-# Fewer words than this and a question cannot carry its own subject: "why?",
-# "and the cost?" - both need what came before.
+# Shorter questions, such as "and the cost?", cannot carry their own subject.
 MIN_STANDALONE_WORDS = 5
 
 REWRITE_SYSTEM = (
@@ -82,10 +64,8 @@ def standalone_question(
 ) -> str:
     """Resolve a follow-up against the conversation, for retrieval only.
 
-    Returns the original question whenever there is no history, the question
-    already stands on its own, the model is unreachable, or it replies with
-    nothing usable. A rewrite is an improvement to retrieval, and an
-    improvement must not be able to stop a question being asked at all.
+    Returns the question unchanged when there is no history, it already stands
+    alone, or the model fails or replies with nothing usable.
     """
     if not history or not refers_back(question):
         return question
@@ -95,9 +75,7 @@ def standalone_question(
         reply = complete(REWRITE_SYSTEM, f"{transcript}\n\nQ: {question.strip()}")
     except (RuntimeError, OSError):
         return question
-    # Take the first non-empty line before collapsing whitespace: a model that
-    # starts explaining itself has stopped rewriting, and the commentary comes
-    # after a newline. Collapsing first would splice it onto the question.
+    # The first non-empty line: anything after it is the model explaining itself.
     for line in reply.splitlines():
         candidate = " ".join(line.split()).strip().strip('"')
         if candidate:

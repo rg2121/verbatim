@@ -1,15 +1,7 @@
-"""Exporting a small, self-contained corpus that works out of the box.
+"""Export a small self-contained corpus, so a fresh clone works without an ingest.
 
-Building the real corpus means 26 GB of PDFs and most of a day of embedding.
-Nobody evaluates a tool that way. A sample holds a few dozen papers with their
-passages and vectors already in place, so `search` and `ask` work the moment
-the repository is cloned, offline and with nothing to fetch.
-
-It carries the database only, not the PDFs or renderings those passages were
-read from. Everything the retrieval and citation paths need is in the database
-- the text, the offsets, the checksums, the licences - and re-verifying a
-passage against its original bytes is a thing the full corpus does, not a
-demonstration.
+The sample is the database only: papers, passages, vectors and bibliography
+records, with no PDF or HTML files.
 """
 
 from __future__ import annotations
@@ -20,20 +12,14 @@ from pathlib import Path
 import sqlite3
 
 from verbatim.corpus import CorpusStore
+from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
 
-# Tables copied wholesale for the selected papers. Order matters: a row may
-# only be inserted once the row it references exists.
-# Deliberately no downloads or html_sources rows. Those record files held on
-# disk, and the sample ships none: carrying them would make `stats` report 40
-# PDFs that are not there, which is exactly the kind of claim this project is
-# built to not make. Every passage still carries its own source URL, licence
-# and checksum, so citations remain complete.
+# Tables copied for the selected papers, in foreign-key order. Download and HTML
+# records are left out: the sample ships no files, and `stats` would count them.
 PAPER_SCOPED_TABLES = (
     ("papers", "arxiv_id"),
-    # The bibliography *records* ride along - they are what the graph command
-    # walks - even though bibliography *chunks* are left out below: retrieval
-    # excludes those, so they would be weight the sample carries and never
-    # uses. The records are a few kilobytes and make `graph` work on a clone.
+    # Bibliography records make `graph` work; bibliography chunks are left out,
+    # since retrieval excludes them.
     ("paper_references", "citing_arxiv_id"),
     ("chunks", "arxiv_id"),
 )
@@ -65,9 +51,8 @@ class SampleReport:
         )
 
 
-# Papers a sample may hold: current, redistributable, embedded, and of
-# ordinary length. Shared by the round-robin pick and the neighborhood pick,
-# so no path into a sample can bypass the licence gate.
+# Papers a sample may hold: current, `open`-licensed, embedded, ordinary length.
+# Every selection path uses this, so none bypasses the licence gate.
 ELIGIBLE_SQL = """
     SELECT p.arxiv_id, p.base_arxiv_id, p.categories_json
     FROM papers AS p
@@ -82,13 +67,7 @@ ELIGIBLE_SQL = """
 def connected_neighborhood(
     source: sqlite3.Connection, *, model_id: str, limit: int
 ) -> list[str]:
-    """An eligible paper and the eligible papers that cite it.
-
-    Chosen so the sample's citation graph demonstrates something: forty papers
-    picked independently are strangers, and a `graph` command over strangers
-    prints zeros. The hub is the eligible paper most cited by other eligible
-    papers, and its citers fill the remaining slots.
-    """
+    """An eligible paper and the eligible papers citing it, so the sample's graph has edges."""
     if limit < 2:
         return []
     parameters = {
@@ -128,23 +107,12 @@ def connected_neighborhood(
 
 
 def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> list[str]:
-    """Pick papers that actually demonstrate the system.
+    """Pick the papers for a sample.
 
-    Only papers whose passages are embedded, since a sample where search
-    returns nothing is worse than no sample. A share of the slots goes to a
-    cited paper and its citers, so the citation graph has edges; the rest are
-    spread across categories by taking them in turn, so the sample is not
-    fifty papers about one subject.
-
-    Ordinary-sized papers, not the biggest: ranking by passage count selects
-    the longest surveys in the corpus and triples the size of the sample for
-    no extra demonstration.
-
-    Only papers under a licence that permits redistribution. A sample ships
-    the papers' own words inside this repository, which is redistribution, and
-    arXiv's default licence grants that right to arXiv rather than to us. The
-    other classes are excluded for the same reason: `no-derivatives` forbids
-    the chunking, and `unknown` means unknown rather than permitted.
+    A share goes to a cited paper and its citers, so the citation graph has
+    edges; the rest are taken in turn across categories. Only embedded,
+    ordinary-length papers under an `open` licence qualify, because a sample
+    redistributes their text.
     """
     chosen = connected_neighborhood(
         source, model_id=model_id, limit=min(papers // NEIGHBORHOOD_SHARE, papers)
@@ -176,14 +144,7 @@ def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> 
 
 
 def _column_copier(connection: sqlite3.Connection):
-    """Copy rows between two databases by column name, never by position.
-
-    `SELECT *` moves columns in whatever order each table happens to have.
-    This corpus has had its chunks table rebuilt by a migration, so the source
-    and a freshly created destination do not agree on that order, and copying
-    positionally would put each value in the wrong column while reporting
-    success.
-    """
+    """Copy rows between the attached databases by column name, since column order can differ."""
     def copy(table: str, where: str = "", parameters=()) -> None:
         columns = [
             row[1] for row in connection.execute(f"PRAGMA main.table_info({table})")
@@ -221,8 +182,7 @@ def export_sample(
     finally:
         reader.close()
 
-    # Opening the destination creates the schema, so the copy only has to move
-    # rows and never has to restate what the tables look like.
+    # Opening the destination creates the schema; only rows are copied.
     with CorpusStore(destination) as sample:
         sample.connection.execute("ATTACH DATABASE ? AS source", (str(source_path),))
         placeholders = ",".join("?" * len(chosen))
@@ -249,14 +209,13 @@ def export_sample(
                 (*chosen, model_id),
             )
         sample.connection.execute("DETACH DATABASE source")
-        # The vector index is derived, so it is built here rather than copied.
-        from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
-
+        # The vector index is derived, so it is rebuilt rather than copied.
         dimensions = sample.connection.execute(
             "SELECT dimensions FROM embedding_models WHERE model_id = ?", (model_id,)
         ).fetchone()[0]
-        SqliteVecIndex(sample.connection, dimensions).rebuild(model_id)
-        SqlitePaperIndex(sample.connection, dimensions).rebuild(model_id)
+        generation = sample.chunk_generation()
+        SqliteVecIndex(sample.connection, dimensions).rebuild(model_id, generation)
+        SqlitePaperIndex(sample.connection, dimensions).rebuild(model_id, generation)
         counts = (
             sample.connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0],
             sample.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],

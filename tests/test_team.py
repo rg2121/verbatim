@@ -28,11 +28,7 @@ def board_with(needs: int = 2) -> tuple[ResearchState, str]:
 
 
 def test_the_board_refuses_a_claim_resting_on_evidence_nobody_filed() -> None:
-    """The one place the board enforces rather than records.
-
-    A claim citing an evidence id that is not on the board cannot be traced to
-    anything, which defeats the point of having a board at all.
-    """
+    """The one place the board enforces rather than records."""
     state, task = board_with()
     row = state.add_evidence(
         task, chunk_id="a", arxiv_id="p1", quote="q", found_by=RETRIEVAL
@@ -44,13 +40,7 @@ def test_the_board_refuses_a_claim_resting_on_evidence_nobody_filed() -> None:
 
 
 def test_a_claim_may_rest_only_on_its_own_tasks_evidence() -> None:
-    """Evidence filed for one task cannot support a claim made for another.
-
-    The board checked only that an evidence id existed somewhere on it, so a
-    claim for task two could cite a passage gathered for task one - evidence
-    found looking for something else. The one caller happens to pass
-    same-task rows; the board now enforces it rather than trusting that.
-    """
+    """Evidence filed for one task cannot support a claim made for another."""
     state, first = board_with()
     second = state.add_task("establish that charge moves along the wire").task_id
     theirs = state.add_evidence(
@@ -66,11 +56,7 @@ def test_a_claim_may_rest_only_on_its_own_tasks_evidence() -> None:
 
 
 def test_two_workers_finding_the_same_passage_file_it_once() -> None:
-    """A task's evidence count decides whether it is done.
-
-    Counting one passage twice would close a task nobody finished, and two
-    workers searching the same objective will collide.
-    """
+    """A task's evidence count decides whether it is done."""
     state, task = board_with()
 
     first = state.add_evidence(
@@ -94,20 +80,13 @@ def test_the_critic_reports_absence_in_a_fixed_order() -> None:
     assert inspect(state)[0].kind == THIN
     state.add_evidence(task, chunk_id="b", arxiv_id="p2", quote="q", found_by=RETRIEVAL)
     assert inspect(state)[0].kind == NO_ADVERSARIAL
-    # Closed by the attempt, not by what it found: an adversarial search that
-    # turns up only passages already filed has done its job and come back
-    # empty, and the board dedupes by passage.
+    # Closed by the attempt, even though it found nothing new.
     state.record(ADVERSARIAL_SEARCH, task, "sought")
     assert inspect(state) == []
 
 
 def test_a_single_paper_is_not_reported_as_a_gap() -> None:
-    """Deliberately absent, on this project's own measurement.
-
-    A lone-paper warning was measured firing on 5 of 14 good answers while
-    catching 2 of 6 bad ones. It reads like a quality signal and is not one,
-    so the board does not raise it and no worker is dispatched for it.
-    """
+    """Resting on one paper is not reported: measured, it did not predict quality."""
     state, task = board_with(needs=2)
     for chunk in ("a", "b"):
         state.add_evidence(
@@ -126,12 +105,7 @@ def test_a_gap_chooses_its_worker_by_rule() -> None:
 
 
 def test_a_worker_is_never_sent_twice_at_the_same_task(tmp_path: Path) -> None:
-    """Blind retry reproduces the fault that caused the first failure.
-
-    A retrieval that files nothing leaves the task with no evidence, so the
-    critic raises the same gap for ever. The loop has to abandon the task
-    rather than run the same worker again.
-    """
+    """Blind retry reproduces the fault that caused the first failure."""
     class NoAnswers:
         def complete(self, system, user, schema):
             return {"answer": "The passages do not say.", "citations": []}
@@ -145,10 +119,8 @@ def test_a_worker_is_never_sent_twice_at_the_same_task(tmp_path: Path) -> None:
         return "TASK: establish how magnetic flux threads a ring\n"
 
     with flux_corpus(tmp_path) as corpus:
-        # More evidence demanded than a two-paper corpus can supply, so the
-        # task stays thin however often retrieval runs. Retrieval finding
-        # nothing at all is unreachable here: vector search always returns
-        # its nearest neighbours, however far away they are.
+        # More evidence demanded than a two-paper corpus can supply, so the task
+        # stays thin however often retrieval runs.
         report = run_team(
             corpus, StubEmbedder(), NoAnswers(), plans,
             "how does flux thread a ring?", max_steps=6, needs=99,
@@ -162,11 +134,7 @@ def test_a_worker_is_never_sent_twice_at_the_same_task(tmp_path: Path) -> None:
 
 
 def test_the_board_redirects_work_and_says_how_often(tmp_path: Path) -> None:
-    """The number that says whether the board is doing anything.
-
-    A run where every task is satisfied by its first retrieval has a board
-    that recorded work rather than directing it.
-    """
+    """The number that says whether the board is doing anything."""
     class Answers:
         def complete(self, system, user, schema):
             return {"answer": "Flux threads it.", "citations": []}
@@ -231,12 +199,7 @@ def test_the_writer_may_use_only_what_is_on_the_board(tmp_path: Path) -> None:
 def test_the_report_says_whether_the_adversarial_search_was_used(
     tmp_path: Path,
 ) -> None:
-    """A worker that files rows nothing cites has not earned its cost.
-
-    The adversarial worker can fill the board and change nothing. What
-    matters is whether the written answer rests on any of what it found, so
-    that is counted rather than assumed.
-    """
+    """A worker that files rows nothing cites has not earned its cost."""
     from verbatim.team import TeamReport
 
     with flux_corpus(tmp_path) as corpus:
@@ -268,12 +231,7 @@ def test_the_report_says_whether_the_adversarial_search_was_used(
 def test_the_final_answer_uses_only_evidence_a_task_answer_cited(
     tmp_path: Path,
 ) -> None:
-    """"Approved" means it already carried a quote through verification.
-
-    A passage a worker filed and no task answer ever cited survived retrieval
-    and nothing else. It must not reach the final text, or the board's
-    provenance stops meaning anything at the last step.
-    """
+    """"Approved" means it already carried a quote through verification."""
     from verbatim.team import write_final
 
     with flux_corpus(tmp_path) as corpus:
@@ -330,9 +288,7 @@ def test_nothing_approved_declines_in_words_rather_than_returning_nothing(tmp_pa
 
         final = write_final(corpus, CitesNothing(), state, answers)
 
-    # Declined in words, never nothing: the reader always gets an answer to the
-    # question they asked, and the approved-only rule still holds, because no
-    # passage reached it.
+    # Declined in words, never nothing, and still from approved passages only.
     assert final is not None
     assert final.declined is True
     assert final.citations == []
@@ -342,12 +298,7 @@ def test_nothing_approved_declines_in_words_rather_than_returning_nothing(tmp_pa
 def test_a_decline_does_not_claim_work_the_step_limit_prevented(
     tmp_path: Path,
 ) -> None:
-    """Found in audit: the decline described work that never happened.
-
-    With the step limit at zero no worker is ever dispatched, yet the answer
-    said every task came back without a verified citation. It must say what
-    actually happened.
-    """
+    """A decline must not describe work the step limit prevented."""
     class Silent:
         def complete(self, system, user, schema):
             return {"answer": "The passages do not say.", "citations": []}

@@ -1,12 +1,7 @@
-"""Measuring whether a retrieval change actually helps.
+"""Retrieval evaluation against answer keys.
 
-Every retrieval decision so far - hybrid fusion, the diversity cap, excluding
-bibliographies - is correct by construction and unmeasured. This turns them
-into numbers.
-
-Relevance is recorded per *paper*, not per chunk: chunk ids change whenever the
-chunker version does, so a chunk-level answer key would expire on every
-re-chunk, while "this question is answered by that paper" stays true.
+Relevance is recorded per paper, not per chunk: chunk ids change with the
+chunker, while "this paper answers the question" stays true.
 """
 
 from __future__ import annotations
@@ -14,20 +9,19 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import json
-import random
 from pathlib import Path
+import random
 
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
-from verbatim.retrieval import hybrid_search, vector_search
+from verbatim.reranking import rerank
+from verbatim.research import gather_for_parts, plan_subquestions
+from verbatim.retrieval import expanded_search, hybrid_search, vector_search
 
 CUTOFFS = (1, 5, 10)
 
-# The two reasons a question has no answer here. They are different problems
-# and only the first is visible to retrieval, so scoring them together scores
-# nothing: measured over this corpus, "what is the farthest star from the
-# earth" matches no abstract at all, while "what is a tensor" matches 177 and
-# is unanswerable only because none of them defines one.
+# Why a question has no answer here. Only a coverage gap is visible to
+# retrieval, so the two kinds are scored apart.
 NO_COVERAGE = "no_coverage"
 NO_ANSWER = "no_answer"
 UNANSWERABLE_KINDS = (NO_COVERAGE, NO_ANSWER)
@@ -35,18 +29,10 @@ UNANSWERABLE_KINDS = (NO_COVERAGE, NO_ANSWER)
 
 @dataclass(frozen=True)
 class EvalCase:
-    """One question, and either the papers that answer it or nothing at all.
+    """One question, and either the papers that answer it or nothing.
 
-    A case with `expect_none` is a question the corpus cannot answer, and it
-    must say which of the two kinds it is. `no_coverage` means no paper is
-    about the subject, which retrieval can in principle see. `no_answer` means
-    the subject is well covered but no paper answers the question - the corpus
-    holds 177 papers whose abstracts mention tensors and defines none of them -
-    which no retrieval signal distinguishes from a question that is answered.
-
-    They were one label until measurement showed that every detector tried
-    against them failed, because half the cases were undetectable by
-    construction.
+    An `expect_none` case says which kind it is: `no_coverage` (no paper is
+    about the subject) or `no_answer` (covered, but no paper answers it).
     """
 
     question: str
@@ -60,11 +46,7 @@ class EvalCase:
     def is_compound(self) -> bool:
         """Whether this question needs every listed paper, not any one of them.
 
-        `expect_papers` lists alternatives and is scored by first hit;
-        `require_papers` lists parts of one answer - "compare A and B" is not
-        answered by ten excellent passages about A - and is scored by
-        coverage. Each entry may be an any-of group, written "idA|idB", for a
-        part that more than one held paper can supply.
+        `require_papers` entries may be any-of groups written "idA|idB".
         """
         return bool(self.require_papers)
 
@@ -152,17 +134,7 @@ def load_cases(path: Path) -> list[EvalCase]:
 
 
 def load_key(paths: Sequence[Path]) -> list[EvalCase]:
-    """Read one evaluation key spread across several files.
-
-    The hand-authored held-out cases and the generated ones live apart because
-    they were authored differently, and a set is only as trustworthy as its
-    authoring. Kept apart, `source_of` can split any result back into the two
-    and show whether the generated half is systematically easier - which would
-    mean its questions leak, not that the system improved.
-
-    A question appearing in two files is refused rather than merged: scoring
-    it twice would weight it double and silently distort every mean.
-    """
+    """Read one key spread across several files, refusing a question listed twice."""
     cases: list[EvalCase] = []
     seen: dict[str, Path] = {}
     for path in paths:
@@ -181,17 +153,7 @@ def load_key(paths: Sequence[Path]) -> list[EvalCase]:
 def stratified_sample(
     cases: Sequence[EvalCase], *, size: int, seed: int = 0
 ) -> list[EvalCase]:
-    """Draw evenly from each authoring batch, not from the top of the file.
-
-    The batches are wildly different sizes - 36, 52 and 400 here - and score
-    differently enough that a sample's composition decides its result. Taking
-    the first N of a concatenated key would have drawn 88 hand-authored cases
-    and 12 generated ones, and reported their average as though it described
-    the corpus.
-
-    Round-robin across batches, so a small batch is fully represented before a
-    large one dominates, and seeded so the same sample can be scored twice.
-    """
+    """Draw round-robin from each authoring batch, seeded, so no batch dominates."""
     if size < 1:
         raise ValueError("size must be at least 1")
     batches: dict[str, list[EvalCase]] = {}
@@ -244,13 +206,10 @@ def group_rank(matches: Sequence[ChunkMatch], group: str) -> int | None:
 
 @dataclass(frozen=True)
 class CompoundScore:
-    """How one retrieval mode covered the questions that need several papers.
+    """Coverage of questions that need several papers.
 
-    First-hit metrics cannot see the failure that matters here: ten excellent
-    passages about PPO score perfectly on "how does GRPO differ from PPO" while
-    answering half of it. Coverage@k is the mean fraction of a question's
-    required parts found in the top k; complete@k is the fraction of questions
-    with every part found.
+    coverage@k is the mean share of required parts found in the top k;
+    complete@k is the share of questions with every part found.
     """
 
     mode: str
@@ -307,16 +266,10 @@ def score_mode(
     *,
     cutoffs: Sequence[int] = CUTOFFS,
 ) -> ModeScore:
-    """Run every case through one retrieval mode and summarise it.
+    """Run the answerable single-paper cases through one mode and summarise them.
 
-    Recall@k here means "at least one result in the top k came from a paper
-    that answers the question", which is what matters when the answer is then
-    written from those passages.
-
-    Compound cases are excluded: any-of scoring would credit half an answer as
-    a hit, and including them would also quietly move the numbers this table
-    has carried across every measurement so far. They get their own scoring in
-    score_compound_mode.
+    Recall@k means at least one top-k result came from an expected paper.
+    Compound cases are scored by score_compound_mode.
     """
     answerable = [case for case in cases if not case.expect_none and not case.is_compound]
     hits = {k: 0 for k in cutoffs}
@@ -353,17 +306,11 @@ def retrieval_modes(
     hyde: bool = False,
     decompose: bool = False,
 ) -> dict[str, Callable[[str], Sequence[ChunkMatch]]]:
-    """Every retrieval mode under its reporting name, built once.
+    """Every retrieval mode under its reporting name, shared by both scorings.
 
-    Shared by first-hit and compound scoring, so both tables measure exactly
-    the same retrieval rather than two drifting copies of it.
-
-    With a reranker, hybrid retrieves a wider shortlist and the reranker trims
-    it, which is the only arrangement in which reranking could help.
+    With a reranker, hybrid retrieves three times the limit and the reranker trims it.
     """
     def expanded(query: str) -> Sequence[ChunkMatch]:
-        from verbatim.retrieval import expanded_search
-
         return expanded_search(
             corpus, embedder, query, complete=complete, rewrites=rewrites,
             hyde=hyde, limit=limit, max_per_paper=max_per_paper,
@@ -372,10 +319,9 @@ def retrieval_modes(
     def hybrid(query: str) -> Sequence[ChunkMatch]:
         if reranker is None:
             return hybrid_search(corpus, embedder, query, limit=limit, max_per_paper=max_per_paper)
-        from verbatim.reranking import rerank as _rerank
 
         wide = hybrid_search(corpus, embedder, query, limit=limit * 3, max_per_paper=max_per_paper)
-        return _rerank(reranker, query, wide, limit=limit)
+        return rerank(reranker, query, wide, limit=limit)
 
     modes: dict[str, Callable[[str], Sequence[ChunkMatch]]] = {
         "keyword-all": lambda q: corpus.search_chunks(q, limit=limit, match="all"),
@@ -394,22 +340,16 @@ def retrieval_modes(
             corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
             use_compare=True,
         ),
-        # Both shape-gated legs together, which is what the orchestrator's
-        # router runs. Each leg gates itself, so this should equal
-        # hybrid+graph on single-subject questions and hybrid+compare on
-        # comparisons - measured here rather than assumed.
+        # Both shape-gated legs, as the orchestrator's router runs them.
         "hybrid+routed": lambda q: hybrid_search(
             corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
             use_graph=True, use_compare=True,
         ),
     }
-    # Only offered when a model is available to do the rewriting, so the
-    # comparison is against the same corpus rather than a silently skipped leg.
+    # Offered only when a model is available to rewrite queries.
     if complete is not None and (rewrites or hyde):
         modes["hybrid+expansion"] = expanded
     if complete is not None and decompose:
-        from verbatim.research import gather_for_parts, plan_subquestions
-
         def decomposed(query: str) -> Sequence[ChunkMatch]:
             parts = plan_subquestions(complete, query)
             return gather_for_parts(
@@ -445,12 +385,7 @@ def evaluate_compound(
 
 
 def describe_case_mix(cases: Sequence[EvalCase]) -> str:
-    """State what the answer key contains, split by what it is measuring.
-
-    The two unanswerable kinds are reported apart because they are different
-    problems: a coverage gap is visible to retrieval, and a covered-but-
-    unanswered question is not. A single count hides which one a change moved.
-    """
+    """Summarise the key, counting the two unanswerable kinds apart."""
     coverage = sum(1 for case in cases if case.unanswerable_kind == NO_COVERAGE)
     unanswered = sum(1 for case in cases if case.unanswerable_kind == NO_ANSWER)
     compound = sum(1 for case in cases if case.is_compound)

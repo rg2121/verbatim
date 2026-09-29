@@ -26,12 +26,7 @@ SUBJECTS = ["dielectric loss", "flux noise", "quasiparticle poisoning",
 
 
 def passage(n: int) -> str:
-    """A passage about its own subject, so questions about it differ.
-
-    Every paper saying the same thing would make every generated example
-    identical, which the generator would then dedupe - and a fixture that
-    hides the behaviour under test is worse than no fixture.
-    """
+    """A passage about its own subject, so questions about it differ."""
     subject = SUBJECTS[n % len(SUBJECTS)]
     return " ".join([f"superconducting qubits decohere through {subject}"] * 20)
 
@@ -98,11 +93,7 @@ def test_seeds_are_reproducible_and_one_per_paper(tmp_path: Path) -> None:
 
 
 def test_the_licence_filter_reaches_the_vector_leg_too(tmp_path: Path) -> None:
-    """Both legs apply the filter, because both can return a passage.
-
-    The predicate used to be written out separately for each leg. A licence
-    gate on one of them is not a licence gate.
-    """
+    """Both legs apply the filter, because both can return a passage."""
     with seeded(tmp_path, {"2608.00001v1": "open",
                            "2608.00002v1": "arxiv-nonexclusive"}) as corpus:
         allowed = corpus.papers_matching(
@@ -177,13 +168,7 @@ def test_an_answer_with_no_citation_is_not_an_example(tmp_path: Path) -> None:
 def test_an_ineligible_citation_is_a_fault_and_not_a_rejection(
     tmp_path: Path,
 ) -> None:
-    """If the gate leaks, saying so quietly is the wrong thing to do.
-
-    Every other rejection is ordinary: a model wrote a bad quote, retrieval
-    found nothing. This one means an ineligible paper reached the prompt an
-    answer was written from, which is the failure the policy exists to
-    prevent, so it is counted apart and labelled.
-    """
+    """If the gate leaks, saying so quietly is the wrong thing to do."""
     with seeded(tmp_path, {"2608.00002v1": "arxiv-nonexclusive"}) as corpus:
         citation, match = cited(corpus, "2608.00002v1")
         tally = Tally()
@@ -335,13 +320,7 @@ def test_generate_does_not_remake_an_example_a_previous_run_wrote(
 
 
 def test_the_seed_draw_is_not_sized_to_an_assumed_keep_rate(tmp_path: Path) -> None:
-    """A strict acceptance rule needs more seeds than the arithmetic suggests.
-
-    Sizing the draw to an assumed keep rate makes a run quietly return fewer
-    examples than it was asked for. Seeds cost one query; generations cost
-    minutes. This asserts the generator keeps looking rather than giving up
-    once its first few passages are rejected.
-    """
+    """A strict acceptance rule needs more seeds than the arithmetic suggests."""
     from verbatim.distill import generate
 
     classes = {f"2608.0000{n}v1": "open" for n in range(1, 7)}
@@ -380,14 +359,7 @@ def test_the_seed_draw_is_not_sized_to_an_assumed_keep_rate(tmp_path: Path) -> N
     ],
 )
 def test_questions_about_the_papers_cover_are_dropped(question: str) -> None:
-    """Front matter is a passage like any other, and it is a trap.
-
-    A paper's first chunk carries its title, authors and affiliations, and a
-    question generator handed one asks who works where. On the first 300
-    examples, 83 came out bibliographic. The check is on the question because
-    the passage has no clean signal: front matter shares chunk_index 0 with
-    half the corpus and with most of the good seeds.
-    """
+    """Front matter is a passage like any other, and it is a trap."""
     from verbatim.distill import bibliographic, usable
 
     assert bibliographic(question)
@@ -404,13 +376,7 @@ def test_a_research_question_is_kept() -> None:
 def test_an_unverified_marker_rejects_the_example_even_with_nothing_rejected(
     tmp_path: Path,
 ) -> None:
-    """An empty `rejected` list is not proof the text is clean.
-
-    A model that writes an inline marker for a passage it never cited leaves a
-    dangling reference, which is rewritten to [unverified] with nothing in
-    `rejected` to show for it. Checking the list alone let two of the first
-    300 examples through carrying the marker.
-    """
+    """An empty `rejected` list is not proof the text is clean."""
     with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
         citation, match = cited(corpus, "2608.00001v1")
         answer = answer_with([citation])

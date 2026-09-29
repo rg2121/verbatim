@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
+import multiprocessing
 from pathlib import Path
-from collections.abc import Callable, Iterable
+from queue import Empty
 import re
+import time
 import unicodedata
 
-import multiprocessing
-from queue import Empty
-import time
 import pymupdf
 import pymupdf4llm
 
@@ -24,9 +24,7 @@ BODY = "body"
 REFERENCES = "references"
 TABLE = "table"
 
-# Layout-aware extraction turns the bibliography heading into a section, so a
-# whole-title match is both simpler and far more reliable than the earlier
-# approach of scanning prose for the word "References".
+# Layout-aware extraction makes the bibliography heading its own section.
 REFERENCES_TITLE = re.compile(
     r"^(?:\d+\s*\.?\s*)?(?:references|bibliography|works cited|literature cited)\s*$",
     re.I,
@@ -37,10 +35,8 @@ MARKDOWN_MARKUP = re.compile(r"\*{1,3}|_+|`+|<[^>]{1,40}>|^\s*[-*+]\s+", re.M)
 # Font-size heading detection sometimes swallows an author block into the
 # title; a real section heading is short.
 MAX_HEADING_LENGTH = 80
-# Layout extraction is C code with no progress reporting and no internal
-# limit. One 7.7MB paper in this corpus pinned a core for 46 minutes without
-# returning, which blocked its whole batch and, through that, the ingest.
-# Set by VERBATIM_EXTRACTION_TIMEOUT, which this once hard-coded past.
+# Layout extraction is C code with no internal limit; one paper once ran for
+# 46 minutes. Set by VERBATIM_EXTRACTION_TIMEOUT.
 EXTRACTION_TIMEOUT_SECONDS = config.EXTRACTION_TIMEOUT
 # How often a waiting extraction checks that its worker is still alive.
 POLL_SECONDS = 0.5
@@ -50,11 +46,7 @@ SURROGATES = re.compile(r"[\ud800-\udfff]")
 
 
 def chunker_fingerprint(chunk_size: int, overlap: int) -> str:
-    """Identify the algorithm *and* the parameters that produced a chunk.
-
-    Changing either invalidates existing chunks, so both belong in the value
-    that decides whether a PDF needs re-chunking.
-    """
+    """The chunker version and parameters; a change to either means re-chunking."""
     return f"{CHUNKER_VERSION}:{chunk_size}:{overlap}"
 
 
@@ -69,12 +61,7 @@ class TextSpan:
 
 @dataclass(frozen=True)
 class Section:
-    """One heading's worth of text, and where it sits in the page.
-
-    A table is carried as its own section rather than as prose inside one, so
-    that its rows survive chunking intact and a reader can be told that what
-    they are looking at is a table.
-    """
+    """One heading's worth of text and its offset in the page. Tables are their own sections."""
 
     path: tuple[str, ...]
     text: str
@@ -90,10 +77,9 @@ class Chunk:
     arxiv_id: str
     source_url: str
     license_url: str | None
-    # The checksum of whatever this passage was read from - a PDF or an arXiv
-    # HTML rendering. Named for the role, not one of the two forms.
+    # Checksum of the source this passage was read from, PDF or HTML.
     source_sha256: str
-    # A page for a PDF, a section ordinal for HTML, which has none.
+    # A page for a PDF; a section ordinal for HTML, which has no pages.
     page_number: int
     chunk_index: int
     char_start: int
@@ -102,8 +88,7 @@ class Chunk:
     chunker_version: str
     kind: str = BODY
     section_path: str = ""
-    # "pdf" or "html". page_number means a page for a PDF and a section
-    # ordinal for HTML, which has no pages, so a citation must know which.
+    # "pdf" or "html", which says how to read page_number.
     source_kind: str = "pdf"
 
     def to_dict(self) -> dict[str, object]:
@@ -132,9 +117,8 @@ def extract_pdf_chunks(
         try:
             pages = list(page_extractor(pdf_path))
         except ExtractionFailed as error:
-            # One unextractable paper must not cost the batch it is in. The
-            # caller still marks it chunked, so it is not retried for ever;
-            # it simply contributes nothing.
+            # Skip the paper rather than fail the batch. It is still marked chunked,
+            # so it is not retried forever.
             print(f"  ! {download.arxiv_id}: {error}", flush=True)
             continue
         paper_chunks: list[Chunk] = []
@@ -168,17 +152,10 @@ def extract_pdf_chunks(
 
 
 def mark_references(paper_chunks: list[Chunk]) -> list[Chunk]:
-    """Label the chunks that sit inside a paper's bibliography.
+    """Label the chunks inside a paper's bibliography.
 
-    A chunk belongs to the bibliography when one of its own section headings
-    *is* "References" (or a synonym), so a section called "Reference-Assisted
-    Human Audit" is not swept up.
-
-    Only the bibliography itself is marked. Marking everything that follows it
-    was wrong twice over: papers often place appendices and supplementary
-    material after the references, which hid roughly 72,000 chunks of real
-    content from search, and the positional guard that came with it missed
-    bibliographies sitting mid-document in papers with long appendices.
+    Only chunks whose own section heading is "References" or a synonym are
+    marked, so appendices after the bibliography stay searchable.
     """
     return [
         replace(chunk, kind=REFERENCES) if is_bibliography(chunk.section_path) else chunk
@@ -212,16 +189,8 @@ def extract_pages_from_pdf(
 ) -> list[str]:
     """Return Markdown for every page of a text-based PDF.
 
-    pymupdf4llm reconstructs reading order and marks headings by font size,
-    which plain text extraction cannot express.  It costs roughly 50x the time
-    of raw extraction, which is affordable because chunking is incremental.
-
-    It runs in a child process because it is C code that occasionally does not
-    return: one paper here held a core for 46 minutes and was still going. A
-    thread could not be abandoned and a signal would not interrupt the C call,
-    so the only way to bound it is a process that can be killed.
-
-    Scanned PDFs need OCR, which will be a separate later stage.
+    Layout extraction runs in a child process so a PDF that never finishes can
+    be killed at `timeout`. Scanned PDFs yield nothing; there is no OCR.
     """
     context = multiprocessing.get_context("spawn")
     queue: multiprocessing.Queue = context.Queue()
@@ -229,9 +198,7 @@ def extract_pages_from_pdf(
     worker.start()
     deadline = time.monotonic() + timeout
     try:
-        # Polled rather than waited on once: a child that dies on a corrupt
-        # file puts nothing on the queue, and a single wait sat out the whole
-        # timeout before reporting a crash as slowness.
+        # Poll, so a child that crashes is reported at once rather than at the timeout.
         while True:
             try:
                 return queue.get(timeout=max(min(POLL_SECONDS, deadline - time.monotonic()), 0))
@@ -258,10 +225,7 @@ def extract_pages_from_pdf(
 
 
 def extract_plain_pages_from_pdf(pdf_path: Path) -> list[str]:
-    """Raw per-page text, without layout reconstruction.
-
-    Kept as the fast path for callers that do not need structure.
-    """
+    """Raw per-page text, without layout reconstruction."""
     with pymupdf.open(pdf_path) as document:
         return [page.get_text("text") for page in document]
 
@@ -271,10 +235,7 @@ def parse_markdown_sections(
 ) -> tuple[list[Section], list[tuple[int, str]]]:
     """Split one page into sections, carrying the heading stack across pages.
 
-    A section runs from one heading to the next, so a chunk never straddles a
-    section boundary and every chunk knows which part of the paper it came
-    from.  The stack is returned because a section usually continues onto the
-    following page.
+    A chunk never straddles two sections, so each knows where in the paper it is.
     """
     stack = list(heading_stack)
     sections: list[Section] = []
@@ -296,7 +257,7 @@ def parse_markdown_sections(
             continue
         flush()
         level = len(heading.group(1))
-        title = strip_markdown(heading.group(2))[:MAX_HEADING_LENGTH].strip()
+        title = clean_markdown_text(heading.group(2))[:MAX_HEADING_LENGTH].strip()
         while stack and stack[-1][0] >= level:
             stack.pop()
         if title:
@@ -306,44 +267,18 @@ def parse_markdown_sections(
 
 
 def clean_markdown_text(text: str) -> str:
-    """Drop Markdown markup, then normalize, keeping only the words.
-
-    Body text is stripped as well as headings: a stored passage containing
-    "**flux**" would fail citation verification against a model that quoted
-    "flux", and the markup is noise to both keyword and vector search.
-    """
+    """Drop Markdown markup and normalize, so stored text matches what is quoted."""
     return normalize_page_text(MARKDOWN_MARKUP.sub("", text))
 
 
-def strip_markdown(text: str) -> str:
-    """Remove Markdown emphasis and inline markup from a single line."""
-    return clean_markdown_text(text)
-
-
 def normalize_page_text(text: str) -> str:
-    """Fold typographic ligatures and collapse whitespace.
-
-    PDF extraction yields presentation glyphs such as U+FB02 "ﬂ", which break
-    both keyword search and embedding similarity against ordinary "fl", and
-    occasionally lone surrogates, which cannot be encoded as UTF-8 at all. One
-    such character used to abort a whole chunking batch when the insert failed,
-    discarding every paper processed alongside it.
-    """
+    """Fold ligatures such as "ﬂ" to "fl", drop lone surrogates, collapse whitespace."""
     without_surrogates = SURROGATES.sub("", text)
     return " ".join(unicodedata.normalize("NFKC", without_surrogates).split())
 
 
-def chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
-    """Create normalized, overlapping chunks without splitting words when possible."""
-    return [span.text for span in chunk_page(text, chunk_size=chunk_size, overlap=overlap)]
-
-
 def chunk_page(text: str, *, chunk_size: int, overlap: int) -> list[TextSpan]:
-    """Chunk one page, recording where each chunk sits in the normalized page.
-
-    The offsets let a citation point at a character range rather than only at a
-    page number.
-    """
+    """Chunk one page, keeping each chunk's character offsets in the normalized page."""
     if chunk_size < 1:
         raise ValueError("chunk_size must be at least 1")
     if overlap < 0 or overlap >= chunk_size:
@@ -372,9 +307,7 @@ def chunk_page(text: str, *, chunk_size: int, overlap: int) -> list[TextSpan]:
         if next_start > 0 and next_start < len(normalized) and normalized[next_start - 1] != " ":
             next_space = normalized.find(" ", next_start)
             next_start = len(normalized) if next_space == -1 else next_space + 1
-        # A token longer than chunk_size has no interior space to advance to, so
-        # the search above can land beyond `end`.  Clamping keeps the spans
-        # contiguous; such a token is split mid-word rather than dropped.
+        # A token longer than chunk_size is split mid-word rather than dropped.
         start = min(next_start, end)
     return spans
 

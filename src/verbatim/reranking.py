@@ -1,23 +1,7 @@
-"""Re-scoring retrieved passages against the query, one pair at a time.
+"""Cross-encoder reranking of retrieved passages, behind `--rerank`.
 
-Retrieval compares a query to passages it has already turned into vectors, so
-it never reads the two together. A cross-encoder does, which is the usual next
-step after hybrid retrieval.
-
-**Measured worse here, on all three models tried, and therefore off by default**
-(over the 42-case development set of the time; the finding did not depend on it):
-
-    hybrid (no rerank)          r@1 0.90   mrr 0.940
-    ms-marco-MiniLM-L-6-v2      r@1 0.67   mrr 0.752
-    bge-reranker-base           r@1 0.60   mrr 0.701
-    jina-reranker-v1-turbo-en   r@1 0.67   mrr 0.741
-
-Reranking pays off when retrieval is mediocre and the right passage is sitting
-at rank 8. Here it is already first 90% of the time, so there is almost nothing
-to promote and a great deal to demote - any reshuffle is more likely to move a
-correct hit down than a wrong one up. Kept behind --rerank because that changes
-if the corpus grows harder or the queries get longer, and this is the code that
-would measure it.
+Off by default: it made retrieval worse on all three models tried, because the
+right passage is usually already first and a reshuffle mostly demotes it.
 """
 
 from __future__ import annotations
@@ -39,7 +23,7 @@ class Reranker(Protocol):
 
 @dataclass
 class CrossEncoderReranker:
-    """ONNX cross-encoder, ~80MB, loaded on first use like the embedder."""
+    """ONNX cross-encoder (about 80 MB), loaded on first use."""
 
     model_name: str = DEFAULT_RERANK_MODEL
     _encoder: object | None = None
@@ -69,11 +53,7 @@ def rerank(
     *,
     limit: int | None = None,
 ) -> list[ChunkMatch]:
-    """Reorder matches by cross-encoder score, keeping everything else intact.
-
-    The returned score is the cross-encoder's, not the fused rank score, so a
-    caller can tell which stage ranked what.
-    """
+    """Reorder matches by cross-encoder score, which replaces the fused score."""
     if not matches:
         return []
     scores = reranker.score(query, [m.chunk.text for m in matches])
