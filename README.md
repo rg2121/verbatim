@@ -204,3 +204,8 @@ The PDF parsing depends on [PyMuPDF](https://pymupdf.readthedocs.io/), which is
 dual-licensed AGPL-3.0 or commercial, so this project must be AGPL too. You may
 read, run, fork and modify it freely; if you publish a modified version or run
 it as a network service, your source must be available under the same terms.
+
+The sample corpus in `sample/` is not covered by the AGPL. It holds text from
+40 arXiv papers, each redistributed under its own licence - 38 CC BY 4.0, one
+CC BY-SA 4.0 and one CC0 1.0 - and each paper's authors, title, version and
+licence are recorded in the corpus and cited with every passage quoted from it.
