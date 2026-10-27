@@ -273,3 +273,28 @@ def test_a_chunk_from_an_older_chunker_can_be_left_unembedded(tmp_path: Path) ->
 
     assert embedded == 1  # only the passage the current chunker produces
     assert everything == 1  # the stale one, when not filtered
+
+
+def test_the_embedding_model_is_cached_where_the_os_does_not_clear_it(monkeypatch, tmp_path) -> None:
+    """fastembed's default cache is the temp folder, which the OS empties."""
+    import fastembed
+
+    from verbatim import config
+    from verbatim.embedding import FastEmbedEmbedder
+
+    seen: dict = {}
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name, **options):
+            seen.update(options)
+
+        @staticmethod
+        def list_supported_models():
+            return [{"model": "stub-model", "dim": 4, "sources": {"hf": "stub"}}]
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", FakeTextEmbedding)
+    monkeypatch.setattr(config, "MODEL_CACHE", tmp_path / "models")
+
+    FastEmbedEmbedder(model_name="stub-model").model
+
+    assert seen["cache_dir"] == str(tmp_path / "models")

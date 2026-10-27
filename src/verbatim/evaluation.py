@@ -15,7 +15,7 @@ import random
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
 from verbatim.reranking import rerank
-from verbatim.research import gather_for_parts, plan_subquestions
+from verbatim.research import gather_within_budget, plan_subquestions
 from verbatim.retrieval import expanded_search, hybrid_search, vector_search
 
 CUTOFFS = (1, 5, 10)
@@ -351,12 +351,10 @@ def retrieval_modes(
         modes["hybrid+expansion"] = expanded
     if complete is not None and decompose:
         def decomposed(query: str) -> Sequence[ChunkMatch]:
-            parts = plan_subquestions(complete, query)
-            return gather_for_parts(
-                corpus, embedder, parts,
-                per_part=max(limit // max(len(parts), 1), 2),
-                max_per_paper=max_per_paper,
-            )[:limit]
+            return gather_within_budget(
+                corpus, embedder, plan_subquestions(complete, query),
+                passages=limit, max_per_paper=max_per_paper,
+            )
 
         modes["hybrid+plan"] = decomposed
     return modes

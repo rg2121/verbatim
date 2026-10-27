@@ -253,3 +253,78 @@ def test_every_committed_key_is_kept_out_of_new_authoring() -> None:
     }
 
     assert on_disk == set(SCORED_KEYS)
+
+
+def test_a_damaged_database_is_reported_rather_than_raised(tmp_path, monkeypatch) -> None:
+    from verbatim.cli import main
+
+    broken = tmp_path / "corpus.db"
+    broken.write_text("not a database")
+    monkeypatch.setattr("sys.argv", ["verbatim", "stats", "--state", str(broken)])
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+
+    assert "not a database" in str(raised.value)
+
+
+def test_a_locked_database_is_reported_rather_than_raised(monkeypatch) -> None:
+    import sqlite3
+
+    import verbatim.cli as cli
+
+    def locked():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "run", locked)
+
+    with pytest.raises(SystemExit, match="database is locked"):
+        cli.main()
+
+
+def test_a_bug_in_a_query_keeps_its_traceback(monkeypatch) -> None:
+    """Reported as 'database: ...', our bug would send a reader to check their corpus."""
+    import sqlite3
+
+    import verbatim.cli as cli
+
+    def misused():
+        raise sqlite3.ProgrammingError("Incorrect number of bindings supplied")
+
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "run", misused)
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        cli.main()
+
+
+def test_distill_records_the_model_that_actually_ran(tmp_path, monkeypatch) -> None:
+    """With no model named, Ollama's own choice is still recorded in each example."""
+    import verbatim.cli as cli
+    import verbatim.distill as distill
+
+    class Picked:
+        model = "picked-by-ollama"
+
+        def complete_text(self, system, user):
+            return ""
+
+    seen: dict = {}
+
+    def generate(*args, generator_model, **options):
+        seen["model"] = generator_model
+        return iter(())
+
+    monkeypatch.setattr(cli, "OllamaCompletion", lambda *args, **options: Picked())
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(distill, "generate", generate)
+    monkeypatch.setattr(cli.config, "OLLAMA_MODEL", None)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "distill", "--state", str(tmp_path / "corpus.db"),
+        "--out", str(tmp_path / "dataset.jsonl"), "--examples", "1",
+    ])
+
+    run()
+
+    assert seen["model"] == "picked-by-ollama"

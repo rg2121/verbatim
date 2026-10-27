@@ -79,6 +79,28 @@ def gather_for_parts(
     return collected
 
 
+def gather_within_budget(
+    corpus: CorpusStore,
+    embedder: Embedder,
+    parts: list[str],
+    *,
+    passages: int,
+    max_per_paper: int | None = 2,
+    **search_options: Any,
+) -> list[ChunkMatch]:
+    """Retrieve for every part from one shared budget of `passages`.
+
+    Each part gets an even share, at least two, and the union is cut to the
+    budget. `ask --plan` and the evaluation's hybrid+plan mode both call this,
+    so what ships is what was measured.
+    """
+    return gather_for_parts(
+        corpus, embedder, parts,
+        per_part=max(passages // max(len(parts), 1), 2),
+        max_per_paper=max_per_paper, **search_options,
+    )[:passages]
+
+
 def research(
     corpus: CorpusStore,
     embedder: Embedder,
@@ -87,7 +109,7 @@ def research(
     question: str,
     *,
     max_parts: int = 3,
-    per_part: int = 4,
+    passages: int = 8,
     max_per_paper: int | None = 2,
     **search_options: Any,
 ) -> tuple[Answer, list[str], list[ChunkMatch]]:
@@ -97,8 +119,10 @@ def research(
     checks as the single-step path.
     """
     parts = plan_subquestions(complete_text, question, max_parts=max_parts)
-    matches = gather_for_parts(
-        corpus, embedder, parts,
-        per_part=per_part, max_per_paper=max_per_paper, **search_options,
+    # The budget is shared by the parts actually planned, so a question left
+    # whole gets every passage, as plain `ask` does.
+    matches = gather_within_budget(
+        corpus, embedder, parts, passages=passages,
+        max_per_paper=max_per_paper, **search_options,
     )
     return answer_from_matches(corpus, completion, question, matches), parts, matches

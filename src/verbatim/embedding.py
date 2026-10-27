@@ -34,7 +34,7 @@ class Embedder(Protocol):
 
 @dataclass
 class FastEmbedEmbedder:
-    """ONNX-backed embedder (no torch, about 130 MB of weights), loaded on first use."""
+    """ONNX-backed embedder (no torch, about 65 MB of weights), loaded on first use."""
 
     model_name: str = DEFAULT_MODEL_NAME
     # Part of the model id: vectors made with and without context are stored
@@ -74,7 +74,7 @@ class FastEmbedEmbedder:
             raise RuntimeError(
                 "Embedding needs the 'fastembed' package; install it with 'uv add fastembed'"
             ) from error
-        self._encoder = TextEmbedding(model_name=self.model_name)
+        self._encoder = TextEmbedding(model_name=self.model_name, cache_dir=str(config.MODEL_CACHE))
         description = next(
             item
             for item in TextEmbedding.list_supported_models()

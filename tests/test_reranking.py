@@ -68,3 +68,26 @@ def test_a_reranker_returning_the_wrong_count_is_an_error() -> None:
 
     with pytest.raises(RuntimeError, match="1 scores for 2 passages"):
         rerank(Broken(), "q", [match("a", "x", 1.0), match("b", "y", 1.0)])
+
+
+def test_the_reranker_uses_the_same_persistent_model_cache(monkeypatch, tmp_path) -> None:
+    import fastembed.rerank.cross_encoder as module
+
+    from verbatim import config
+    from verbatim.reranking import CrossEncoderReranker
+
+    seen: dict = {}
+
+    class FakeCrossEncoder:
+        def __init__(self, model_name, **options):
+            seen.update(options)
+
+        def rerank(self, query, passages):
+            return [0.0 for _ in passages]
+
+    monkeypatch.setattr(module, "TextCrossEncoder", FakeCrossEncoder)
+    monkeypatch.setattr(config, "MODEL_CACHE", tmp_path / "models")
+
+    CrossEncoderReranker().score("q", ["a passage"])
+
+    assert seen["cache_dir"] == str(tmp_path / "models")

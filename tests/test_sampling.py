@@ -181,3 +181,87 @@ def test_only_redistributable_papers_are_sampled(tmp_path: Path) -> None:
     chosen = choose_papers(source, papers=10, model_id="stub")
 
     assert chosen == ["2608.11111v1"]
+
+
+def test_a_failed_export_leaves_an_existing_file_alone(tmp_path: Path, monkeypatch) -> None:
+    import verbatim.sampling as sampling
+
+    source = seeded(tmp_path)
+    destination = tmp_path / "sample.db"
+    destination.write_bytes(b"a copy someone is using")
+    build = sampling._write_sample
+
+    def fails_once_built(path, *args):
+        build(path, *args)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sampling, "_write_sample", fails_once_built)
+
+    with pytest.raises(OSError, match="disk full"):
+        export_sample(source, destination, papers=2, model_id="stub")
+
+    assert destination.read_bytes() == b"a copy someone is using"
+    assert not Path(f"{destination}.partial").exists()
+
+
+def test_a_failed_replace_leaves_the_existing_file_and_its_log_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The log holds commits the file does not have yet; deleting it first loses them."""
+    source = seeded(tmp_path)
+    destination = tmp_path / "sample.db"
+    destination.write_bytes(b"a copy someone is using")
+    log = Path(f"{destination}-wal")
+    log.write_bytes(b"commits not yet in the file")
+
+    def refuse(self, target):
+        raise PermissionError("replace refused")
+
+    monkeypatch.setattr(Path, "replace", refuse)
+
+    with pytest.raises(PermissionError):
+        export_sample(source, destination, papers=2, model_id="stub")
+
+    assert destination.read_bytes() == b"a copy someone is using"
+    assert log.read_bytes() == b"commits not yet in the file"
+    assert not Path(f"{destination}.partial").exists()
+
+
+def test_a_sample_is_never_written_over_the_corpus_it_samples(tmp_path: Path) -> None:
+    """It once replaced a whole corpus with three of its own papers, and said it succeeded."""
+    source = seeded(tmp_path)
+    before = source.read_bytes()
+    link = tmp_path / "link.db"
+    link.symlink_to(source)
+
+    for destination in (source, link):
+        with pytest.raises(ValueError, match="being sampled"):
+            export_sample(source, destination, papers=2, model_id="stub")
+
+    assert source.read_bytes() == before
+
+
+def test_the_sample_command_never_loads_the_embedding_model(tmp_path: Path, monkeypatch) -> None:
+    """It needs only the model's name, and loading it downloads it into an empty cache."""
+    import verbatim.cli as cli
+
+    class NameOnly:
+        def __init__(self, model_name):
+            self.model_id = model_name
+
+        @property
+        def model(self):
+            raise AssertionError("sampling loaded the embedding model")
+
+    source = seeded(tmp_path)
+    out = tmp_path / "out" / "sample.db"
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", NameOnly)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "sample", "--state", str(source), "--out", str(out),
+        "--papers", "2", "--model", "stub",
+    ])
+
+    cli.run()
+
+    with CorpusStore(out) as sample:
+        assert sample.connection.execute("SELECT count(*) FROM papers").fetchone()[0] == 2

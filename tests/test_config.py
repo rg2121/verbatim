@@ -43,6 +43,27 @@ def test_defaults_apply_with_no_env_file(tmp_path: Path) -> None:
     assert values == {"chunk_size": "1200", "ollama_model": "None", "timeout": "600.0"}
 
 
+def test_settings_load_when_no_home_directory_can_be_found(tmp_path: Path) -> None:
+    """The model cache defaults under ~, and a container user may have no home.
+
+    Expanding it must not stop commands that never load a model from starting.
+    """
+    script = (
+        "import pwd\n"
+        "def unknown(uid): raise KeyError(uid)\n"
+        "pwd.getpwuid = unknown\n"
+        "from verbatim import config\n"
+        "print(config.MODEL_CACHE)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src")},
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_a_non_numeric_setting_is_rejected_with_its_name(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("VERBATIM_CHUNK_SIZE=not-a-number\n")
 

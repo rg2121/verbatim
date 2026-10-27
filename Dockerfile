@@ -26,6 +26,7 @@ COPY sample ./sample
 ENV VERBATIM_STATE_PATH=/data/corpus.db \
     VERBATIM_PDF_DIR=/data/pdfs \
     VERBATIM_HTML_DIR=/data/html \
+    VERBATIM_MODEL_CACHE=/data/models \
     VERBATIM_LOG_FORMAT=json \
     OLLAMA_HOST=http://ollama:11434
 VOLUME ["/data"]

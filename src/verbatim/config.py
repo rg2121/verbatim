@@ -26,7 +26,9 @@ def _text(name: str, default: str) -> str:
 
 
 def _path(name: str, default: str) -> Path:
-    return Path(_text(name, default)).expanduser()
+    # os.path.expanduser leaves "~" alone when there is no home to expand it to;
+    # Path.expanduser raises, and then no command could start.
+    return Path(os.path.expanduser(_text(name, default)))
 
 
 def _integer(name: str, default: int) -> int:
@@ -61,6 +63,9 @@ EXTRACTION_TIMEOUT = float(_text("VERBATIM_EXTRACTION_TIMEOUT", "180"))
 
 # Retrieval.
 EMBEDDING_MODEL = _text("VERBATIM_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+# Where downloaded models are kept. fastembed defaults to the system temp
+# folder, which the OS clears, and an emptied cache breaks offline search.
+MODEL_CACHE = _path("VERBATIM_MODEL_CACHE", "~/.cache/verbatim/models")
 SEARCH_LIMIT = _integer("VERBATIM_SEARCH_LIMIT", 10)
 ASK_PASSAGES = _integer("VERBATIM_ASK_PASSAGES", 8)
 ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)

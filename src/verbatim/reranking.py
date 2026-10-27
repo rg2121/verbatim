@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from verbatim import config
 from verbatim.corpus import ChunkMatch
 
 DEFAULT_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
@@ -43,7 +44,9 @@ class CrossEncoderReranker:
             raise RuntimeError(
                 "Reranking needs fastembed's cross-encoder support; upgrade fastembed"
             ) from error
-        self._encoder = TextCrossEncoder(model_name=self.model_name)
+        self._encoder = TextCrossEncoder(
+            model_name=self.model_name, cache_dir=str(config.MODEL_CACHE)
+        )
 
 
 def rerank(

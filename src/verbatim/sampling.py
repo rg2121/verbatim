@@ -169,7 +169,8 @@ def export_sample(
     """Write a self-contained corpus holding a handful of papers."""
     if papers < 1:
         raise ValueError("papers must be at least 1")
-    destination.unlink(missing_ok=True)
+    if destination.exists() and destination.samefile(source_path):
+        raise ValueError(f"{destination} is the corpus being sampled; write the sample elsewhere")
 
     reader = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
     reader.row_factory = sqlite3.Row
@@ -182,8 +183,33 @@ def export_sample(
     finally:
         reader.close()
 
+    # Built beside the destination and moved into place only when complete, so
+    # a failed export never touches an existing file.
+    partial = destination.with_name(destination.name + ".partial")
+    _remove_database(partial)
+    try:
+        counts = _write_sample(partial, source_path, chosen, model_id)
+        partial.replace(destination)
+    except BaseException:
+        _remove_database(partial)
+        raise
+    # The old file's log goes only once the file is gone: left behind, it would
+    # be replayed onto the new one.
+    for suffix in ("-wal", "-shm"):
+        Path(f"{destination}{suffix}").unlink(missing_ok=True)
+    return SampleReport(
+        papers=counts[0], chunks=counts[1], vectors=counts[2],
+        references=counts[3],
+        bytes_written=destination.stat().st_size,
+    )
+
+
+def _write_sample(
+    path: Path, source_path: Path, chosen: list[str], model_id: str
+) -> tuple[int, int, int, int]:
+    """Copy the chosen papers into a new corpus at `path`; returns its counts."""
     # Opening the destination creates the schema; only rows are copied.
-    with CorpusStore(destination) as sample:
+    with CorpusStore(path) as sample:
         sample.connection.execute("ATTACH DATABASE ? AS source", (str(source_path),))
         placeholders = ",".join("?" * len(chosen))
         with sample.connection:
@@ -216,16 +242,14 @@ def export_sample(
         generation = sample.chunk_generation()
         SqliteVecIndex(sample.connection, dimensions).rebuild(model_id, generation)
         SqlitePaperIndex(sample.connection, dimensions).rebuild(model_id, generation)
-        counts = (
-            sample.connection.execute("SELECT COUNT(*) FROM papers").fetchone()[0],
-            sample.connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
-            sample.connection.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0],
-            sample.connection.execute("SELECT COUNT(*) FROM paper_references").fetchone()[0],
+        counts = tuple(
+            sample.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("papers", "chunks", "embeddings", "paper_references")
         )
         sample.connection.execute("VACUUM")
+    return counts
 
-    return SampleReport(
-        papers=counts[0], chunks=counts[1], vectors=counts[2],
-        references=counts[3],
-        bytes_written=destination.stat().st_size,
-    )
+
+def _remove_database(path: Path) -> None:
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)

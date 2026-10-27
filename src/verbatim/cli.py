@@ -78,6 +78,12 @@ def main() -> None:
         run()
     except (RuntimeError, ValueError, OSError) as error:
         raise SystemExit(f"error: {error}") from error
+    except sqlite3.DatabaseError as error:
+        # The base class is a damaged file, OperationalError one that cannot be
+        # opened or written. The other kinds are our bugs and keep their traceback.
+        if type(error) in (sqlite3.DatabaseError, sqlite3.OperationalError):
+            raise SystemExit(f"error: database: {error}") from error
+        raise
     except KeyboardInterrupt:
         raise SystemExit("interrupted") from None
 
@@ -442,7 +448,7 @@ def run() -> None:
         help="Export a small self-contained corpus that works without an ingest",
     )
     sample_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
-    sample_parser.add_argument("--out", type=Path, default=Path("data/sample.db"))
+    sample_parser.add_argument("--out", type=Path, default=Path("data/sample-export.db"))
     sample_parser.add_argument("--papers", type=int, default=40)
     sample_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
 
@@ -1036,7 +1042,7 @@ def run() -> None:
             examples_made = generate(
                 corpus, embedder, completion,
                 complete_text=completion.complete_text,
-                generator_model=args.llm or config.OLLAMA_MODEL,
+                generator_model=completion.model,
                 examples=args.examples,
                 questions_per_passage=args.questions_per_passage,
                 seed=args.seed,
@@ -1312,7 +1318,7 @@ def run() -> None:
 
     if args.command == "sample":
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        model_id = FastEmbedEmbedder(model_name=args.model).model.model_id
+        model_id = FastEmbedEmbedder(model_name=args.model).model_id
         report = export_sample(
             args.state, args.out, papers=args.papers, model_id=model_id
         )
@@ -1615,7 +1621,7 @@ def run() -> None:
                     corpus, embedder, completion,
                     lambda system, user: completion.complete_text(system, user),
                     args.question,
-                    per_part=max(args.passages // 3, 2),
+                    passages=args.passages,
                     # Every flag plain `ask` honours applies to each part.
                     max_per_paper=args.max_per_paper,
                     arxiv_id=args.arxiv_id,

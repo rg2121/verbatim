@@ -48,7 +48,7 @@ The repository ships a sample corpus - 40 openly licensed papers, 3,139
 passages with their vectors, 2,230 bibliography entries, 23 MB - so this works
 on a fresh clone. It is used from a copy because commands record their runs in
 the corpus, and `data/` is ignored by git. The first search downloads the
-embedding model (about 130 MB). `search` and `graph` need no language model;
+embedding model (about 65 MB). `search` and `graph` need no language model;
 `ask` needs Ollama, and uses `OLLAMA_MODEL` or the first local model you have
 pulled - a `-cloud` model only when you name it.
 

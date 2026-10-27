@@ -141,3 +141,57 @@ def test_the_search_flags_reach_every_part(monkeypatch) -> None:
         assert options["max_per_paper"] == 5
         assert options["include_references"] is True
         assert options["use_graph"] is False and options["use_compare"] is True
+
+
+def test_the_passage_budget_is_shared_by_the_parts_actually_planned(monkeypatch) -> None:
+    """A question the planner leaves whole gets the full budget, as plain `ask` does."""
+    import verbatim.research as module
+
+    limits: list[int] = []
+
+    def record(corpus, embedder, part, **options):
+        limits.append(options["limit"])
+        return []
+
+    monkeypatch.setattr(module, "hybrid_search", record)
+
+    class Silent:
+        def complete(self, system, user, schema):
+            raise AssertionError("nothing was retrieved, so nothing is written")
+
+    module.research(None, None, Silent(), reply("the whole question"), "q", passages=8)
+    module.research(None, None, Silent(), reply("part one\npart two"), "q", passages=8)
+
+    assert limits == [8, 4, 4]
+
+
+def test_ask_plan_retrieves_what_its_evaluation_measured(monkeypatch) -> None:
+    """The eval's hybrid+plan mode is the measurement behind `ask --plan`.
+
+    The two split the budget separately once, and with a small budget the
+    shipped path handed the writer twice the passages the measured one did.
+    """
+    from types import SimpleNamespace
+
+    import verbatim.research as module
+    from verbatim.evaluation import retrieval_modes
+
+    def found(corpus, embedder, part, **options):
+        return [SimpleNamespace(chunk=SimpleNamespace(chunk_id=f"{part}-{n}"))
+                for n in range(options["limit"])]
+
+    monkeypatch.setattr(module, "hybrid_search", found)
+    monkeypatch.setattr(module, "answer_from_matches", lambda *args: None)
+    plan = reply("one\ntwo\nthree")
+
+    for budget in (3, 8, 10):
+        measured = retrieval_modes(
+            None, None, limit=budget, max_per_paper=2, complete=plan, decompose=True
+        )["hybrid+plan"]("q")
+        _, _, shipped = module.research(
+            None, None, None, plan, "q", passages=budget, max_per_paper=2
+        )
+
+        ids = [m.chunk.chunk_id for m in shipped]
+        assert ids == [m.chunk.chunk_id for m in measured]
+        assert len(ids) <= budget

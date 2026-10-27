@@ -40,9 +40,7 @@ jobs:
       - name: Cache the embedding model
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/huggingface
-            .fastembed_cache
+          path: ~/.cache/verbatim/models
           key: fastembed-${{ hashFiles('uv.lock') }}
       - name: Retrieval must not regress
         run: >
