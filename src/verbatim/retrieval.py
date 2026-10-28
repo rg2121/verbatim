@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 import re
+from typing import Any
 
 from verbatim.chunking import REFERENCES
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
@@ -16,7 +17,8 @@ from verbatim.expansion import (
     hypothetical_answer,
     rewrite_query,
 )
-from verbatim.graph import anchored_matches
+from verbatim.graph import anchored_matches, definitional_subject
+from verbatim.reranking import Reranker, default_reranker, rerank
 from verbatim.vectors import SqliteVecIndex, VectorIndex, ensure_current
 
 # Questions setting two named things against each other, recognised by vocabulary.
@@ -108,6 +110,10 @@ def hybrid_search(
     use_graph: bool = False,
     use_compare: bool = False,
     papers: PaperFilter | None = None,
+    reranker: Reranker | None = None,
+    rerank_pool: int = 50,
+    rerank_when_legs_disagree: bool = False,
+    rerank_skips_definitions: bool = False,
 ) -> list[ChunkMatch]:
     """Fuse keyword and vector rankings with Reciprocal Rank Fusion.
 
@@ -116,6 +122,9 @@ def hybrid_search(
     from the paper a definitional question is named after; `use_compare` adds
     title matches on comparison-shaped questions, `use_titles` on every
     question. Those legs stand down when the search is scoped or filtered.
+    A `reranker` reorders the top `rerank_pool` fused passages, or, gated,
+    only when the keyword and vector legs disagree on the top paper. It can
+    skip definition-shaped questions, and never reorders a title leg's choice.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -173,11 +182,45 @@ def hybrid_search(
         ChunkMatch(chunk=best[chunk_id].chunk, score=score, snippet=best[chunk_id].snippet)
         for chunk_id, score in sorted(fused.items(), key=lambda item: (-item[1], item[0]))
     ]
+    # Rerankers bury the paper a term is named after under passages that use it,
+    # so a reranker leaves alone what a title leg chose and, if asked, definitions.
+    if (
+        reranker is not None
+        and not titles
+        and not (rerank_skips_definitions and definitional_subject(query))
+        and (not rerank_when_legs_disagree or legs_disagree(keyword, vector))
+    ):
+        ordered = rerank(reranker, query, ordered[:rerank_pool]) + ordered[rerank_pool:]
     # Capped before truncating, so dropping a paper's surplus promotes another
     # paper into the results rather than shortening them.
     if max_per_paper is not None:
         ordered = cap_per_paper(ordered, max_per_paper)
     return ordered[:limit]
+
+
+def legs_disagree(keyword: list[ChunkMatch], vector: list[ChunkMatch]) -> bool:
+    """Whether the two legs name different top papers, or one found nothing.
+
+    When both put the same paper first, fusion has nothing to settle.
+    """
+    if not keyword or not vector:
+        return True
+    return keyword[0].chunk.arxiv_id != vector[0].chunk.arxiv_id
+
+
+def default_search_options() -> dict[str, Any]:
+    """How every front end searches: the graph leg, and the reranker where it was measured to help.
+
+    The reranker (VERBATIM_RERANKER, ColBERT unless set) runs only where the
+    keyword and vector legs disagree on the top paper, and never on a
+    definitional question (docs/findings.md).
+    """
+    return {
+        "use_graph": True,
+        "reranker": default_reranker(),
+        "rerank_when_legs_disagree": True,
+        "rerank_skips_definitions": True,
+    }
 
 
 def title_search(

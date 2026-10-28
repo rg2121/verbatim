@@ -37,11 +37,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Cache the embedding model
+      - name: Cache the embedding and reranking models
         uses: actions/cache@v4
         with:
           path: ~/.cache/verbatim/models
-          key: fastembed-${{ hashFiles('uv.lock') }}
+          # A new key, so the cache saved before the reranker holds it too.
+          key: fastembed-colbert-${{ hashFiles('uv.lock') }}
       - name: Retrieval must not regress
         run: >
           uv run --frozen verbatim eval

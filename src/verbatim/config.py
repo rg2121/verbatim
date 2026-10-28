@@ -69,6 +69,9 @@ MODEL_CACHE = _path("VERBATIM_MODEL_CACHE", "~/.cache/verbatim/models")
 SEARCH_LIMIT = _integer("VERBATIM_SEARCH_LIMIT", 10)
 ASK_PASSAGES = _integer("VERBATIM_ASK_PASSAGES", 8)
 ASK_MAX_PER_PAPER = _integer("VERBATIM_ASK_MAX_PER_PAPER", 3)
+# Which model reorders the top fused passages where the keyword and vector legs
+# disagree: "colbert" (measured best), "cross", or "off".
+RERANKER = _text("VERBATIM_RERANKER", "colbert")
 # Warn when the passages' subject is less similar to the question than this.
 # A warning only: answerable and unanswerable questions overlap.
 SUBJECT_WARN_BELOW = float(_text("VERBATIM_SUBJECT_WARN_BELOW", "0.65"))

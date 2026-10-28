@@ -134,3 +134,19 @@ def test_get_paper_resolves_a_base_id_to_the_current_version(tmp_path: Path) -> 
         found = get_paper(corpus, "2608.44444")
 
     assert found is not None and found["arxiv_id"] == "2608.44444v3"
+
+
+def test_search_chunks_searches_as_every_front_end_does(monkeypatch) -> None:
+    """The graph leg once reached the CLI and not MCP; one default keeps them together."""
+    import verbatim.tools as tools
+    from verbatim import config
+    from verbatim.retrieval import default_search_options
+
+    searched: dict = {}
+    monkeypatch.setattr(config, "RERANKER", "colbert")
+    monkeypatch.setattr(tools, "hybrid_search", lambda *args, **options: searched.update(options) or [])
+
+    tools.search_chunks(None, None, "how do transmons decohere?")
+
+    shared = default_search_options()
+    assert {name: searched[name] for name in shared} == shared

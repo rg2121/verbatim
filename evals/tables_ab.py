@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from math import comb
 from pathlib import Path
 
 from verbatim import config
@@ -28,19 +27,11 @@ from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.evaluation import load_key, rank_of_first_hit, source_of
 from verbatim.retrieval import hybrid_search
+from significance import sign_test
 
 KEYS = [Path("evals/heldout.jsonl"), Path("evals/heldout-generated.jsonl")]
 RESULTS = Path("evals/results")
 CUTOFFS = (1, 5, 10)
-
-
-def sign_test(wins: int, losses: int) -> float:
-    """Two-sided exact sign test. Ties carry no information and are dropped."""
-    n = wins + losses
-    if n == 0:
-        return 1.0
-    tail = sum(comb(n, k) for k in range(max(wins, losses), n + 1))
-    return min(2 * tail / 2**n, 1.0)
 
 
 def reciprocal(rank: int | None) -> float:

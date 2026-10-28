@@ -55,9 +55,9 @@ from verbatim.html_source import (
 from verbatim.logs import configure_logging
 from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
 from verbatim.references import references_from_file
-from verbatim.reranking import CrossEncoderReranker, rerank
+from verbatim.reranking import RERANKERS, default_reranker, rerank, shared_reranker
 from verbatim.research import research
-from verbatim.retrieval import hybrid_search, vector_search
+from verbatim.retrieval import default_search_options, hybrid_search, vector_search
 from verbatim.runs import record_run, recent_runs, render_runs
 from verbatim.sampling import export_sample
 from verbatim.storage import (
@@ -117,6 +117,11 @@ NO_GRAPH_HELP = (
 USE_COMPARE_HELP = (
     "On comparison-shaped questions, also retrieve from papers whose titles "
     "match. Off by default: its effect on single-paper questions is unmeasured"
+)
+NO_RERANK_HELP = (
+    "Skip the reranker. On by default, it reorders the top passages only where "
+    "keyword and vector search disagree on the top paper, never on a "
+    "definition-shaped question; VERBATIM_RERANKER=off skips it everywhere"
 )
 
 
@@ -192,8 +197,9 @@ def run() -> None:
     )
     eval_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     eval_parser.add_argument(
-        "--rerank", action="store_true",
-        help="Re-score with a cross-encoder (measured worse than without)",
+        "--rerank", nargs="?", const="cross", choices=sorted(RERANKERS),
+        help="Score the shipped default, hybrid+graph+rerank, with this reranker "
+             "instead of $VERBATIM_RERANKER's: cross (a bare --rerank) or colbert",
     )
     eval_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
@@ -218,8 +224,14 @@ def run() -> None:
         help="Exit non-zero if --gate-mode scores below this (used by CI)",
     )
     eval_parser.add_argument(
-        "--gate-mode", default="hybrid+graph",
-        help="Which mode --min-mrr applies to (default: the shipped default)",
+        "--gate-mode",
+        help="Which mode --min-mrr applies to (default: the shipped default, "
+             "hybrid+graph+rerank, or hybrid+graph with the reranker off)",
+    )
+    eval_parser.add_argument(
+        "--record", type=Path, nargs="?", const=Path("evals/history.jsonl"),
+        help="Append the scores, with the commit and corpus they were measured "
+             "on, to this history (default: evals/history.jsonl)",
     )
 
     answers_parser = subparsers.add_parser(
@@ -480,10 +492,13 @@ def run() -> None:
     )
     search_parser.add_argument("query", help="Search terms; 'term*' matches by prefix")
     search_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
-    search_parser.add_argument(
-        "--rerank", action="store_true",
-        help="Re-score with a cross-encoder (measured worse than without)",
+    reranking = search_parser.add_mutually_exclusive_group()
+    reranking.add_argument(
+        "--rerank", nargs="?", const="cross", choices=sorted(RERANKERS),
+        help="Rerank with this model instead of $VERBATIM_RERANKER's: cross "
+             "(a bare --rerank, as it always meant) or colbert",
     )
+    reranking.add_argument("--no-rerank", action="store_true", help=NO_RERANK_HELP)
     search_parser.add_argument("--limit", type=int, default=config.SEARCH_LIMIT, help="Maximum number of passages")
     search_parser.add_argument(
         "--use-titles", action="store_true",
@@ -539,6 +554,7 @@ def run() -> None:
         "--no-graph", dest="use_graph", action="store_false",
         help=NO_GRAPH_HELP,
     )
+    ask_parser.add_argument("--no-rerank", action="store_true", help=NO_RERANK_HELP)
     ask_parser.add_argument(
         "--use-compare", action="store_true",
         help=USE_COMPARE_HELP,
@@ -761,9 +777,10 @@ def run() -> None:
         named = ",".join(str(path) for path in args.cases)
         with CorpusStore(args.state) as corpus, record_run(corpus, "eval", cases=named, model=args.model, limit=args.limit) as run:
             expanding = args.rewrites or args.hyde or args.decompose
+            reranker = shared_reranker(args.rerank) if args.rerank else default_reranker()
             options = dict(
                 limit=args.limit, max_per_paper=args.max_per_paper,
-                reranker=CrossEncoderReranker() if args.rerank else None,
+                reranker=reranker,
                 complete=_line_completion(args.llm) if expanding else None,
                 rewrites=args.rewrites, hyde=args.hyde,
                 decompose=args.decompose,
@@ -777,6 +794,17 @@ def run() -> None:
             best = max(scores, key=lambda score: score.mrr)
             run.record(cases=len(cases), scored=best.cases,
                        best_mode=best.mode, best_mrr=round(best.mrr, 4))
+            if args.record:
+                from verbatim.evaluation import current_commit, record_history
+
+                record_history(
+                    args.record, scores, keys=[str(path) for path in args.cases],
+                    state=str(args.state),
+                    passages=corpus.connection.execute(
+                        "SELECT COUNT(*) FROM chunks"
+                    ).fetchone()[0],
+                    commit=current_commit(),
+                )
         print(named)
         print(describe_case_mix(cases))
         print()
@@ -785,10 +813,11 @@ def run() -> None:
             print()
             print(render_compound_report(compound_scores))
         if args.min_mrr is not None:
-            gated = next((s for s in scores if s.mode == args.gate_mode), None)
+            gate_mode = args.gate_mode or ("hybrid+graph+rerank" if reranker else "hybrid+graph")
+            gated = next((s for s in scores if s.mode == gate_mode), None)
             if gated is None:
                 raise SystemExit(
-                    f"error: --gate-mode {args.gate_mode!r} is not one of "
+                    f"error: --gate-mode {gate_mode!r} is not one of "
                     f"{', '.join(sorted(s.mode for s in scores))}"
                 )
             print(
@@ -1117,7 +1146,7 @@ def run() -> None:
                     try:
                         matches = hybrid_search(
                             corpus, embedder, case.question, limit=args.passages,
-                            max_per_paper=config.ASK_MAX_PER_PAPER, use_graph=True,
+                            max_per_paper=config.ASK_MAX_PER_PAPER, **default_search_options(),
                         )
                         answer = answer_from_matches(
                             corpus, completion, case.question, matches
@@ -1497,11 +1526,7 @@ def run() -> None:
             else:
                 search = vector_search if args.mode == "vector" else hybrid_search
                 extra = (
-                    {
-                        "use_titles": args.use_titles,
-                        "use_graph": args.use_graph,
-                        "use_compare": args.use_compare,
-                    }
+                    {**_search_options(args), "use_titles": args.use_titles}
                     if args.mode == "hybrid"
                     else {}
                 )
@@ -1515,9 +1540,10 @@ def run() -> None:
                     papers=papers,
                     **extra,
                 )
-        if args.rerank and matches:
+        # Hybrid search reranks inside its pool; a single leg reranks what it found.
+        if args.rerank and args.mode != "hybrid" and matches:
             matches = rerank(
-                CrossEncoderReranker(), args.query, matches, limit=args.limit
+                shared_reranker(args.rerank), args.query, matches, limit=args.limit
             )
         if not matches:
             print(f"No passages matched {args.query!r}.")
@@ -1550,12 +1576,14 @@ def run() -> None:
                 "--arxiv-id": args.arxiv_id is not None,
                 "--include-references": args.include_references,
                 "--no-graph": not args.use_graph,
+                "--no-rerank": args.no_rerank,
             })
         if args.tools:
             _refuse_ignored("--tools", "the model chooses what to search and how", {
                 "--arxiv-id": args.arxiv_id is not None,
                 "--include-references": args.include_references,
                 "--no-graph": not args.use_graph,
+                "--no-rerank": args.no_rerank,
                 "--use-compare": args.use_compare,
                 "--plan": args.plan,
                 "--passages": args.passages != config.ASK_PASSAGES,
@@ -1626,8 +1654,7 @@ def run() -> None:
                     max_per_paper=args.max_per_paper,
                     arxiv_id=args.arxiv_id,
                     include_references=args.include_references,
-                    use_graph=args.use_graph,
-                    use_compare=args.use_compare,
+                    **_search_options(args),
                 )
             else:
                 matches = hybrid_search(
@@ -1638,8 +1665,7 @@ def run() -> None:
                     arxiv_id=args.arxiv_id,
                     max_per_paper=args.max_per_paper,
                     include_references=args.include_references,
-                    use_graph=args.use_graph,
-                    use_compare=args.use_compare,
+                    **_search_options(args),
                 )
                 answer = answer_from_matches(corpus, completion, args.question, matches)
             if len(plan) > 1:
@@ -1825,6 +1851,20 @@ def run() -> None:
                 f"into {html_written + written} new passages; corpus holds "
                 f"{exported}. Exported to {args.output}"
             )
+
+
+def _search_options(args: argparse.Namespace) -> dict[str, object]:
+    """The default search, as `ask` and `search`'s flags adjust it."""
+    options = {
+        **default_search_options(),
+        "use_graph": args.use_graph,
+        "use_compare": args.use_compare,
+    }
+    if args.no_rerank:
+        options["reranker"] = None
+    elif getattr(args, "rerank", None):
+        options["reranker"] = shared_reranker(args.rerank)
+    return options
 
 
 def _refuse_ignored(mode: str, reason: str, given: dict[str, bool]) -> None:

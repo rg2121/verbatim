@@ -98,6 +98,17 @@ because each measured worse always-on:
 Both stand down whenever the caller has scoped or filtered the search, since
 they name papers of their own.
 
+A **reranker settles the questions fusion cannot**. Where the keyword and
+vector legs put different papers first - under a quarter of held-out
+questions, holding four in five of the first-place misses - ColBERT reorders the top 50
+fused passages by late interaction: each question token is matched to its best
+token in the passage, and the matches are summed. Its score replaces the fused
+one inside those 50. It stands down on definition-shaped questions, where any
+reranker buries the paper a term is named after under the passages that use
+it, and wherever a title leg ran, since those legs were measured without it.
+`--no-rerank` or `VERBATIM_RERANKER=off` turns it off; one model is loaded per
+process, so `serve` and `mcp` pay the load once.
+
 The vector index records **which model's vectors it holds and which corpus
 generation it was built from**, and is rebuilt on a mismatch. Two embedding
 models of the same width once searched each other's vectors silently, and a

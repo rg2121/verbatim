@@ -826,3 +826,21 @@ def test_deep_mode_refuses_a_scope_it_cannot_honour(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "arxiv_id" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("path", ["/api/search", "/api/ask"])
+def test_the_page_searches_as_every_front_end_does(tmp_path: Path, monkeypatch, path: str) -> None:
+    """The graph leg once reached the CLI and not this page; one default keeps them together."""
+    import verbatim.web as web
+    from verbatim import config
+    from verbatim.retrieval import default_search_options
+
+    searched: dict = {}
+    monkeypatch.setattr(config, "RERANKER", "colbert")
+    monkeypatch.setattr(web, "hybrid_search", lambda *args, **options: searched.update(options) or [])
+    client_app, _ = ask_client(tmp_path, ["ANSWER: Nothing.\n"])
+
+    client_app.get(path, params={"q": "how do qubits decohere?"})
+
+    shared = default_search_options()
+    assert {name: searched[name] for name in shared} == shared

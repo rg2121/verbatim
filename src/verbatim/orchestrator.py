@@ -29,7 +29,7 @@ from verbatim.embedding import Embedder
 from verbatim.evidence import describe_evidence
 from verbatim.graph import definitional_subject
 from verbatim.report import Report, ReportSection, plan_sections
-from verbatim.retrieval import comparison_shaped, hybrid_search
+from verbatim.retrieval import comparison_shaped, default_search_options, hybrid_search
 
 # Questions about what is new, which passage similarity cannot answer and the
 # tool-using agent can, by choosing the recency tool.
@@ -46,10 +46,11 @@ LADDERS: dict[str, tuple[str, ...]] = {
     "recency": ("agent", "hybrid"),
     "open": ("hybrid", "titles", "agent"),
 }
+# Each is the default search with its own legs added.
 STRATEGY_FLAGS: dict[str, dict[str, bool]] = {
-    "hybrid": {"use_graph": True},
-    "compare": {"use_graph": True, "use_compare": True},
-    "titles": {"use_graph": True, "use_titles": True},
+    "hybrid": {},
+    "compare": {"use_compare": True},
+    "titles": {"use_titles": True},
 }
 ACCEPTED = "accepted"
 RETRY = "retry"
@@ -196,8 +197,8 @@ def retrieve(
             records=tuple(trace.metadata),
         )
     found = hybrid_search(
-        corpus, embedder, question,
-        limit=limit, max_per_paper=max_per_paper, **STRATEGY_FLAGS[strategy],
+        corpus, embedder, question, limit=limit, max_per_paper=max_per_paper,
+        **default_search_options(), **STRATEGY_FLAGS[strategy],
     )
     return Gathered(question, tuple(found), strategy)
 

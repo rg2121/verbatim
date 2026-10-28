@@ -9,15 +9,14 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import json
-from math import comb
 from pathlib import Path
-import random
 
 from verbatim import config
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.evaluation import load_key, rank_of_first_hit, source_of
 from verbatim.retrieval import hybrid_search
+from significance import bootstrap_ci as ci, paired_sign_test as sign_test
 
 MODES = {
     "hybrid":        {},
@@ -33,29 +32,6 @@ COMPARISONS = [
     ("hybrid", "hybrid+titles"),
 ]
 OUT = Path("evals/results/rr.json")
-
-
-def ci(diffs, rounds=10000, seed=0):
-    """A 95% bootstrap interval, and the share of resamples at or below zero.
-
-    The share is reported because the interval's lower edge can land on zero
-    for some seeds and just above it for others.
-    """
-    rng = random.Random(seed)
-    n = len(diffs)
-    means = sorted(sum(rng.choice(diffs) for _ in range(n)) / n for _ in range(rounds))
-    below = sum(1 for m in means if m <= 0) / rounds
-    return means[int(0.025 * rounds)], means[int(0.975 * rounds)], below
-
-
-def sign_test(diffs):
-    wins = sum(1 for d in diffs if d > 0)
-    losses = sum(1 for d in diffs if d < 0)
-    n = wins + losses
-    if n == 0:
-        return 0, 0, 1.0
-    tail = sum(comb(n, k) for k in range(max(wins, losses), n + 1))
-    return wins, losses, min(2 * tail / 2**n, 1.0)
 
 
 def main() -> int:

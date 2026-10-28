@@ -496,3 +496,124 @@ def test_a_table_is_searched_and_a_bibliography_is_not(tmp_path: Path) -> None:
     searched = {"2608.11111v1", "2608.22222v1"}
     assert keyword == vector == hybrid == searched
     assert everything == searched | {"2608.33333v1"}
+
+
+class Reverse:
+    """A reranker that reverses whatever it is given, so its effect is visible."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def score(self, query, passages):
+        self.calls += 1
+        return [float(i) for i in range(len(passages))]
+
+
+def three_papers(tmp_path: Path):
+    return embedded_corpus(tmp_path, {
+        "2608.11111v1": ["Magnetic flux threads the ring."],
+        "2608.22222v1": ["Flux and charge in a plant."],
+        "2608.33333v1": ["Charge moves along the wire with flux."],
+    })
+
+
+def test_a_reranker_reorders_only_its_pool_of_fused_passages(tmp_path: Path) -> None:
+    from verbatim.retrieval import hybrid_search
+
+    with three_papers(tmp_path) as corpus:
+        fused = hybrid_search(corpus, WordCountEmbedder(), "flux", limit=3)
+        reranked = hybrid_search(
+            corpus, WordCountEmbedder(), "flux", limit=3, reranker=Reverse(), rerank_pool=2
+        )
+
+    ids = [m.chunk.chunk_id for m in fused]
+    assert [m.chunk.chunk_id for m in reranked] == [ids[1], ids[0], ids[2]]
+
+
+def test_a_gated_reranker_stands_down_when_both_legs_agree(tmp_path: Path) -> None:
+    """Both legs put the flux paper first; there is nothing for a reranker to settle."""
+    from verbatim.retrieval import hybrid_search
+
+    reranker = Reverse()
+    with three_papers(tmp_path) as corpus:
+        fused = hybrid_search(corpus, WordCountEmbedder(), "magnetic flux ring", limit=3)
+        gated = hybrid_search(
+            corpus, WordCountEmbedder(), "magnetic flux ring", limit=3,
+            reranker=reranker, rerank_when_legs_disagree=True,
+        )
+
+    assert reranker.calls == 0
+    assert [m.chunk.chunk_id for m in gated] == [m.chunk.chunk_id for m in fused]
+
+
+def test_a_gated_reranker_fires_when_the_legs_disagree(tmp_path: Path, monkeypatch) -> None:
+    import verbatim.retrieval as retrieval
+
+    reranker = Reverse()
+    with three_papers(tmp_path) as corpus:
+        everything = retrieval.vector_search(corpus, WordCountEmbedder(), "flux", limit=10)
+        # The vector leg now prefers a different paper from the keyword leg.
+        monkeypatch.setattr(
+            retrieval, "vector_search",
+            lambda *args, **kwargs: sorted(everything, key=lambda m: m.chunk.arxiv_id)[::-1],
+        )
+        retrieval.hybrid_search(
+            corpus, WordCountEmbedder(), "magnetic flux ring", limit=3,
+            reranker=reranker, rerank_when_legs_disagree=True,
+        )
+
+    assert reranker.calls == 1
+
+
+def test_a_reranker_can_spare_definitional_questions(tmp_path: Path) -> None:
+    """Rerankers bury the paper a term is named after under passages that use it."""
+    from verbatim.retrieval import hybrid_search
+
+    reranker = Reverse()
+    with three_papers(tmp_path) as corpus:
+        fused = hybrid_search(corpus, WordCountEmbedder(), "what is magnetic flux", limit=3)
+        spared = hybrid_search(
+            corpus, WordCountEmbedder(), "what is magnetic flux", limit=3,
+            reranker=reranker, rerank_skips_definitions=True,
+        )
+        assert reranker.calls == 0
+        hybrid_search(
+            corpus, WordCountEmbedder(), "how does magnetic flux behave", limit=3,
+            reranker=reranker, rerank_skips_definitions=True,
+        )
+
+    assert reranker.calls == 1
+    assert [m.chunk.chunk_id for m in spared] == [m.chunk.chunk_id for m in fused]
+
+
+def test_a_reranker_never_reorders_what_a_title_leg_chose(tmp_path: Path) -> None:
+    """Title legs, like the graph leg, name papers; they were measured without a reranker."""
+    from helpers import corpus_with
+    from verbatim.retrieval import hybrid_search
+
+    reranker = Reverse()
+    with corpus_with(tmp_path, {
+        "2608.11111v1": ("Magnetic flux in rings", ["Magnetic flux threads the ring."]),
+        "2608.22222v1": ("Plants", ["Flux and charge in a plant."]),
+    }) as corpus:
+        titled = hybrid_search(corpus, WordCountEmbedder(), "flux", limit=3, use_titles=True)
+        reranked = hybrid_search(
+            corpus, WordCountEmbedder(), "flux", limit=3, use_titles=True, reranker=reranker,
+        )
+
+    assert reranker.calls == 0
+    assert [m.chunk.chunk_id for m in reranked] == [m.chunk.chunk_id for m in titled]
+
+
+def test_legs_disagree_when_their_top_papers_differ_or_one_is_empty() -> None:
+    from dataclasses import replace
+
+    from test_reranking import match
+    from verbatim.retrieval import legs_disagree
+
+    a = match("a", "x", 1.0)
+    b = replace(a, chunk=replace(a.chunk, chunk_id="b", arxiv_id="2608.99999v1"))
+
+    assert not legs_disagree([a], [a])
+    assert legs_disagree([a], [b])
+    assert legs_disagree([a], [])

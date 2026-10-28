@@ -2,7 +2,7 @@
 
 What was measured, and what it decided. Every feature was measured against
 something simpler, and most of what is worth reading here is what did not
-work: reranking, query rewriting, HyDE, always-on title matching, question
+work: query rewriting, HyDE, always-on title matching, question
 decomposition, a critic loop and a multi-agent team were each built, measured
 and left off.
 
@@ -32,8 +32,9 @@ negative result is recorded, not deleted.
 
 **The development key is inflated by about an eighth.** Its questions were
 written while watching retrieval, so one that retrieved badly could be
-reworded until it did not. The default scores mrr **0.869** there and
-**0.758** on the held-out key: same corpus, same kind of question. Held-out
+reworded until it did not. `hybrid+graph`, then the default, scored mrr
+**0.869** there and **0.758** on the held-out key: same corpus, same kind of
+question. Held-out
 questions are written from one paper's title and abstract by code that
 imports nothing able to search, and each key is committed before it is
 scored. A candidate question sharing a run of five or more words with its
@@ -72,13 +73,15 @@ On the 88 answerable hand-written held-out cases:
 | hybrid+compare | 0.68 | 0.85 | 0.92 | 0.752 |
 | vector | 0.69 | 0.83 | 0.90 | 0.756 |
 | hybrid | 0.68 | 0.85 | 0.92 | 0.758 |
-| **hybrid+graph** (default) | 0.68 | 0.85 | 0.92 | 0.758 |
+| **hybrid+graph** (default until reranking) | 0.68 | 0.85 | 0.92 | 0.758 |
 
 **At 88 cases none of these can be told apart**: every paired-bootstrap
-interval contains zero, and the default had once been chosen over plain
-hybrid on 0.003 mrr - an unmeasurable difference reported as a win. Over all
-488 held-out cases, one comparison finally says something - the default
-against the always-on title leg:
+interval contains zero, and hybrid+graph had once been chosen over plain
+hybrid on 0.003 mrr - an unmeasurable difference reported as a win. The
+reranked default that replaced it (below) is the first that can be: 0.75 /
+0.95 / 0.98, mrr 0.829 on these 88, better on 15 and worse on 4 (p = 0.02).
+Over all 488 held-out cases, the first comparison to say anything was
+hybrid+graph against the always-on title leg:
 
 | batch | difference | won-lost | sign test |
 |---|---|---|---|
@@ -90,7 +93,7 @@ against the always-on title leg:
 The title leg is reliably worse on *direction*; the mean difference is too
 small for its interval to exclude zero, so it is not claimed as a magnitude.
 
-**The graph gate fires on none of the 488.** Blind authoring cannot produce
+**The graph gate moves none of the 488.** Blind authoring cannot produce
 definitional questions, so `hybrid+graph` and `hybrid` rank every held-out
 case identically. The gate is justified on the shape it targets, where the
 effect is visible case by case: on the development key, "what is the Adam
@@ -143,6 +146,90 @@ p < 0.05), on all 488 held-out cases:
 Better on none, worse on one (rank 2 to 3), p = 1.0, so tables ship. They gain
 nothing measurable either, as expected: questions written from abstracts do
 not ask about the numbers in a table.
+
+**ColBERT reranking pays on the held-out key, and gated it costs a tenth of
+a second (2026-10-28).** ColBERT (answerai-colbert-small-v1: late interaction, 96
+numbers per token, each question token matched to its best passage token)
+reranked the top 50 fused passages, either on every question or only when the
+keyword and vector legs put different papers first. The rule was written into
+`evals/retrieval_ab.py` before either arm ran, though committed only with the
+result: beat hybrid+graph at p < 0.025 by sign test, with under 2.5% of
+bootstrap resamples at or below zero. On all 488 held-out cases:
+
+| | r@1 | r@5 | r@10 | mrr | won-lost | median s |
+|---|---|---|---|---|---|---|
+| hybrid+graph (then the default) | 0.85 | 0.94 | 0.97 | 0.889 | | 1.18 |
+| + ColBERT, every question | 0.92 | 0.98 | 0.99 | 0.946 | 59-14 | 2.20 |
+| **+ ColBERT, legs disagree** | **0.92** | **0.98** | **0.99** | **0.943** | **48-6** | **1.31** |
+| + cross-encoder, every question | 0.89 | 0.98 | 0.98 | 0.923 | 52-27 | |
+| + cross-encoder, legs disagree | 0.89 | 0.98 | 0.98 | 0.925 | 42-16 | |
+
+Both ColBERT arms pass (p < 0.0001, no resample at or below zero). The
+cross-encoder rows were added afterwards, to ask what did the work, and decide
+nothing.
+
+**The gate keeps the gain where it is.** The legs disagree on 111 of the 488
+(23%), and those hold 59 of hybrid+graph's 73 first-place misses. There ColBERT
+lifts r@1 from 52 to 86 of 111. Where they agree hybrid+graph is already first
+on 363 of 377, and reranking those too is a coin toss: 11 better, 8 worse
+(p = 0.65). So the gated arm keeps all but 0.003 of the gain, loses 6 cases
+instead of 14, and spends its second only where it fires. Where ColBERT wins,
+fusion had sided with the wrong leg; its six losses are near neighbours, such
+as Humanity's Last Exam for a question written about MMLU.
+
+**On the development key every reranker loses again, on definitions.** The
+MiniLM cross-encoder that [lowered mrr there](#what-was-tried-and-rejected)
+raises it on the held-out key, to 0.923 on every question (p = 0.007) and
+0.925 gated; ColBERT beats it by about 0.02 either way (intervals +0.008 to
++0.039 and +0.007 to +0.029), though neither sign test clears (p = 0.08,
+0.06). But over the 63 development cases gated ColBERT falls from 0.878 to
+0.789 (2-11, p = 0.02) and the cross-encoder to 0.761. Ten of the eleven
+cases gated ColBERT moves down are definitional - "what is the Adam optimizer"
+leaves the top ten - because a reranker rewards the passages that use a term
+most, not the paper that introduced it, undoing what the graph leg fixed. The
+held-out key holds no such question, so it could not see this. Standing the
+reranker down on definition-shaped questions restores the development key
+exactly (1-1) and keeps 0.939 on the held-out one (46-6), computed from the
+saved ranks, which is exact because standing down returns hybrid+graph's order.
+
+**Sparing definitions, it is now the default.** That arm then ran for real,
+under a rule written after the prediction, so the run confirms rather than
+tests: beat hybrid+graph on the held-out key as before, and be worse on no more
+development-key cases than better. Every rank matched the prediction, 488 of
+488 and 63 of 63:
+
+| | held-out mrr | won-lost | development mrr | won-lost | median s |
+|---|---|---|---|---|---|
+| hybrid+graph | 0.889 | | 0.878 | | 1.18 |
+| **+ ColBERT, legs disagree, not on definitions** | **0.939** | **46-6** | **0.878** | **1-1** | **1.27** |
+
+It passes (p < 0.0001, no resample at or below zero), so every front end now
+searches this way: `default_search_options` in `retrieval.py`, scored as
+`hybrid+graph+rerank` by `verbatim eval` and enforced by the CI gate. It reranks
+106 of the 488, at 1.89 s median there against 1.19 s elsewhere. It also stands
+down wherever a title leg ran, so `--use-compare`, `--use-titles` and the
+ladder's title rungs keep the behaviour they were measured with. `--no-rerank`
+or `VERBATIM_RERANKER=off` turns it off. The CI gate cannot see it work: on the
+committed sample's 12 questions the legs never disagree.
+
+**By batch the ColBERT arms split, noticed after the fact and not claimed.**
+On the 88 hand-written cases reranking every question scores 0.865 against the
+gate's 0.829 (default 0.756): it also fixes 6 cases where both legs agreed on
+the wrong paper, and breaks none. On the 400 generated it demotes 8 right
+answers both legs agreed on, and fixes 5. Hand-written questions paraphrase;
+generated ones repeat the paper's own terms, and then agreement is usually
+right. The legs disagree on 40% of hand-written questions against 19% of
+generated, so on questions people write the gate fires twice as often. Gated
+against ungated needs a fresh hand-written batch to settle.
+
+**Batching cost more than the model.** fastembed encodes passages in batches
+padded to the longest. Fifty at once took 2.1 s, and its working memory pushed
+the 4.9 GB corpus out of the page cache on a 16 GB machine, so the searches
+after a rerank slowed even where none ran (median 1.21 to 1.71 s in a
+controlled run). One passage at a time takes 1.0 s, leaves the next search
+alone and ranks all 488 cases identically. The gated arm then adds 0.13 s at
+the median, about a second on the questions it fires on. The cross-encoder,
+still batched, shows the same symptom (p90 16 s), so it has no time above.
 
 ## Answers
 
@@ -231,8 +318,10 @@ On the 63 answerable development cases:
 With the right passage already first 81% of the time, new candidates can only
 displace it. Cross-encoder reranking is the same trade, worse: mrr 0.940 fell
 to 0.752, 0.701 and 0.741 on the three rerankers tried (against the 42-case
-set of the time). The graph leg is the one widener that pays no recall@1,
-because it widens only the questions the baseline was already losing.
+set of the time). On the held-out key, over 50 candidates, it helps instead;
+on today's development key 14 of its 16 losses are definitional questions
+([Retrieval](#retrieval)). The graph leg is the one widener that pays no
+recall@1, because it widens only the questions the baseline was already losing.
 
 **Structure and prompting.** Tool calling for the answer works on `gemma4:31b`,
 where it failed on a 4B model, and is no better than the line protocol:

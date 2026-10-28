@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from math import comb
 from pathlib import Path
 
 from verbatim import config
@@ -28,6 +27,7 @@ from verbatim.embedding import FastEmbedEmbedder
 from verbatim.evaluation import rank_of_first_hit
 from verbatim.expansion import fuse_rankings
 from verbatim.retrieval import hybrid_search
+from significance import sign_test
 
 ARMS = ("as typed", "rewritten", "fused", "scoped")
 CASES = Path("evals/conversational.jsonl")
@@ -44,15 +44,6 @@ def committed_unchanged(path: Path) -> bool:
         ["git", "diff", "--quiet", "HEAD", "--", str(path)], capture_output=True
     ).returncode == 0
     return tracked and clean
-
-
-def sign_test(wins: int, losses: int) -> float:
-    """Two-sided exact sign test. Ties carry no information and are dropped."""
-    n = wins + losses
-    if n == 0:
-        return 1.0
-    tail = sum(comb(n, k) for k in range(max(wins, losses), n + 1))
-    return min(2 * tail / 2**n, 1.0)
 
 
 def load_cases(path: Path) -> list[dict]:

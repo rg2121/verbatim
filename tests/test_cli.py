@@ -113,8 +113,10 @@ def test_breadth_authoring_refuses_to_overwrite_a_frozen_key(monkeypatch, tmp_pa
         ("--deep", ["--arxiv-id", "2608.11111v1"]),
         ("--deep", ["--include-references"]),
         ("--deep", ["--no-graph"]),
+        ("--deep", ["--no-rerank"]),
         ("--tools", ["--arxiv-id", "2608.11111v1"]),
         ("--tools", ["--no-graph"]),
+        ("--tools", ["--no-rerank"]),
         ("--tools", ["--use-compare"]),
         ("--tools", ["--plan"]),
         ("--tools", ["--passages", "3"]),
@@ -328,3 +330,161 @@ def test_distill_records_the_model_that_actually_ran(tmp_path, monkeypatch) -> N
     run()
 
     assert seen["model"] == "picked-by-ollama"
+
+
+def test_eval_record_appends_every_mode_to_the_history(tmp_path, monkeypatch) -> None:
+    import json
+
+    import verbatim.cli as cli
+    from helpers import chunked_corpus
+
+    from verbatim.corpus import EmbeddingModel
+
+    class KeywordOnly:
+        model_id = "stub"
+        model = EmbeddingModel(model_id="stub", dimensions=4, normalized=True, revision="v0")
+
+        def __init__(self, **options):
+            pass
+
+        def embed_query(self, text):
+            return [0.0, 0.0, 0.0, 0.0]
+
+    with chunked_corpus(tmp_path, {"2608.22222v1": ["Transmon qubits lose coherence."]}):
+        pass
+    key = tmp_path / "key.jsonl"
+    key.write_text(json.dumps({"question": "transmon coherence",
+                               "expect_papers": ["2608.22222v1"]}) + "\n")
+    history = tmp_path / "history.jsonl"
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", KeywordOnly)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "eval", "--cases", str(key), "--state", str(tmp_path / "corpus.db"),
+        "--record", str(history),
+    ])
+
+    run()
+
+    rows = [json.loads(line) for line in history.read_text().splitlines()]
+    assert {row["mode"] for row in rows} >= {"hybrid", "hybrid+graph", "vector"}
+    assert all(row["keys"] == [str(key)] and row["passages"] == 1 for row in rows)
+    assert all("commit" in row and "mrr" in row for row in rows)
+
+
+@pytest.mark.parametrize(("flag", "chosen"), [
+    ([], "colbert"), (["--rerank"], "cross"), (["--rerank", "colbert"], "colbert"),
+    (["--no-rerank"], None),
+])
+def test_search_reranks_as_the_default_does_unless_told_otherwise(
+    tmp_path, monkeypatch, flag, chosen
+) -> None:
+    """ColBERT by default; a bare --rerank keeps meaning the cross-encoder it always meant."""
+    import verbatim.cli as cli
+    from verbatim.reranking import shared_reranker
+
+    searched: dict = {}
+    monkeypatch.setattr(cli.config, "RERANKER", "colbert")
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(cli, "hybrid_search", lambda *args, **options: searched.update(options) or [])
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "search", "transmon", "--state", str(tmp_path / "corpus.db"), *flag,
+    ])
+
+    run()
+
+    assert searched["reranker"] is (shared_reranker(chosen) if chosen else None)
+    assert searched["rerank_when_legs_disagree"] and searched["rerank_skips_definitions"]
+
+
+@pytest.mark.parametrize(("flags", "chosen"), [([], "colbert"), (["--no-rerank"], None)])
+def test_ask_searches_as_every_front_end_does(tmp_path, monkeypatch, flags, chosen) -> None:
+    import verbatim.cli as cli
+    from verbatim.reranking import shared_reranker
+
+    class Answering(Exception):
+        pass
+
+    def answer(*args, **options):
+        raise Answering
+
+    searched: dict = {}
+    monkeypatch.setattr(cli.config, "RERANKER", "colbert")
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(cli, "OllamaCompletion", lambda *args, **options: object())
+    monkeypatch.setattr(cli, "hybrid_search", lambda *args, **options: searched.update(options) or [])
+    monkeypatch.setattr(cli, "answer_from_matches", answer)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "ask", "how do transmons decohere?", "--state", str(tmp_path / "corpus.db"), *flags,
+    ])
+
+    with pytest.raises(Answering):
+        run()
+
+    assert searched["reranker"] is (shared_reranker(chosen) if chosen else None)
+    assert searched["use_graph"] and searched["rerank_skips_definitions"]
+
+
+def test_the_retrieval_gate_scores_the_shipped_default(tmp_path, monkeypatch, capsys) -> None:
+    """The default reranks, so the floor CI enforces must be measured reranked too."""
+    import json
+
+    import verbatim.cli as cli
+    from helpers import chunked_corpus
+    from verbatim.corpus import EmbeddingModel
+
+    class KeywordOnly:
+        model = EmbeddingModel(model_id="stub", dimensions=4, normalized=True, revision="v0")
+
+        def __init__(self, **options):
+            pass
+
+        def embed_query(self, text):
+            return [0.0, 0.0, 0.0, 0.0]
+
+    class Flat:
+        def score(self, query, passages):
+            return [1.0] * len(passages)
+
+    with chunked_corpus(tmp_path, {"2608.22222v1": ["Transmon qubits lose coherence."]}):
+        pass
+    key = tmp_path / "key.jsonl"
+    key.write_text(json.dumps({"question": "transmon coherence",
+                               "expect_papers": ["2608.22222v1"]}) + "\n")
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", KeywordOnly)
+    monkeypatch.setattr(cli, "default_reranker", lambda: Flat())
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "eval", "--cases", str(key), "--state", str(tmp_path / "corpus.db"),
+        "--min-mrr", "0.5",
+    ])
+
+    run()
+
+    assert "gate: hybrid+graph+rerank scored mrr 1.000" in capsys.readouterr().out
+
+
+def test_a_planned_ask_searches_each_part_as_plain_ask_does(tmp_path, monkeypatch) -> None:
+    import verbatim.cli as cli
+    from verbatim.reranking import shared_reranker
+
+    class Researching(Exception):
+        pass
+
+    searched: dict = {}
+
+    def research(*args, **options):
+        searched.update(options)
+        raise Researching
+
+    monkeypatch.setattr(cli.config, "RERANKER", "colbert")
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(cli, "OllamaCompletion", lambda *args, **options: object())
+    monkeypatch.setattr(cli, "research", research)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "ask", "compare transmons and fluxoniums", "--plan",
+        "--state", str(tmp_path / "corpus.db"),
+    ])
+
+    with pytest.raises(Researching):
+        run()
+
+    assert searched["reranker"] is shared_reranker("colbert")
+    assert searched["use_graph"] and searched["rerank_skips_definitions"]

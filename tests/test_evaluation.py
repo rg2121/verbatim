@@ -164,6 +164,17 @@ def test_report_names_the_best_mode() -> None:
     assert report.index("bad") < report.index("best by mrr")  # sorted worst first
 
 
+def test_the_longest_mode_name_stays_in_its_column() -> None:
+    """The shipped default has the longest name; its row must line up with the rest."""
+    cases = [EvalCase("q", ("A",))]
+    short = score_mode("hybrid", cases, lambda q: [match("A")])
+    longest = score_mode("hybrid+graph+rerank", cases, lambda q: [match("A")])
+
+    rows = render_report([short, longest]).splitlines()[1:3]
+
+    assert rows[0].index("r@1") == rows[1].index("r@1")
+
+
 def test_unanswerable_cases_are_excluded_from_retrieval_scoring() -> None:
     """Scoring recall against a question with no answer would be meaningless."""
     cases = [
@@ -341,3 +352,70 @@ def test_stratified_sample_is_reproducible(tmp_path: Path) -> None:
 
     assert first == again
     assert first != other
+
+
+def test_recorded_scores_are_appended_with_their_commit_and_corpus(tmp_path) -> None:
+    """A regression is only findable next to the commit that caused it."""
+    import json
+
+    from verbatim.evaluation import ModeScore, record_history
+
+    history = tmp_path / "history.jsonl"
+    history.write_text('{"earlier": "run"}\n')
+    scores = [ModeScore("hybrid+graph", 88, {1: 0.68, 5: 0.85, 10: 0.92}, 0.7581, ())]
+
+    written = record_history(
+        history, scores, keys=["evals/heldout.jsonl"], state="data/corpus.db",
+        passages=835743, commit="65f693f", when="2026-10-27T12:00:00+00:00",
+    )
+
+    lines = [json.loads(line) for line in history.read_text().splitlines()]
+    assert written == 1 and lines[0] == {"earlier": "run"}
+    assert lines[1] == {
+        "when": "2026-10-27T12:00:00+00:00", "commit": "65f693f",
+        "keys": ["evals/heldout.jsonl"], "state": "data/corpus.db", "passages": 835743,
+        "mode": "hybrid+graph", "cases": 88,
+        "r@1": 0.68, "r@5": 0.85, "r@10": 0.92, "mrr": 0.7581,
+    }
+
+
+def test_the_commit_says_when_the_tree_had_changes(tmp_path, monkeypatch) -> None:
+    """Numbers from uncommitted code must not be credited to the commit below them."""
+    import subprocess
+
+    from verbatim.evaluation import current_commit
+
+    monkeypatch.chdir(tmp_path)
+    assert current_commit() is None  # not a repository
+    git = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)  # noqa: E731
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (tmp_path / "code.py").write_text("x = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "first")
+
+    clean = current_commit()
+    (tmp_path / "code.py").write_text("x = 2\n")
+
+    assert clean is not None and "dirty" not in clean
+    assert current_commit() == f"{clean}+dirty"
+
+
+def test_the_shipped_default_is_scored_whenever_a_reranker_is_given(monkeypatch) -> None:
+    """Reranked as every front end reranks; plain hybrid stays plain."""
+    import verbatim.evaluation as evaluation
+
+    calls: list[dict] = []
+    monkeypatch.setattr(evaluation, "hybrid_search", lambda *args, **options: calls.append(options) or [])
+    reranker = object()
+
+    modes = evaluation.retrieval_modes(None, None, reranker=reranker)
+    modes["hybrid+graph+rerank"]("how do transmons decohere?")
+    modes["hybrid"]("how do transmons decohere?")
+
+    shipped, plain = calls
+    assert shipped["reranker"] is reranker and shipped["use_graph"]
+    assert shipped["rerank_when_legs_disagree"] and shipped["rerank_skips_definitions"]
+    assert "reranker" not in plain
+    assert "hybrid+graph+rerank" not in evaluation.retrieval_modes(None, None)

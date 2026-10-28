@@ -2,6 +2,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def run_config(env: dict[str, str], cwd: Path) -> dict[str, str]:
     """Import config in a fresh interpreter, since it reads the environment once."""
@@ -62,6 +64,17 @@ def test_settings_load_when_no_home_directory_can_be_found(tmp_path: Path) -> No
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(("env", "expected"), [({}, "colbert"), ({"VERBATIM_RERANKER": "off"}, "off")])
+def test_reranking_is_on_by_default_and_can_be_turned_off(tmp_path: Path, env, expected) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", "from verbatim import config; print(config.RERANKER)"],
+        capture_output=True, text=True, check=True, cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src"), **env},
+    )
+
+    assert result.stdout.strip() == expected
 
 
 def test_a_non_numeric_setting_is_rejected_with_its_name(tmp_path: Path) -> None:

@@ -563,3 +563,21 @@ def test_a_section_the_critic_held_back_says_why(tmp_path: Path) -> None:
         )
 
     assert ledger.outcome == "accepted, though no passage covers: superconductivity"
+
+
+def test_every_rung_searches_with_the_shared_default(monkeypatch) -> None:
+    """Its own legs on top; a title leg's choice is never reranked (test_vectors)."""
+    import verbatim.orchestrator as orchestrator
+    from verbatim import config
+    from verbatim.reranking import shared_reranker
+
+    calls: list[dict] = []
+    monkeypatch.setattr(config, "RERANKER", "colbert")
+    monkeypatch.setattr(orchestrator, "hybrid_search", lambda *args, **options: calls.append(options) or [])
+
+    for strategy in orchestrator.STRATEGY_FLAGS:
+        orchestrator.retrieve(strategy, None, None, "q", limit=3, max_per_paper=None, caller=None)
+
+    assert len(calls) == len(orchestrator.STRATEGY_FLAGS)
+    assert all(call["reranker"] is shared_reranker("colbert") for call in calls)
+    assert all(call["use_graph"] and call["rerank_skips_definitions"] for call in calls)

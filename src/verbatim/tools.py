@@ -12,7 +12,7 @@ from typing import Any
 
 from verbatim.corpus import CorpusStore, split_arxiv_version
 from verbatim.embedding import Embedder
-from verbatim.retrieval import hybrid_search
+from verbatim.retrieval import default_search_options, hybrid_search
 
 MAX_RESULTS = 25
 
@@ -33,8 +33,7 @@ def search_chunks(
         limit=min(limit, MAX_RESULTS),
         arxiv_id=arxiv_id,
         max_per_paper=3 if arxiv_id is None else None,
-        # The default graph leg; it only fires on definition-shaped questions.
-        use_graph=True,
+        **default_search_options(),
     )
     return [
         {

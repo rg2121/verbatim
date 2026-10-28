@@ -25,7 +25,7 @@ from verbatim.board import (
 )
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
-from verbatim.retrieval import hybrid_search
+from verbatim.retrieval import default_search_options, hybrid_search
 
 RETRIEVAL = "retrieval"
 ADVERSARIAL_SEARCH = "adversarial-search"
@@ -177,7 +177,7 @@ def retrieval_worker(
     filed = 0
     for match in hybrid_search(
         corpus, embedder, task.objective, limit=limit,
-        max_per_paper=config.ASK_MAX_PER_PAPER, use_graph=True,
+        max_per_paper=config.ASK_MAX_PER_PAPER, **default_search_options(),
     ):
         if state.add_evidence(
             task.task_id, chunk_id=match.chunk.chunk_id,
@@ -210,7 +210,7 @@ def adversarial_worker(
     filed = 0
     for query in searches:
         for match in hybrid_search(
-            corpus, embedder, query, limit=limit, max_per_paper=2, use_graph=True,
+            corpus, embedder, query, limit=limit, max_per_paper=2, **default_search_options(),
         ):
             if state.add_evidence(
                 task.task_id, chunk_id=match.chunk.chunk_id,

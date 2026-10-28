@@ -19,6 +19,7 @@ against its source, and writes literature reviews the same way.
   section, character offsets, source URL and licence.
 - **Hybrid retrieval.** Keyword and vector search fused by rank, plus a
   citation-graph leg for definitional questions ("what is the Adam optimizer?").
+  Where the two searches disagree on the top paper, ColBERT reranks the top 50.
 - **HTML-first ingest.** Papers are read from arXiv's HTML rendering where one
   exists - maths stays LaTeX, tables stay tables - and from the PDF otherwise.
 - **Answers that say what they rest on.** Every answer reports how many
@@ -48,7 +49,8 @@ The repository ships a sample corpus - 40 openly licensed papers, 3,139
 passages with their vectors, 2,230 bibliography entries, 23 MB - so this works
 on a fresh clone. It is used from a copy because commands record their runs in
 the corpus, and `data/` is ignored by git. The first search downloads the
-embedding model (about 65 MB). `search` and `graph` need no language model;
+embedding model (about 65 MB), and the first that needs reranking the ColBERT
+model (about 130 MB). `search` and `graph` need no language model;
 `ask` needs Ollama, and uses `OLLAMA_MODEL` or the first local model you have
 pulled - a `-cloud` model only when you name it.
 
@@ -123,9 +125,10 @@ Every command takes `--help`: `uv run verbatim <command> --help`.
 **Options for `ask`:** `--deep` retries with the next retrieval strategy when
 no citation verifies; `--tools` lets the model route the question (recency to
 the catalogue, a named paper to a scoped search); `--arxiv-id` answers from one
-paper; `--max-per-paper` caps passages per paper (default 3); `--llm` picks the
-Ollama model. `--deep` and `--tools` choose their own retrieval, so they refuse
-search options they would otherwise ignore.
+paper; `--max-per-paper` caps passages per paper (default 3); `--no-rerank`
+skips the reranker; `--llm` picks the Ollama model. `--deep` and `--tools`
+choose their own retrieval, so they refuse search options they would otherwise
+ignore.
 
 **`report`** plans three to five section questions and answers each through the
 same verified path. `--agents` retries a section that fails verification with a

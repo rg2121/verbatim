@@ -33,7 +33,7 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.orchestrator import orchestrate, work_section
 from verbatim.report import render_markdown
-from verbatim.retrieval import hybrid_search
+from verbatim.retrieval import default_search_options, hybrid_search
 from verbatim.runs import last_run_per_command, recent_runs
 
 MAX_LIMIT = 50
@@ -233,8 +233,8 @@ def create_app(
             matches = hybrid_search(
                 corpus(), embedder(), q, limit=limit, arxiv_id=arxiv_id,
                 max_per_paper=3 if arxiv_id is None else None,
-                # The default graph leg, as in every other front end.
-                use_graph=True,
+                # The default search, as in every other front end.
+                **default_search_options(),
             )
         return {
             "query": q,
@@ -505,7 +505,7 @@ def create_app(
             limit=config.ASK_PASSAGES,
             arxiv_id=arxiv_id,
             max_per_paper=config.ASK_MAX_PER_PAPER if arxiv_id is None else None,
-            use_graph=True,
+            **default_search_options(),
         )
         papers = corpus().papers_by_id(sorted({m.chunk.arxiv_id for m in matches}))
 

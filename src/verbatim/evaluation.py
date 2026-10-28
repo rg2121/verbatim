@@ -8,17 +8,25 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import random
+import subprocess
 
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import Embedder
-from verbatim.reranking import rerank
 from verbatim.research import gather_within_budget, plan_subquestions
-from verbatim.retrieval import expanded_search, hybrid_search, vector_search
+from verbatim.retrieval import (
+    default_search_options,
+    expanded_search,
+    hybrid_search,
+    vector_search,
+)
 
 CUTOFFS = (1, 5, 10)
+# Wide enough for the longest mode name, hybrid+graph+rerank.
+MODE_WIDTH = 20
 
 # Why a question has no answer here. Only a coverage gap is visible to
 # retrieval, so the two kinds are scored apart.
@@ -114,7 +122,7 @@ class ModeScore:
 
     def render(self) -> str:
         recalls = "  ".join(f"r@{k} {self.recall_at[k]:.2f}" for k in sorted(self.recall_at))
-        return f"  {self.mode:<16} {recalls}  mrr {self.mrr:.3f}"
+        return f"  {self.mode:<{MODE_WIDTH}} {recalls}  mrr {self.mrr:.3f}"
 
 
 def load_cases(path: Path) -> list[EvalCase]:
@@ -223,7 +231,7 @@ class CompoundScore:
             f"cov@{k} {self.coverage_at[k]:.2f}  all@{k} {self.complete_at[k]:.2f}"
             for k in sorted(self.coverage_at)
         )
-        return f"  {self.mode:<16} {columns}"
+        return f"  {self.mode:<{MODE_WIDTH}} {columns}"
 
 
 def score_compound_mode(
@@ -308,7 +316,8 @@ def retrieval_modes(
 ) -> dict[str, Callable[[str], Sequence[ChunkMatch]]]:
     """Every retrieval mode under its reporting name, shared by both scorings.
 
-    With a reranker, hybrid retrieves three times the limit and the reranker trims it.
+    With a reranker, the shipped default is scored too: hybrid+graph+rerank,
+    searched exactly as every front end searches.
     """
     def expanded(query: str) -> Sequence[ChunkMatch]:
         return expanded_search(
@@ -316,18 +325,13 @@ def retrieval_modes(
             hyde=hyde, limit=limit, max_per_paper=max_per_paper,
         )
 
-    def hybrid(query: str) -> Sequence[ChunkMatch]:
-        if reranker is None:
-            return hybrid_search(corpus, embedder, query, limit=limit, max_per_paper=max_per_paper)
-
-        wide = hybrid_search(corpus, embedder, query, limit=limit * 3, max_per_paper=max_per_paper)
-        return rerank(reranker, query, wide, limit=limit)
-
     modes: dict[str, Callable[[str], Sequence[ChunkMatch]]] = {
         "keyword-all": lambda q: corpus.search_chunks(q, limit=limit, match="all"),
         "keyword-any": lambda q: corpus.search_chunks(q, limit=limit, match="any"),
         "vector": lambda q: vector_search(corpus, embedder, q, limit=limit),
-        "hybrid": hybrid,
+        "hybrid": lambda q: hybrid_search(
+            corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
+        ),
         "hybrid+titles": lambda q: hybrid_search(
             corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
             use_titles=True,
@@ -346,6 +350,11 @@ def retrieval_modes(
             use_graph=True, use_compare=True,
         ),
     }
+    if reranker is not None:
+        modes["hybrid+graph+rerank"] = lambda q: hybrid_search(
+            corpus, embedder, q, limit=limit, max_per_paper=max_per_paper,
+            **{**default_search_options(), "reranker": reranker},
+        )
     # Offered only when a model is available to rewrite queries.
     if complete is not None and (rewrites or hyde):
         modes["hybrid+expansion"] = expanded
@@ -400,7 +409,7 @@ def describe_case_mix(cases: Sequence[EvalCase]) -> str:
 def render_compound_report(scores: Sequence[CompoundScore]) -> str:
     """Lay out coverage of the compound cases, best complete@10 last."""
     deepest = max(scores[0].coverage_at) if scores else 10
-    lines = [f"  {'mode':<16} coverage and completion of multi-paper questions"]
+    lines = [f"  {'mode':<{MODE_WIDTH}} coverage and completion of multi-paper questions"]
     ordered = sorted(scores, key=lambda s: (s.complete_at[deepest], s.coverage_at[deepest]))
     for score in ordered:
         lines.append(score.render())
@@ -414,7 +423,7 @@ def render_compound_report(scores: Sequence[CompoundScore]) -> str:
 
 def render_report(scores: Sequence[ModeScore]) -> str:
     """Lay the modes out together, best mrr last so the winner is obvious."""
-    lines = [f"  {'mode':<16} recall@1        recall@5        recall@10   mrr"]
+    lines = [f"  {'mode':<{MODE_WIDTH}} recall@1        recall@5        recall@10   mrr"]
     for score in sorted(scores, key=lambda s: s.mrr):
         lines.append(score.render())
     best = max(scores, key=lambda s: s.mrr)
@@ -423,3 +432,52 @@ def render_report(scores: Sequence[ModeScore]) -> str:
         lines.append(f"  {len(best.misses)} question(s) it found nothing for:")
         lines.extend(f"    - {question}" for question in best.misses[:5])
     return "\n".join(lines)
+
+
+def current_commit() -> str | None:
+    """The checked-out commit, with "+dirty" when tracked files have changed.
+
+    None outside a repository, so a number is never credited to a commit it
+    was not measured on.
+    """
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", *args], capture_output=True, text=True)
+
+    try:
+        head = git("rev-parse", "--short", "HEAD")
+        changes = git("status", "--porcelain", "--untracked-files=no")
+    except OSError:
+        return None
+    if head.returncode != 0:
+        return None
+    commit = head.stdout.strip()
+    return f"{commit}+dirty" if changes.stdout.strip() else commit
+
+
+def record_history(
+    path: Path,
+    scores: Sequence[ModeScore],
+    *,
+    keys: Sequence[str],
+    state: str,
+    passages: int,
+    commit: str | None,
+    when: str | None = None,
+) -> int:
+    """Append one line per mode to the eval history; returns the lines written.
+
+    Each line names the commit and the corpus it was measured on, so a
+    regression shows next to the change that caused it.
+    """
+    when = when or datetime.now(UTC).isoformat(timespec="seconds")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as history:
+        for score in scores:
+            history.write(json.dumps({
+                "when": when, "commit": commit, "keys": list(keys),
+                "state": state, "passages": passages,
+                "mode": score.mode, "cases": score.cases,
+                **{f"r@{k}": round(score.recall_at[k], 4) for k in sorted(score.recall_at)},
+                "mrr": round(score.mrr, 4),
+            }) + "\n")
+    return len(scores)

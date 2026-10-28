@@ -339,3 +339,22 @@ def test_abandoning_a_task_is_not_counted_as_a_redirection() -> None:
 
     state.record(ADVERSARIAL_SEARCH, task, "no adversarial search run")
     assert TeamReport(state=state, answers={}).redirections == 1
+
+
+def test_the_workers_search_as_every_front_end_does(monkeypatch) -> None:
+    import verbatim.team as team
+    from verbatim import config
+    from verbatim.retrieval import default_search_options
+
+    calls: list[dict] = []
+    monkeypatch.setattr(config, "RERANKER", "colbert")
+    monkeypatch.setattr(team, "hybrid_search", lambda *args, **options: calls.append(options) or [])
+    state = ResearchState(question="does flux improve charge?")
+    task = state.add_task("establish that flux improves charge", needs=2)
+
+    team.retrieval_worker(None, None, state, task)
+    team.adversarial_worker(None, None, lambda system, user: "", state, task)
+
+    shared = default_search_options()
+    assert len(calls) == 2
+    assert all({name: call[name] for name in shared} == shared for call in calls)

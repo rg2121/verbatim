@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import statistics
-from math import comb
 from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +32,7 @@ from verbatim.embedding import FastEmbedEmbedder
 from verbatim.evaluation import load_cases
 from verbatim.orchestrator import work_section
 from verbatim.retrieval import hybrid_search
+from significance import bootstrap_ci as ci, paired_sign_test as sign_test
 
 ARMS = ("baseline", "workflow", "+critic")
 DEFAULT_ARMS = "baseline,workflow"
@@ -78,44 +76,6 @@ def decode(line: str) -> tuple[Key, AnsweredCase]:
         answer=answer,
         expected_papers=tuple(row["expected"]),
     )
-
-
-def ci(
-    values: list[float], rounds: int = 10000, seed: int = 0
-) -> tuple[float, float, float]:
-    """Percentile bootstrap interval, plus the share of resamples at or below 0.
-
-    The share is returned because the interval alone is treacherous here. The
-    per-question difference takes few distinct values, so the 2.5th percentile
-    lands *on* zero for most RNG seeds and just above it for a few - and a
-    verdict written as `lo > 0` then depends on the seed rather than on the
-    data. The share moves smoothly and says the same thing on every seed.
-    """
-    if not values:
-        return (0.0, 0.0, 1.0)
-    rng = random.Random(seed)
-    n = len(values)
-    means = sorted(
-        sum(rng.choice(values) for _ in range(n)) / n for _ in range(rounds)
-    )
-    at_or_below = sum(1 for mean in means if mean <= 0) / rounds
-    return means[int(0.025 * rounds)], means[int(0.975 * rounds)], at_or_below
-
-
-def sign_test(diffs: Sequence[float]) -> tuple[int, int, float]:
-    """Wins, losses, and a two-sided p-value assuming nothing about the spread.
-
-    Reported beside the bootstrap because it is exact, and because it forces
-    the honest denominator into view: a difference of +0.03 over 88 questions
-    can mean the arms disagreed on seven of them.
-    """
-    wins = sum(1 for d in diffs if d > 0)
-    losses = sum(1 for d in diffs if d < 0)
-    n = wins + losses
-    if n == 0:
-        return (0, 0, 1.0)
-    tail = sum(comb(n, k) for k in range(max(wins, losses), n + 1))
-    return wins, losses, min(2 * tail / 2**n, 1.0)
 
 
 def answer_one(

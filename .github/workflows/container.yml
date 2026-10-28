@@ -30,8 +30,9 @@ jobs:
         run: docker run --rm verbatim:ci stats --state sample/corpus.db
 
       - name: It searches the sample corpus end to end
-        # Downloads the small embedding model inside the container, which is
-        # the real first-run experience for anyone using the image.
+        # Downloads the small embedding model inside the container, and the
+        # reranker's if the question needs it, which is the real first-run
+        # experience for anyone using the image.
         run: >
           docker run --rm verbatim:ci
           search "how do transformers handle long context"
