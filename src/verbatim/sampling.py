@@ -1,18 +1,21 @@
-"""Export a small self-contained corpus, so a fresh clone works without an ingest.
+"""Export part of a corpus: a small sample to share, or a private eval corpus.
 
 The sample is the database only: papers, passages, vectors and bibliography
-records, with no PDF or HTML files.
+records, with no PDF or HTML files. The eval corpus also keeps its papers'
+source records, so `chunk` can cut them again for a chunking experiment.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import random
 import sqlite3
 
 from verbatim.corpus import CorpusStore
-from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
+from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex, load_sqlite_vec
 
 # Tables copied for the selected papers, in foreign-key order. Download and HTML
 # records are left out: the sample ships no files, and `stats` would count them.
@@ -21,6 +24,14 @@ PAPER_SCOPED_TABLES = (
     # Bibliography records make `graph` work; bibliography chunks are left out,
     # since retrieval excludes them.
     ("paper_references", "citing_arxiv_id"),
+    ("chunks", "arxiv_id"),
+)
+# The eval corpus is never shared, so it also keeps what re-chunking reads.
+EVAL_SCOPED_TABLES = (
+    ("papers", "arxiv_id"),
+    ("paper_references", "citing_arxiv_id"),
+    ("downloads", "arxiv_id"),
+    ("html_sources", "arxiv_id"),
     ("chunks", "arxiv_id"),
 )
 # A paper long enough to demonstrate retrieval, short enough that forty of
@@ -143,6 +154,54 @@ def choose_papers(source: sqlite3.Connection, *, papers: int, model_id: str) -> 
     return chosen
 
 
+def choose_eval_papers(
+    source: sqlite3.Connection,
+    required: Sequence[str],
+    *,
+    total: int,
+    model_id: str,
+    seed: int = 0,
+) -> list[str]:
+    """Every named paper, each one's nearest held paper by abstract, then a seeded random fill.
+
+    The neighbours compete with the papers the questions are about, so retrieval
+    stays hard in a smaller corpus; abstracts choose them, so no way of cutting
+    passages is favoured.
+    """
+    held = [row[0] for row in source.execute("SELECT DISTINCT arxiv_id FROM chunks ORDER BY arxiv_id")]
+    holding = set(held)
+    missing = [arxiv_id for arxiv_id in required if arxiv_id not in holding]
+    if missing:
+        raise ValueError(f"The corpus holds no passages for {', '.join(missing[:5])}")
+
+    named = list(dict.fromkeys(required))
+    chosen = list(named)
+    taken = set(chosen)
+    for arxiv_id in named:
+        if len(chosen) >= total:
+            break
+        # Brute force in SQL: a few thousand abstracts, compared once per paper.
+        nearest = source.execute(
+            """
+            SELECT other.arxiv_id FROM paper_embeddings AS other
+            JOIN paper_embeddings AS this
+              ON this.arxiv_id = ? AND this.model_id = other.model_id
+            WHERE other.model_id = ? AND other.arxiv_id != this.arxiv_id
+            ORDER BY vec_distance_cosine(other.vector, this.vector), other.arxiv_id
+            LIMIT 10
+            """,
+            (arxiv_id, model_id),
+        ).fetchall()
+        neighbour = next((row[0] for row in nearest if row[0] in holding), None)
+        if neighbour is not None and neighbour not in taken:
+            chosen.append(neighbour)
+            taken.add(neighbour)
+
+    rest = [arxiv_id for arxiv_id in held if arxiv_id not in taken]
+    fill = min(max(total - len(chosen), 0), len(rest))
+    return chosen + random.Random(seed).sample(rest, fill)
+
+
 def _column_copier(connection: sqlite3.Connection):
     """Copy rows between the attached databases by column name, since column order can differ."""
     def copy(table: str, where: str = "", parameters=()) -> None:
@@ -182,13 +241,51 @@ def export_sample(
             )
     finally:
         reader.close()
+    return _export(source_path, destination, chosen, model_id, PAPER_SCOPED_TABLES)
 
+
+def export_eval_corpus(
+    source_path: Path,
+    destination: Path,
+    *,
+    required: Sequence[str],
+    total: int,
+    model_id: str,
+    seed: int = 0,
+) -> SampleReport:
+    """Write a private corpus of the papers an eval needs, which `chunk` and `embed` can redo.
+
+    It is never shared, so every licence stays in; it keeps bibliographies and
+    source records, so re-chunking it repeats exactly what the full corpus did.
+    """
+    if destination.exists() and destination.samefile(source_path):
+        raise ValueError(f"{destination} is the corpus being sampled; write the eval corpus elsewhere")
+
+    reader = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    try:
+        load_sqlite_vec(reader)
+        chosen = choose_eval_papers(
+            reader, required, total=total, model_id=model_id, seed=seed
+        )
+    finally:
+        reader.close()
+    return _export(source_path, destination, chosen, model_id, EVAL_SCOPED_TABLES)
+
+
+def _export(
+    source_path: Path,
+    destination: Path,
+    chosen: list[str],
+    model_id: str,
+    tables: tuple[tuple[str, str], ...],
+) -> SampleReport:
+    """Copy the chosen papers' rows into a new corpus at `destination`."""
     # Built beside the destination and moved into place only when complete, so
     # a failed export never touches an existing file.
     partial = destination.with_name(destination.name + ".partial")
     _remove_database(partial)
     try:
-        counts = _write_sample(partial, source_path, chosen, model_id)
+        counts = _write_sample(partial, source_path, chosen, model_id, tables)
         partial.replace(destination)
     except BaseException:
         _remove_database(partial)
@@ -205,9 +302,15 @@ def export_sample(
 
 
 def _write_sample(
-    path: Path, source_path: Path, chosen: list[str], model_id: str
+    path: Path,
+    source_path: Path,
+    chosen: list[str],
+    model_id: str,
+    tables: tuple[tuple[str, str], ...],
 ) -> tuple[int, int, int, int]:
     """Copy the chosen papers into a new corpus at `path`; returns its counts."""
+    # Bibliography chunks go only where the sources that made them go too.
+    passages = "" if ("downloads", "arxiv_id") in tables else " AND kind != 'references'"
     # Opening the destination creates the schema; only rows are copied.
     with CorpusStore(path) as sample:
         sample.connection.execute("ATTACH DATABASE ? AS source", (str(source_path),))
@@ -215,17 +318,17 @@ def _write_sample(
         with sample.connection:
             copy = _column_copier(sample.connection)
             copy("embedding_models")
-            for table, column in PAPER_SCOPED_TABLES:
+            for table, column in tables:
                 where = f"WHERE {column} IN ({placeholders})"
                 if table == "chunks":
-                    where += " AND kind != 'references'"
+                    where += passages
                 copy(table, where, chosen)
             # Matched to the chunks actually copied: a vector whose passage
             # was left out would fail the foreign key it depends on.
             copy(
                 "embeddings",
                 f"WHERE chunk_id IN (SELECT chunk_id FROM source.chunks"
-                f" WHERE arxiv_id IN ({placeholders}) AND kind != 'references')"
+                f" WHERE arxiv_id IN ({placeholders}){passages})"
                 f" AND model_id = ?",
                 (*chosen, model_id),
             )

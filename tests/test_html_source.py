@@ -336,3 +336,23 @@ def test_a_malformed_span_cannot_build_an_enormous_row() -> None:
     )
 
     assert len(table.text.splitlines()[0].split("|")) <= 36
+
+
+def test_html_prose_is_cut_the_chosen_way_and_tables_stay_whole(tmp_path, monkeypatch) -> None:
+    """A table is not prose; splitting it at full stops would scatter its rows."""
+    from verbatim import config
+    from verbatim.html_source import extract_html_chunks
+
+    monkeypatch.setattr(config, "CHUNKER", "sentences")
+    prose = " ".join(f"Sentence number {n} says something useful." for n in range(6))
+    html = (
+        f"<h1>T</h1><p>{prose}</p>"
+        '<table class="ltx_tabular"><tr><td>Model A. Score 1.</td><td>Model B. Score 2.</td></tr></table>'
+    )
+
+    chunks = extract_html_chunks([_source(tmp_path, html)], chunk_size=120, overlap=50)
+
+    body = [c for c in chunks if c.kind == "body"]
+    tables = [c for c in chunks if c.kind == "table"]
+    assert body and all(c.text.endswith(".") for c in body)
+    assert len(tables) == 1 and "Model A. Score 1." in tables[0].text

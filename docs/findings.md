@@ -3,8 +3,8 @@
 What was measured, and what it decided. Every feature was measured against
 something simpler, and most of what is worth reading here is what did not
 work: query rewriting, HyDE, always-on title matching, question
-decomposition, a critic loop and a multi-agent team were each built, measured
-and left off.
+decomposition, sentence and semantic chunking, a critic loop and a multi-agent
+team were each built, measured and left off.
 
 Two habits run through all of it. A difference is only claimed when a sign
 test or interval supports it - three decimals of mrr are not evidence. And a
@@ -346,6 +346,64 @@ exactly, and verification throws them out.
 **Embedding each passage with its title and section** is unmeasured rather
 than rejected: an A/B scored mrr 0.982 for both arms on a subset too easy to
 show a difference (r@5 was 1.000). It stays off until measured on a harder set.
+
+**Cutting at sentence ends, or where the subject changes, does not beat
+windows (2026-10-29).** Re-cutting means re-embedding, about 12 hours for
+the whole corpus, so this ran on an eval corpus of 1,500 papers: the 589 the
+keys name, each one's nearest paper by abstract, and a seeded random fill
+(`sampling.export_eval_corpus`, kept under `data/`). Three copies were cut from
+the same source files. Windows is today's way: 1,200 characters with a
+200-character overlap, cut at the last word that fits. Sentences packs as many
+whole sentences as fit. Semantic ends each passage, somewhere between 600 and
+1,200 characters, at the sentence boundary where the sentences on either side
+are least alike to bge-small (two a side, each sentence's first 400
+characters). Both new ways overlap by whole sentences, and tables stay whole
+in all three. The rule was written into `evals/chunking_ab.py` before any copy
+was cut, though committed only with the result: beat windows on the 488
+held-out cases, searched with the shipped default, at p < 0.025 by sign test
+with under 2.5% of bootstrap resamples at or below zero, and be worse on no
+more development-key cases than better.
+
+| | passages | median chars | end a sentence | held-out mrr | won-lost | development mrr | won-lost |
+|---|---|---|---|---|---|---|---|
+| **windows** | 128,619 | 1,125 | 38% | **0.969** | | **0.951** | |
+| sentences | 132,556 | 942 | 80% | 0.970 | 15-12 | 0.909 | 1-5 |
+| semantic | 140,608 | 805 | 82% | 0.967 | 13-14 | 0.907 | 0-6 |
+
+Neither passes (p = 0.70 and 1.0), and both lose on the development key, so
+windows stays. Each moves 27 held-out cases, about as many down as up. On these
+1,500 papers windows misses first place on only 23 of 488, so the comparison
+was also run with plain hybrid search (no graph leg, no reranker), which misses
+41. That run was added after windows scored and before either other copy did,
+and decides nothing; it agrees: 0.941 for windows, 0.935 for sentences (15-23),
+0.944 for semantic (21-22). On the development key most of the losses are
+definitions windows already ranked first: "what is the Penrose diagram" falls
+to 7th with sentences and 3rd with semantic, and three questions are lost by
+both.
+
+**Semantic cuts are also the expensive ones.** Finding where the subject
+changes means embedding every sentence: 4.7 s a paper, against about 1 ms for
+windows or sentences, timed alone on the same 60 papers (parsing the HTML
+takes 18 ms). Across the 7,887 papers of the full corpus that is about 10
+more hours of chunking, then 9% more passages to embed. Built side by side on
+the eval corpus, sentences took 13 minutes to cut and 3.9 hours to embed;
+semantic 3.6 hours and 3.0 hours.
+
+**Answers do not separate them either.** Sixty held-out questions, drawn once
+with a fixed seed, were answered on each copy by a local model
+(`gemma4:e4b-mlx`) and counted as `eval-answers` counts them, with no judge:
+
+| out of 60 | windows | sentences | semantic |
+|---|---|---|---|
+| answers with a verified citation | 56 | 56 | 56 |
+| every claim carries a marker | 44 | 45 | 44 |
+| cited the expected paper | 50 | 52 | 54 |
+| citations rejected | 12 | 9 | 13 |
+
+Paired, semantic cites the expected paper on 8 questions windows misses and
+misses it on 4 (p = 0.39); sentences on 8 and 6 (p = 0.79). Generation is not
+seeded, so some of those flips are the model's own, and the counts were set
+beforehand to decide nothing. `VERBATIM_CHUNKER` stays, set to windows.
 
 ## The ladder and the agents
 

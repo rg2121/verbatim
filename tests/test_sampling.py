@@ -265,3 +265,69 @@ def test_the_sample_command_never_loads_the_embedding_model(tmp_path: Path, monk
 
     with CorpusStore(out) as sample:
         assert sample.connection.execute("SELECT count(*) FROM papers").fetchone()[0] == 2
+
+
+def with_abstract_vectors(source: Path, vectors: dict[str, list[float]]) -> None:
+    with CorpusStore(source) as corpus:
+        corpus.record_paper_embeddings("stub", list(vectors.items()))
+
+
+def test_an_eval_corpus_holds_the_named_papers_their_nearest_and_a_fill(tmp_path: Path) -> None:
+    """The nearest paper by abstract competes with the named one, so retrieval stays hard."""
+    from verbatim.sampling import export_eval_corpus
+
+    source = seeded(tmp_path, papers=6)
+    with_abstract_vectors(source, {
+        "2608.11110v1": [1.0, 0.0, 0.0, 0.0],
+        "2608.11111v1": [0.9, 0.1, 0.0, 0.0],
+        "2608.11112v1": [0.0, 1.0, 0.0, 0.0],
+        "2608.11113v1": [0.0, 0.0, 1.0, 0.0],
+        "2608.11114v1": [0.0, 0.0, 0.0, 1.0],
+        "2608.11115v1": [0.0, 0.7, 0.7, 0.0],
+    })
+
+    def held(name: str) -> set[str]:
+        export_eval_corpus(
+            source, tmp_path / name, required=["2608.11110v1"], total=4, model_id="stub", seed=1
+        )
+        with CorpusStore(tmp_path / name) as corpus:
+            return {row[0] for row in corpus.connection.execute("SELECT arxiv_id FROM papers")}
+
+    first = held("eval.db")
+
+    assert len(first) == 4
+    assert {"2608.11110v1", "2608.11111v1"} <= first
+    # The fill is drawn from a seed, so a rebuilt eval corpus holds the same papers.
+    assert held("again.db") == first
+
+
+def test_an_eval_corpus_can_be_rechunked_and_keeps_every_licence(tmp_path: Path) -> None:
+    """It stays private, so the redistribution gate does not apply; its sources come too."""
+    from verbatim.sampling import export_eval_corpus
+
+    source = seeded(tmp_path, papers=2)
+    with CorpusStore(source) as corpus:
+        corpus.connection.execute("UPDATE papers SET license_class = 'unknown'")
+        corpus.connection.commit()
+
+    report = export_eval_corpus(
+        source, tmp_path / "eval.db", required=["2608.11110v1", "2608.11111v1"],
+        total=2, model_id="stub",
+    )
+
+    assert report.papers == 2 and report.chunks > 0 and report.vectors == report.chunks
+    with CorpusStore(tmp_path / "eval.db") as corpus:
+        # Another chunker would re-cut both papers from the PDFs they were read from.
+        assert len(corpus.pending_chunking("another-chunker")) == 2
+        assert corpus.search_chunks("superconducting qubits", limit=1)
+
+
+def test_an_eval_corpus_refuses_a_paper_the_corpus_does_not_hold(tmp_path: Path) -> None:
+    from verbatim.sampling import export_eval_corpus
+
+    source = seeded(tmp_path, papers=2)
+
+    with pytest.raises(ValueError, match="2699.99999v1"):
+        export_eval_corpus(
+            source, tmp_path / "eval.db", required=["2699.99999v1"], total=2, model_id="stub"
+        )

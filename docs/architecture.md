@@ -36,7 +36,8 @@ stops when a round changes nothing rather than when every count reaches zero -
 some work never completes, such as the 33 papers that return a truncated PDF
 every time. Each stage runs as its own process, so one failure does not end the
 ingest. Every stage is incremental: chunking is keyed on
-`version:chunk_size:overlap`, embedding on `(chunk_id, model_id)`.
+`version:chunk_size:overlap` (plus the cutter, when `VERBATIM_CHUNKER` is not
+windows), embedding on `(chunk_id, model_id)`.
 
 **`sync`** pages a category newest first and stops at a stored watermark, so a
 repeat costs one request. A failed run leaves the watermark where it was, so

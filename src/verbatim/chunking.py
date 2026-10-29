@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
+import functools
 from hashlib import sha256
+import math
 import multiprocessing
 from pathlib import Path
 from queue import Empty
@@ -46,8 +48,9 @@ SURROGATES = re.compile(r"[\ud800-\udfff]")
 
 
 def chunker_fingerprint(chunk_size: int, overlap: int) -> str:
-    """The chunker version and parameters; a change to either means re-chunking."""
-    return f"{CHUNKER_VERSION}:{chunk_size}:{overlap}"
+    """The chunker version, parameters and way of cutting; a change to any means re-chunking."""
+    fingerprint = f"{CHUNKER_VERSION}:{chunk_size}:{overlap}"
+    return fingerprint if config.CHUNKER == "windows" else f"{fingerprint}:{config.CHUNKER}"
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ def extract_pdf_chunks(
     """Extract and split every page referenced in a download manifest."""
     page_extractor = extract_pages or extract_pages_from_pdf
     fingerprint = chunker_fingerprint(chunk_size, overlap)
+    cut = section_chunker(chunk_size, overlap)
     chunks: list[Chunk] = []
 
     for download in downloads:
@@ -127,7 +131,7 @@ def extract_pdf_chunks(
             sections, heading_stack = parse_markdown_sections(page_text, heading_stack)
             chunk_index = 0
             for section in sections:
-                for span in chunk_page(section.text, chunk_size=chunk_size, overlap=overlap):
+                for span in cut(section.text):
                     paper_chunks.append(
                         Chunk(
                             chunk_id=_chunk_id(download, page_number, chunk_index, fingerprint),
@@ -279,10 +283,7 @@ def normalize_page_text(text: str) -> str:
 
 def chunk_page(text: str, *, chunk_size: int, overlap: int) -> list[TextSpan]:
     """Chunk one page, keeping each chunk's character offsets in the normalized page."""
-    if chunk_size < 1:
-        raise ValueError("chunk_size must be at least 1")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap must be non-negative and smaller than chunk_size")
+    _check_settings(chunk_size, overlap)
 
     normalized = normalize_page_text(text)
     if not normalized:
@@ -310,6 +311,178 @@ def chunk_page(text: str, *, chunk_size: int, overlap: int) -> list[TextSpan]:
         # A token longer than chunk_size is split mid-word rather than dropped.
         start = min(next_start, end)
     return spans
+
+
+def _check_settings(chunk_size: int, overlap: int) -> None:
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be at least 1")
+    if overlap < 0 or overlap >= chunk_size:
+        raise ValueError("overlap must be non-negative and smaller than chunk_size")
+
+
+CHUNKERS = ("windows", "sentences", "semantic")
+# How much of a sentence semantic cutting embeds: enough to tell its subject. A
+# run-on "sentence", such as an author list, pads its whole batch; capped, 10
+# papers cut a third faster, with 446 of 455 sections cut the same.
+SUBJECT_CHARS = 400
+
+# A sentence ends at . ! or ?, perhaps inside a closing bracket or quote, before
+# a space and a capital, a digit or an opening bracket.
+SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?= [\"'(\[]?[A-Z0-9])")
+# Words a full stop follows without ending the sentence, as in "et al. 2017".
+ABBREVIATIONS = frozenset({
+    "al", "fig", "figs", "eq", "eqs", "sec", "secs", "ref", "refs", "tab", "vs",
+    "cf", "approx", "resp", "vol", "pp", "ch", "chap", "thm", "def", "prop",
+    "lem", "alg", "app", "appx", "dr", "mr", "ms", "prof", "st", "inc", "ltd",
+})
+
+
+def sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Where each sentence of normalized text starts and ends.
+
+    A rule, not a model: it misses some ends ("in the U.S. The"), which only
+    makes a passage end a sentence later.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in SENTENCE_END.finditer(text):
+        word = text[text.rfind(" ", 0, match.start()) + 1 : match.start()].lstrip("(\"'[")
+        # "e.g." and "i.e." carry an inner full stop; "A. Smith" is an initial.
+        if word.lower() in ABBREVIATIONS or "." in word or (len(word) == 1 and word.isupper()):
+            continue
+        spans.append((start, match.end()))
+        start = match.end() + 1  # normalized text has one space between sentences
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+
+def chunk_sentences(text: str, *, chunk_size: int, overlap: int) -> list[TextSpan]:
+    """Chunk one page into whole sentences, as many as fit; the overlap repeats whole sentences."""
+    _check_settings(chunk_size, overlap)
+    normalized = normalize_page_text(text)
+    return _pack_sentences(
+        normalized, sentence_spans(normalized), chunk_size=chunk_size, overlap=overlap,
+        choose=lambda first, fits: fits[-1],
+    )
+
+
+def chunk_semantic(
+    text: str,
+    *,
+    chunk_size: int,
+    overlap: int,
+    embed: Callable[[list[str]], Sequence[Sequence[float]]],
+) -> list[TextSpan]:
+    """Chunk one page at changes of subject.
+
+    Each passage is at least half of `chunk_size`, and ends at the sentence
+    boundary in that room where the sentences either side are least alike.
+    """
+    _check_settings(chunk_size, overlap)
+    normalized = normalize_page_text(text)
+    if not normalized:
+        return []
+    if len(normalized) <= chunk_size:
+        # One passage either way, so nothing is embedded.
+        return [TextSpan(0, len(normalized), normalized)]
+    sentences = sentence_spans(normalized)
+    alike = _neighbour_similarity(
+        embed([normalized[start:end][:SUBJECT_CHARS] for start, end in sentences])
+    )
+
+    def choose(first: int, fits: list[int]) -> int:
+        if fits[-1] == len(sentences) - 1:
+            return fits[-1]  # the rest fits in one passage
+        start = sentences[first][0]
+        roomy = [last for last in fits if sentences[last][1] - start >= chunk_size // 2] or fits[-1:]
+        # On a tie the later boundary wins, as a window would.
+        return min(roomy, key=lambda last: (alike[last], -last))
+
+    return _pack_sentences(
+        normalized, sentences, chunk_size=chunk_size, overlap=overlap, choose=choose
+    )
+
+
+def _pack_sentences(
+    normalized: str,
+    sentences: list[tuple[int, int]],
+    *,
+    chunk_size: int,
+    overlap: int,
+    choose: Callable[[int, list[int]], int],
+) -> list[TextSpan]:
+    """Group sentences into passages; `choose` picks each passage's last sentence from those that fit."""
+    spans: list[TextSpan] = []
+    first = 0
+    while first < len(sentences):
+        start, first_end = sentences[first]
+        if first_end - start > chunk_size:
+            # A sentence longer than a passage is cut at words, as windows cut it.
+            spans.extend(
+                TextSpan(start + span.char_start, start + span.char_end, span.text)
+                for span in chunk_page(normalized[start:first_end], chunk_size=chunk_size, overlap=overlap)
+            )
+            first += 1
+            continue
+        fits = [first]
+        while fits[-1] + 1 < len(sentences) and sentences[fits[-1] + 1][1] - start <= chunk_size:
+            fits.append(fits[-1] + 1)
+        last = choose(first, fits)
+        end = sentences[last][1]
+        spans.append(TextSpan(start, end, normalized[start:end]))
+        if last + 1 == len(sentences):
+            break
+        # The next passage opens with the trailing sentences that fit in the overlap.
+        following = last + 1
+        while following - 1 > first and end - sentences[following - 1][0] <= overlap:
+            following -= 1
+        first = following
+    return spans
+
+
+def _neighbour_similarity(vectors: Sequence[Sequence[float]]) -> list[float]:
+    """How alike the text is either side of each sentence boundary.
+
+    Two sentences a side, averaged, so one short sentence does not decide a cut.
+    """
+    def mean(rows: Sequence[Sequence[float]]) -> list[float]:
+        total = [sum(column) for column in zip(*rows)]
+        length = math.sqrt(sum(value * value for value in total)) or 1.0
+        return [value / length for value in total]
+
+    return [
+        sum(a * b for a, b in zip(mean(vectors[max(i - 1, 0) : i + 1]), mean(vectors[i + 1 : i + 3])))
+        for i in range(len(vectors) - 1)
+    ]
+
+
+def section_chunker(
+    chunk_size: int,
+    overlap: int,
+    *,
+    embed: Callable[[list[str]], Sequence[Sequence[float]]] | None = None,
+) -> Callable[[str], list[TextSpan]]:
+    """How prose is cut, by VERBATIM_CHUNKER: windows, whole sentences, or at changes of subject."""
+    strategy = config.CHUNKER
+    if strategy == "windows":
+        return functools.partial(chunk_page, chunk_size=chunk_size, overlap=overlap)
+    if strategy == "sentences":
+        return functools.partial(chunk_sentences, chunk_size=chunk_size, overlap=overlap)
+    if strategy == "semantic":
+        return functools.partial(
+            chunk_semantic, chunk_size=chunk_size, overlap=overlap,
+            embed=embed or _sentence_embedder(),
+        )
+    raise ValueError(f"VERBATIM_CHUNKER must be {', '.join(CHUNKERS)}, got {strategy!r}")
+
+
+@functools.cache
+def _sentence_embedder() -> Callable[[list[str]], Sequence[Sequence[float]]]:
+    """The passage embedder, reused to compare sentences, loaded only for semantic cuts."""
+    from verbatim.embedding import FastEmbedEmbedder  # embedding imports this module
+
+    return FastEmbedEmbedder(model_name=config.EMBEDDING_MODEL).embed_passages
 
 
 def _chunk_id(

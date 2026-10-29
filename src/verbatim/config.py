@@ -56,6 +56,10 @@ DISTILL_PATH = _path("VERBATIM_DISTILL_PATH", "data/distill/dataset.jsonl")
 # are part of the chunker fingerprint.
 CHUNK_SIZE = _integer("VERBATIM_CHUNK_SIZE", 1_200)
 CHUNK_OVERLAP = _integer("VERBATIM_CHUNK_OVERLAP", 200)
+# How prose is cut: "windows" (at the last word boundary that fits), "sentences"
+# (whole sentences) or "semantic" (where neighbouring sentences change subject).
+# Part of the fingerprint too; the other two measured no better.
+CHUNKER = _text("VERBATIM_CHUNKER", "windows")
 # PDFs held in memory at once, at about 11 MB each.
 CHUNK_BATCH_SIZE = _integer("VERBATIM_CHUNK_BATCH_SIZE", 100)
 # Seconds before layout extraction of one PDF is abandoned and the paper skipped.

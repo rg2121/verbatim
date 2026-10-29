@@ -17,6 +17,7 @@ import re
 from urllib.error import HTTPError
 
 from verbatim.chunking import (
+    BODY,
     TABLE,
     Chunk,
     Section,
@@ -24,6 +25,7 @@ from verbatim.chunking import (
     chunker_fingerprint,
     mark_references,
     normalize_page_text,
+    section_chunker,
 )
 from verbatim.downloads import file_sha256
 from verbatim.fetching import fetch
@@ -366,6 +368,7 @@ def extract_html_chunks(
     """
     reader = read_html or _read_text
     fingerprint = chunker_fingerprint(chunk_size, overlap)
+    cut = section_chunker(chunk_size, overlap)
     chunks: list[Chunk] = []
 
     for source in sources:
@@ -378,9 +381,12 @@ def extract_html_chunks(
             )
         paper_chunks: list[Chunk] = []
         for ordinal, section in enumerate(parse_html_sections(reader(path)), start=1):
-            for index, span in enumerate(
-                chunk_page(section.text, chunk_size=chunk_size, overlap=overlap)
-            ):
+            # A table is not prose; only prose is cut the configured way.
+            spans = (
+                cut(section.text) if section.kind == BODY
+                else chunk_page(section.text, chunk_size=chunk_size, overlap=overlap)
+            )
+            for index, span in enumerate(spans):
                 paper_chunks.append(
                     Chunk(
                         chunk_id=_html_chunk_id(source, ordinal, index, fingerprint),
