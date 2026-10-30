@@ -14,6 +14,17 @@ from verbatim.corpus import CorpusStore, EmbeddingModel
 DEFAULT_MODEL_NAME = config.EMBEDDING_MODEL
 # bge asks for this prefix on the query side only; passages are embedded bare.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+# (query, passage) prefixes each model was trained with. A model not listed
+# gets none, which is right for gte and MiniLM.
+PREFIXES = {
+    "BAAI/": (QUERY_PREFIX, ""),
+    "snowflake/snowflake-arctic-embed": (QUERY_PREFIX, ""),
+    "nomic-ai/nomic-embed-text": ("search_query: ", "search_document: "),
+}
+
+
+def prefixes_for(model_name: str) -> tuple[str, str]:
+    return next((pair for start, pair in PREFIXES.items() if model_name.startswith(start)), ("", ""))
 
 
 class Embedder(Protocol):
@@ -59,11 +70,13 @@ class FastEmbedEmbedder:
         if not texts:
             return []
         self._load()
-        return _as_lists(self._encoder.embed(list(texts)))  # type: ignore[union-attr]
+        passage = prefixes_for(self.model_name)[1]
+        return _as_lists(self._encoder.embed([passage + text for text in texts]))  # type: ignore[union-attr]
 
     def embed_query(self, text: str) -> list[float]:
         self._load()
-        return _as_lists(self._encoder.embed([QUERY_PREFIX + text]))[0]  # type: ignore[union-attr]
+        query = prefixes_for(self.model_name)[0]
+        return _as_lists(self._encoder.embed([query + text]))[0]  # type: ignore[union-attr]
 
     def _load(self) -> None:
         if self._encoder is not None:

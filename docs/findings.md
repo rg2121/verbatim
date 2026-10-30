@@ -3,8 +3,8 @@
 What was measured, and what it decided. Every feature was measured against
 something simpler, and most of what is worth reading here is what did not
 work: query rewriting, HyDE, always-on title matching, question
-decomposition, sentence and semantic chunking, a critic loop and a multi-agent
-team were each built, measured and left off.
+decomposition, sentence and semantic chunking, two other embedding models, a
+critic loop and a multi-agent team were each built, measured and left off.
 
 Two habits run through all of it. A difference is only claimed when a sign
 test or interval supports it - three decimals of mrr are not evidence. And a
@@ -404,6 +404,49 @@ Paired, semantic cites the expected paper on 8 questions windows misses and
 misses it on 4 (p = 0.39); sentences on 8 and 6 (p = 0.79). Generation is not
 seeded, so some of those flips are the model's own, and the counts were set
 beforehand to decide nothing. `VERBATIM_CHUNKER` stays, set to windows.
+
+**A wider or newer small encoder does not beat bge-small either
+(2026-10-29).** The same eval corpus, cut into windows, was embedded again by
+two other models, each given the query and passage prefixes it was trained
+with: bge-base-en-v1.5 (768 numbers a passage, twice today's) and
+snowflake-arctic-embed-s (384, like today's). The rule, in
+`evals/encoder_ab.py` before any arm was scored, is the chunking one with the
+threshold split between two arms. Two larger candidates, arctic-embed-m and
+nomic-embed-text-v1.5, were dropped on timing alone, before any run: about 12
+hours and 16 days to embed this corpus here. Giving each model its own
+prefixes leaves bge-small unchanged; its ranks match the chunking run case for
+case.
+
+| | numbers a passage | ms a passage | held-out mrr | won-lost | development mrr | won-lost |
+|---|---|---|---|---|---|---|
+| **bge-small-en-v1.5** | 384 | 51 | **0.969** | | **0.951** | |
+| bge-base-en-v1.5 | 768 | 111 | 0.976 | 9-4 | 0.955 | 1-3 |
+| snowflake-arctic-embed-s | 384 | 57 | 0.967 | 9-12 | 0.933 | 1-5 |
+
+bge-base comes closest and still fails twice: p = 0.27, with 3.4% of
+resamples at or below zero against the 2.5% allowed, and on the development
+key it is worse on 3 questions and better on 1. That one gain is large (a
+question with the right paper outside the top 10 now ranks it first), so its
+development mrr rises while the count goes against it. The losses are
+concept questions a place or two lower: "what is entropy?" 2nd to 3rd, "how
+does Adam adapt its learning rate per parameter?" 3rd to 5th. arctic-s loses
+definitions too ("what is the einstein field equation in flat space
+approximation?" 1st to 4th). Plain hybrid search, reported to decide nothing,
+agrees: 0.938 for bge-base (19-22) and 0.936 for arctic-s (19-23) against
+0.941, and on the development key bge-base is better on none and worse on 6.
+
+Timed alone on the same 512 passages in the batches of 64 that `embed` uses,
+bge-base costs twice as much: about 26 hours to embed the full corpus against
+12, a vector index twice the size (2.6 GB against 1.3 GB), and a median
+search on the eval corpus of 0.26 s against 0.21. arctic-s costs about what
+bge-small does and buys nothing. bge-small stays.
+
+Four arms in two experiments, two cuts and two encoders, have now failed to
+separate from today's on this key. The shipped search misses first place on only 23 of the 488
+held-out cases, so that is all any arm can gain, and any change to the
+vectors or the passages moves about as many cases down as up. What the next
+retrieval experiment needs is a harder key, not another arm: hand-written
+questions that name methods, and more definitions.
 
 ## The ladder and the agents
 

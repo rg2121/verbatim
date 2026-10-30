@@ -298,3 +298,32 @@ def test_the_embedding_model_is_cached_where_the_os_does_not_clear_it(monkeypatc
     FastEmbedEmbedder(model_name="stub-model").model
 
     assert seen["cache_dir"] == str(tmp_path / "models")
+
+
+class _EchoEncoder:
+    """Records the texts it is asked to embed."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def embed(self, texts):
+        self.seen.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+
+@pytest.mark.parametrize(("model_name", "query", "passage"), [
+    ("BAAI/bge-small-en-v1.5", "Represent this sentence for searching relevant passages: flux", "flux"),
+    ("snowflake/snowflake-arctic-embed-m", "Represent this sentence for searching relevant passages: flux", "flux"),
+    ("nomic-ai/nomic-embed-text-v1.5", "search_query: flux", "search_document: flux"),
+    ("thenlper/gte-base", "flux", "flux"),
+])
+def test_each_encoder_is_given_the_prefixes_it_was_trained_with(model_name, query, passage) -> None:
+    """A query embedded without its model's prefix lands in the wrong place, quietly."""
+    from verbatim.embedding import FastEmbedEmbedder
+
+    encoder = _EchoEncoder()
+    embedder = FastEmbedEmbedder(model_name=model_name, _encoder=encoder)
+    embedder.embed_query("flux")
+    embedder.embed_passages(["flux"])
+
+    assert encoder.seen == [query, passage]
