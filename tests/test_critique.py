@@ -4,7 +4,7 @@ from verbatim.answers import Answer
 from verbatim.chunking import Chunk
 from verbatim.contracts import Gathered
 from verbatim.corpus import ChunkMatch
-from verbatim.critique import critique, uncited_sentences
+from verbatim.critique import critique, unbacked_sentences, uncited_sentences
 
 
 def match(text: str, chunk_id: str = "aaa", arxiv_id: str = "2608.11111v1") -> ChunkMatch:
@@ -36,6 +36,58 @@ def test_a_claim_with_no_citation_is_found_without_any_model() -> None:
     assert uncited == ("It became the default optimizer for almost all of deep learning.",)
     # Too short to carry a claim, so not evidence of anything missing.
     assert "In summary." not in uncited
+
+
+PASSAGE = "The model reaches 28.4 BLEU on the English-to-German translation task."
+
+
+def test_a_marked_sentence_its_passage_does_not_share_is_found_without_any_model() -> None:
+    """The quote check passes a real quote behind the wrong claim; the words give it away."""
+    text = "Larger ensembles would generalise better across unseen languages [1]."
+
+    assert unbacked_sentences(answer_with(text), {"aaa": PASSAGE}) == (text,)
+
+
+def test_half_of_a_sentences_words_in_its_passage_is_enough() -> None:
+    text = "The model reaches 28.4 BLEU, beating every larger ensemble [1]."
+    other = "The model scores far worse than a larger ensemble tried elsewhere [1]."
+
+    assert unbacked_sentences(answer_with(text), {"aaa": PASSAGE}) == ()
+    # model is all this one shares.
+    assert unbacked_sentences(answer_with(other), {"aaa": PASSAGE}) == (other,)
+
+
+def test_a_sentence_is_measured_against_every_passage_it_cites() -> None:
+    class Cited:
+        def __init__(self, chunk_id):
+            self.chunk_id = chunk_id
+
+    texts = {"aaa": "Attention replaces recurrence here.", "bbb": "Dropout helps."}
+    both = "Attention replaces recurrence and dropout helps generalisation [1][2]."
+    one = "Attention replaces recurrence and dropout helps generalisation [2]."
+    citations = [Cited("aaa"), Cited("bbb")]
+
+    assert unbacked_sentences(Answer("q", both, citations, []), texts) == ()
+    assert unbacked_sentences(Answer("q", one, citations, []), texts) == (one,)
+
+
+def test_words_any_sentence_would_have_do_not_count_as_shared() -> None:
+    """Otherwise a passage backs a sentence by containing "the" and "of"."""
+    text = "The effect of the method can differ [1]."
+    passage = "The effect of training can be seen in the tables of this section."
+
+    # effect is all it shares once "the", "of" and "can" are set aside.
+    assert unbacked_sentences(answer_with(text), {"aaa": passage}) == (text,)
+
+
+def test_a_marked_sentence_too_short_to_be_a_claim_is_not_measured() -> None:
+    assert unbacked_sentences(answer_with("It does so here [1]."), {"aaa": PASSAGE}) == ()
+
+
+def test_an_unverified_sentence_is_a_problem_already_and_is_not_measured_again() -> None:
+    text = "Larger ensembles would generalise better across unseen languages [unverified]."
+
+    assert unbacked_sentences(answer_with(text), {"aaa": PASSAGE}) == ()
 
 
 def test_a_subject_the_passages_never_mention_is_reported() -> None:

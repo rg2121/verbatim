@@ -19,8 +19,8 @@ from verbatim import config
 from verbatim.answers import (
     SYSTEM_PROMPT,
     Answer,
-    OllamaCompletion,
     OllamaToolCaller,
+    RoleCompletion,
     answer_from_payload,
     build_prompt,
     parse_line_protocol,
@@ -32,6 +32,7 @@ from verbatim.conversation import Turn, standalone_question
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.orchestrator import orchestrate, work_section
+from verbatim.reflection import reflect
 from verbatim.report import render_markdown
 from verbatim.retrieval import default_search_options, hybrid_search
 from verbatim.runs import last_run_per_command, recent_runs
@@ -192,7 +193,7 @@ def create_app(
                 if completion is not None:
                     resources["completion"] = completion
                 else:
-                    resources["completion"] = OllamaCompletion(config.OLLAMA_MODEL)
+                    resources["completion"] = RoleCompletion()
             return resources["completion"]
 
     def routing() -> Any:
@@ -208,7 +209,7 @@ def create_app(
                         completion if hasattr(completion, "choose_tool") else None
                     )
                 else:
-                    resources["caller"] = OllamaToolCaller(config.OLLAMA_MODEL)
+                    resources["caller"] = OllamaToolCaller(config.role_model("planner"))
             return resources["caller"]
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -543,10 +544,15 @@ def create_app(
                 for fragment in answering().stream(SYSTEM_PROMPT, build_prompt(asked, matches)):
                     collected.append(fragment)
                     yield _event("delta", {"text": fragment})
-                payload = parse_line_protocol("".join(collected))
-                if payload is None:
+                reply = "".join(collected)
+                payload = parse_line_protocol(reply)
+                if config.REFLECT:
+                    # The final answer replaces the streamed draft, so a repair lands there.
+                    answer = reflect(answering(), asked, matches, papers, payload, reply).answer
+                elif payload is None:
                     raise RuntimeError("The model did not answer in the expected format.")
-                answer = answer_from_payload(asked, matches, payload, papers)
+                else:
+                    answer = answer_from_payload(asked, matches, payload, papers)
                 yield _event("answer", answer.to_dict())
                 # After the answer: the check costs a model call and rarely warns.
                 subject, closeness = subject_check(answering(), embedder(), asked, matches)

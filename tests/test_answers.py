@@ -489,6 +489,21 @@ def test_a_cite_line_that_puts_the_chunk_id_in_the_brackets_is_read() -> None:
     )
 
 
+def test_a_cite_line_that_repeats_its_chunk_id_after_the_brackets_is_read() -> None:
+    """The numbered template filled in by a model whose answer cites by chunk id."""
+    from verbatim.answers import parse_line_protocol
+
+    payload = parse_line_protocol(
+        "ANSWER: Adam adapts to the geometry [dc83e9545a4cf0ce96d4].\n"
+        "CITE [dc83e9545a4cf0ce96d4] dc83e9545a4cf0ce96d4 :: a preconditioner that adapts\n"
+    )
+
+    assert payload is not None
+    assert payload["citations"] == [
+        {"marker": 1, "chunk_id": "dc83e9545a4cf0ce96d4", "quoted_text": "a preconditioner that adapts"}
+    ]
+
+
 def test_both_cite_forms_can_appear_in_one_reply() -> None:
     from verbatim.answers import parse_line_protocol
 
@@ -770,3 +785,139 @@ def test_a_stream_that_fails_part_way_is_not_retried() -> None:
 
     assert seen == ["ANSWER: "]
     assert len(calls) == 1
+
+
+def _role_completion(monkeypatch, roles: dict):
+    """A RoleCompletion whose requests are recorded, model first, instead of sent."""
+    from verbatim.answers import OllamaCompletion, RoleCompletion
+
+    sent: list[str] = []
+
+    def post(self, path, payload):
+        sent.append(payload["model"])
+        return {"message": {"content": "ANSWER: Flux decoheres the qubit."},
+                "prompt_eval_count": 3, "eval_count": 2}
+
+    monkeypatch.setattr(OllamaCompletion, "_post", post)
+    monkeypatch.setattr(OllamaCompletion, "_get", lambda self, path: {"models": [
+        {"name": name} for name in ("general", "big", "small", "tiny", "fixer")
+    ]})
+    return RoleCompletion("general", roles=roles), sent
+
+
+def test_each_kind_of_call_runs_on_its_roles_model(monkeypatch) -> None:
+    completion, sent = _role_completion(
+        monkeypatch,
+        {"writer": "big", "planner": "small", "describer": "tiny", "reflector": "fixer"},
+    )
+
+    completion.complete("answer", "question", {})
+    completion.complete_text("plan", "topic")
+    completion.judge("describe", "passages")
+    completion.revise("repair", "draft", {})
+
+    assert sent == ["big", "small", "tiny", "fixer"]
+
+
+def test_the_streamed_answer_runs_on_the_writers_model(monkeypatch) -> None:
+    import json
+
+    completion, _ = _role_completion(monkeypatch, {"writer": "big", "planner": "small"})
+    requested: list[str] = []
+
+    def stream(request, timeout=None):
+        requested.append(json.loads(request.data)["model"])
+        return _Streamed([_chunk("ANSWER: Flux.", done=True)])
+
+    monkeypatch.setattr("verbatim.answers.urlopen", stream)
+    list(completion.stream("answer", "question"))
+
+    assert requested == ["big"]
+
+
+def test_a_role_left_unset_runs_on_the_general_model(monkeypatch) -> None:
+    completion, sent = _role_completion(monkeypatch, {"writer": None, "planner": "small"})
+
+    completion.complete("answer", "question", {})
+    completion.judge("describe", "passages")
+
+    assert sent == ["general", "general"]
+    assert completion.writer is completion.describer
+
+
+def test_with_no_role_set_it_is_one_client(monkeypatch) -> None:
+    """So nothing changes until a role is named."""
+    completion, _ = _role_completion(monkeypatch, {})
+
+    assert completion.writer is completion.planner is completion.describer is completion.reflector
+    assert completion.model == "general"
+
+
+def test_every_role_is_counted_in_one_cost(monkeypatch) -> None:
+    completion, _ = _role_completion(
+        monkeypatch, {"writer": "big", "planner": "small", "describer": "tiny"}
+    )
+
+    completion.complete("answer", "question", {})
+    completion.complete_text("plan", "topic")
+    completion.judge("describe", "passages")
+
+    assert (completion.usage.calls, completion.usage.prompt_tokens) == (3, 9)
+
+
+def test_a_role_naming_a_model_ollama_lacks_stops_before_any_call(monkeypatch) -> None:
+    """Planning falls back to the whole question on any failure, so a misspelt
+    planner would otherwise turn --plan off without a word."""
+    from verbatim.answers import OllamaCompletion, RoleCompletion
+
+    monkeypatch.setattr(OllamaCompletion, "_get", lambda self, path: {"models": [
+        {"name": "general"}, {"name": "llama3.1:latest"},
+    ]})
+
+    with pytest.raises(RuntimeError, match="no model named 'lama3.1'"):
+        RoleCompletion("general", roles={"planner": "lama3.1"})
+    # Ollama's default tag may be left off, as `ollama run` allows.
+    assert RoleCompletion("general", roles={"planner": "llama3.1"}).planner.model == "llama3.1"
+
+
+def test_with_no_role_set_nothing_is_checked_up_front(monkeypatch) -> None:
+    from verbatim.answers import OllamaCompletion, RoleCompletion
+
+    def unreachable(self, path):
+        raise AssertionError("no request expected")
+
+    monkeypatch.setattr(OllamaCompletion, "_get", unreachable)
+
+    assert RoleCompletion("general", roles={}).model == "general"
+
+
+def test_a_reply_with_no_answer_line_raises_a_format_error_that_keeps_the_reply(monkeypatch) -> None:
+    from verbatim.answers import FormatError, OllamaCompletion
+
+    monkeypatch.setattr(OllamaCompletion, "_post", lambda self, path, payload: {
+        "message": {"content": "Just prose, no format."}
+    })
+
+    with pytest.raises(FormatError, match="did not answer in the expected format") as raised:
+        OllamaCompletion("general").complete("answer", "question", {})
+
+    assert raised.value.reply == "Just prose, no format."
+    # Every caller that caught the old error still catches this one.
+    assert isinstance(raised.value, RuntimeError)
+
+
+def test_a_plain_client_revises_with_the_same_call_it_answers_with(monkeypatch) -> None:
+    from verbatim.answers import OllamaCompletion
+
+    sent: list[dict] = []
+
+    def post(self, path, payload):
+        sent.append(payload)
+        return {"message": {"content": "ANSWER: Flux decoheres the qubit."}}
+
+    monkeypatch.setattr(OllamaCompletion, "_post", post)
+
+    revised = OllamaCompletion("general").revise("repair", "draft", {})
+
+    assert revised["answer"] == "Flux decoheres the qubit."
+    assert sent[0]["model"] == "general" and "ANSWER:" in sent[0]["messages"][0]["content"]

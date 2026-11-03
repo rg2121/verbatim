@@ -26,6 +26,7 @@ negative result is recorded, not deleted.
 | `evals/retrieval.jsonl` | 87 | alongside the system | development |
 | `evals/heldout.jsonl` | 93 | blind, from title and abstract, frozen before scoring | an honest estimate |
 | `evals/heldout-generated.jsonl` | 400 | the same way, by a model | a larger held-out sample, always reported apart |
+| `evals/heldout-generated-2.jsonl` | 240 | the same way, from papers no other key names | kept back to retest reflection |
 | `evals/conversational.jsonl` | 30 | blind, two turns | whether a follow-up still finds its paper |
 | `evals/breadth/questions.jsonl` | 24 | from two linked abstracts, under [a pre-registered protocol](../evals/breadth/PROTOCOL.md) | whether `team` earns its cost |
 | `evals/gate.jsonl` | 12 | against the committed sample | a CI tripwire, floor mrr 0.90 |
@@ -262,6 +263,82 @@ separates by 26 points and accepts 62% of known mismatches. That is real
 signal - entailment is a question a model can partly answer, unlike
 relevance - and far too weak to gate anything. It is the evidence for keeping
 verification a substring check.
+
+**Sending a flagged answer back with what the check found wins by a wide
+margin, and stays off (2026-11-03).** With `VERBATIM_REFLECT`, a draft the quote
+check flags goes back to the model once: which quote is not in which passage
+and the closest words that are, which marker has no citation, which sentence
+has no marker. The repair replaces the draft only if it still cites every
+passage the draft cited with a verified quote and has fewer problems. A draft
+that cites nothing is an abstention and is never sent back.
+
+All three arms start from one draft per question, and the control is the same
+prompt asked again under the same keep rule, because against the plain draft
+either can only gain. The rule, in `evals/reflection_arms.py` before any arm
+ran, scored the 488 held-out questions once: more clean answers than the
+control by sign test at p < 0.05 with under 2.5% of resamples at or below zero,
+and no more answers than plain saying the passages lack the answer while citing
+them. A clean answer has a verified citation, no rejected quote, no
+`[unverified]` marker and a marker on every claim-carrying sentence.
+
+| out of 488 | plain | asked again | sent back with findings |
+|---|---|---|---|
+| **clean answer** | 310 | 390 | **450** |
+| at least one verified citation | 473 | 481 | 481 |
+| every claim carries a marker | 395 | 431 | 462 |
+| citations rejected | 89 | 34 | 16 |
+| an `[unverified]` marker | 97 | 43 | 15 |
+| cited the paper the question was written from | 459 | 468 | 470 |
+| says the passages lack the answer, while citing them | 2 | 1 | 3 |
+| extra seconds a question, on a 67 s draft | | 25 | 28 |
+
+It beats the control 71 to 11 (p < 0.0001, mean difference +12 points, 95%
+interval +9 to +16, no resample at or below zero), on hand-written questions
+(14-3) and generated ones (57-8) alike. The check flags 173 of the 488 drafts. A
+kept repair leaves 93% of the draft's sentences word for word; a kept second
+asking leaves none. Answers stay the same length, 84 words.
+
+It still fails its rule, by one answer: 3 against plain's 2 say the passages
+lack the answer while citing them. The third is a fault in the guard, not in
+the answers. Its draft already said so, and the repair fixed the rejected quote
+beside those words, which is what made it count as citing. No repair added
+those words to a draft, and by the words alone, citing or not, both arms have 7.
+The guard is to be corrected before the next test, not argued away for this one.
+
+The better reason to leave it off is one the clean count cannot see: **a
+sentence with no marker can be made clean by giving it one.** Kept repairs marked
+68 such sentences, 54 of them by reusing a quote the draft already had. Against
+the sentences first drafts marked themselves, a median of 69% of their content
+words are in the cited passage rather than 86%, and under half for 16% of them
+rather than 1%. Those are the sentences the model had left unmarked, so weak
+support is no surprise, but now a marker says otherwise. Read one by one, 7 of
+those 11 are not backed by what they cite, or only weakly or in part: "A frozen
+LLM agent can effectively manage its natural-language skill library through
+self-evolving mechanisms [3]" cites "it is fundamentally difficult and expensive
+to manually build a comprehensive skill library for agents". The quote check
+passes them, because the quote is in the passage. It is the hard control above,
+a real quote behind the wrong claim, and an unmarked sentence at least looked
+unsupported.
+
+Reported to decide nothing, the rest of the win holds up. Requiring every marked
+sentence to have at least half its content words in its passage, the arms score
+305, 382 and 429 (63-16); at 60%, 284, 357 and 394 (56-19); at 70%, 220, 271 and
+290 (43-24, p = 0.03). Drafts with a quote or marker problem give 44-5, those
+with only unmarked sentences 27-6. Of 12 of the 75 newly written quotes read one
+by one, 10 say what their sentences claim, 2 say part of it, and none copied an
+unrelated hint.
+
+`VERBATIM_REFLECT` stays off. What it needs next is a keep rule that does not
+count a marker as a fix when the passage does not share the sentence's words,
+tested on questions this run has not seen.
+
+One tuning idea was tried on these spent questions and dropped. Telling the
+writer which passage holds most of an unmarked sentence's words, or that none
+does, took clean repairs of the 62 drafts with only unmarked sentences from 41 to
+48 (13-6, p = 0.17). Four of the 13 were hollow: an honest "the passages do not
+detail this" deleted, another such sentence given a citation, and two weak markers
+that cleared the floor by citing another passage. Repairs that dropped a verified
+passage rose from 0 to 5.
 
 ## What was tried and rejected
 
@@ -555,6 +632,7 @@ cheaper question that usually has the same answer as the real one:
 | every table passage was excluded from search | a filter naming what to keep, written before tables existed |
 | a re-sync erased licences already found (50 papers) | "no licence reported" read as "no licence" |
 | every licence lookup failed after arXiv moved its OAI-PMH service | a failed lookup is retried, so nothing looked wrong |
+| a citation line repeating its chunk id was dropped, quote and all | did the reply *parse*? - not was every line it wrote read |
 
 Proxies like these agree with the real question in the common case and fail
 only in the uncommon one - which is where an unattended job lives. The run

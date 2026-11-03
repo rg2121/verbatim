@@ -409,7 +409,7 @@ def test_ask_searches_as_every_front_end_does(tmp_path, monkeypatch, flags, chos
     searched: dict = {}
     monkeypatch.setattr(cli.config, "RERANKER", "colbert")
     monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
-    monkeypatch.setattr(cli, "OllamaCompletion", lambda *args, **options: object())
+    monkeypatch.setattr(cli, "RoleCompletion", lambda *args, **options: object())
     monkeypatch.setattr(cli, "hybrid_search", lambda *args, **options: searched.update(options) or [])
     monkeypatch.setattr(cli, "answer_from_matches", answer)
     monkeypatch.setattr("sys.argv", [
@@ -476,7 +476,7 @@ def test_a_planned_ask_searches_each_part_as_plain_ask_does(tmp_path, monkeypatc
 
     monkeypatch.setattr(cli.config, "RERANKER", "colbert")
     monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
-    monkeypatch.setattr(cli, "OllamaCompletion", lambda *args, **options: object())
+    monkeypatch.setattr(cli, "RoleCompletion", lambda *args, **options: object())
     monkeypatch.setattr(cli, "research", research)
     monkeypatch.setattr("sys.argv", [
         "verbatim", "ask", "compare transmons and fluxoniums", "--plan",
@@ -488,3 +488,36 @@ def test_a_planned_ask_searches_each_part_as_plain_ask_does(tmp_path, monkeypatc
 
     assert searched["reranker"] is shared_reranker("colbert")
     assert searched["use_graph"] and searched["rerank_skips_definitions"]
+
+
+def test_ask_answers_with_the_role_models_filled_in_from_its_flag(tmp_path, monkeypatch) -> None:
+    """--llm stands in for every role that names no model of its own."""
+    import verbatim.cli as cli
+
+    class Answering(Exception):
+        pass
+
+    class Roles:
+        def __init__(self, model=None, **options):
+            self.general = model
+
+    used: dict = {}
+
+    def answer(corpus, completion, question, matches):
+        used["completion"] = completion
+        raise Answering
+
+    monkeypatch.setattr(cli, "RoleCompletion", Roles)
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(cli, "hybrid_search", lambda *args, **options: [])
+    monkeypatch.setattr(cli, "answer_from_matches", answer)
+    monkeypatch.setattr("sys.argv", [
+        "verbatim", "ask", "how do transmons decohere?", "--llm", "from-flag",
+        "--state", str(tmp_path / "corpus.db"),
+    ])
+
+    with pytest.raises(Answering):
+        run()
+
+    assert isinstance(used["completion"], Roles)
+    assert used["completion"].general == "from-flag"

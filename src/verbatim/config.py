@@ -87,6 +87,11 @@ EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "fal
 # How the answering model is asked for structure: "lines" (ANSWER/CITE lines)
 # or "tools" (Ollama tool calling, measured no better).
 ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
+# Send an answer the quote check flags back once, with what the check found,
+# and keep the repair only if it is better. Off: it won on clean answers, but a
+# repair could mark a sentence with a quote that did not back it, and the fix
+# for that is untested.
+REFLECT = _text("VERBATIM_REFLECT", "0") not in {"0", "false", "False", ""}
 
 # Stage events go to stderr so stdout stays parseable. "json" for a shipper,
 # "text" for a person.
@@ -98,6 +103,17 @@ LOG_LEVEL = _text("VERBATIM_LOG_LEVEL", "info")
 OLLAMA_HOST = _text("OLLAMA_HOST", DEFAULT_OLLAMA_HOST)
 OLLAMA_MODEL = _text("OLLAMA_MODEL", "") or None  # None means "first pulled local model"
 OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
+# A model per role, so combinations can be compared: the writer answers, the
+# planner splits topics and questions and rewrites queries, the describer
+# names what passages are about, and the reflector repairs an answer the quote
+# check flagged. A role left empty uses the general model.
+ROLES = ("writer", "planner", "describer", "reflector")
+ROLE_MODELS = {role: _text(f"OLLAMA_MODEL_{role.upper()}", "") or None for role in ROLES}
+
+
+def role_model(role: str, general: str | None = None) -> str | None:
+    """The role's own model, else `general` (from --llm), else OLLAMA_MODEL."""
+    return ROLE_MODELS.get(role) or general or OLLAMA_MODEL
 
 # arXiv's API is slow at times and returns 503 under load, so requests retry.
 HTTP_TIMEOUT = float(_text("VERBATIM_HTTP_TIMEOUT", "90"))

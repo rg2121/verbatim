@@ -18,8 +18,9 @@ from verbatim.corpus import ChunkMatch, CorpusStore
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
 # The same line with the chunk id in the brackets and no number, as some models
-# write it. The quote is verified just as strictly.
-CITE_ID_LINE_PATTERN = re.compile(r"^CITE\s*\[([0-9a-f]{16,})\]\s*::\s*(.+)$", re.M)
+# write it, at times repeating the id where the numbered form has it. The quote
+# is verified just as strictly.
+CITE_ID_LINE_PATTERN = re.compile(r"^CITE\s*\[([0-9a-f]{16,})\]\s*(?:\1\s*)?::\s*(.+)$", re.M)
 CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
 MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
 
@@ -181,6 +182,14 @@ def _normalize_quote(text: str) -> str:
     return unwrapped.rstrip(".,;:").strip()
 
 
+class FormatError(RuntimeError):
+    """A reply with no ANSWER line: the model ignored the format. Keeps the reply."""
+
+    def __init__(self, message: str, reply: str) -> None:
+        super().__init__(message)
+        self.reply = reply
+
+
 class Completion(Protocol):
     """A model that returns JSON matching a schema."""
 
@@ -188,6 +197,10 @@ class Completion(Protocol):
 
     def judge(self, system: str, user: str) -> str:
         """Answer a short question with free text, for a yes/no decision."""
+        ...
+
+    def revise(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """Repair a flagged answer: a `complete` call made in the reflector's role."""
         ...
 
 
@@ -296,11 +309,16 @@ class OllamaCompletion:
         content = body.get("message", {}).get("content", "")
         payload = parse_line_protocol(content)
         if payload is None:
-            raise RuntimeError(
+            raise FormatError(
                 f"Ollama model {self.model!r} did not answer in the expected "
-                f"format. Response began: {content[:200]!r}"
+                f"format. Response began: {content[:200]!r}",
+                content,
             )
         return payload
+
+    def revise(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        """The same call as `complete`, named apart so a role can take it."""
+        return self.complete(system, user, schema)
 
     def _complete_with_tools(
         self, system: str, user: str, schema: dict[str, Any]
@@ -500,6 +518,70 @@ class OllamaCompletion:
         return message + f", or use one of: {', '.join(sorted(available))}."
 
 
+class RoleCompletion:
+    """One client per role, behind the single client every caller already takes.
+
+    Each kind of call is one role's work: `complete` and `stream` write the
+    answer, `complete_text` plans (sections, sub-questions, follow-up and query
+    rewrites, the optional critic), `judge` names what passages are about, and
+    `revise` repairs what the quote check flagged. Roles on the same model
+    share a client, so with none set this is exactly one OllamaCompletion.
+    """
+
+    writer: OllamaCompletion
+    planner: OllamaCompletion
+    describer: OllamaCompletion
+    reflector: OllamaCompletion
+
+    def __init__(
+        self,
+        model: str | None = None,
+        *,
+        roles: dict[str, str | None] | None = None,
+        host: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        chosen = config.ROLE_MODELS if roles is None else roles
+        general = model or config.OLLAMA_MODEL
+        # One count for every role, so the cost footer covers them all.
+        self.usage = Usage()
+        clients: dict[str | None, OllamaCompletion] = {}
+        for role in config.ROLES:
+            name = chosen.get(role) or general
+            if name not in clients:
+                clients[name] = OllamaCompletion(name, host=host, timeout=timeout)
+                clients[name].usage = self.usage
+            setattr(self, role, clients[name])
+        if len(clients) > 1:
+            # Planning falls back to the whole question on any failure, so a
+            # misspelt role model would otherwise go unnoticed.
+            pulled = {item["name"] for item in self.writer._get("/api/tags").get("models", [])}
+            pulled |= {name.removesuffix(":latest") for name in pulled}
+            for client in clients.values():
+                if client.model not in pulled:
+                    raise RuntimeError(client._missing_model_message())
+
+    @property
+    def model(self) -> str:
+        """The writer's model, the one an answer is credited to."""
+        return self.writer.model
+
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        return self.writer.complete(system, user, schema)
+
+    def stream(self, system: str, user: str):
+        return self.writer.stream(system, user)
+
+    def complete_text(self, system: str, user: str) -> str:
+        return self.planner.complete_text(system, user)
+
+    def judge(self, system: str, user: str) -> str:
+        return self.describer.judge(system, user)
+
+    def revise(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+        return self.reflector.revise(system, user, schema)
+
+
 def parse_line_protocol(content: str) -> dict[str, Any] | None:
     """Parse ANSWER/CITE lines into the answer payload.
 
@@ -630,8 +712,14 @@ def answer_from_matches(
     completion: Completion,
     question: str,
     matches: list[ChunkMatch],
+    *,
+    reflection: bool | None = None,
 ) -> Answer:
-    """Generate an answer over already-retrieved passages."""
+    """Generate an answer over already-retrieved passages.
+
+    With `reflection` (VERBATIM_REFLECT when None), a draft the quote check
+    flags goes back to the model once; see `reflection.reflect`.
+    """
     if not matches:
         return Answer(
             question=question,
@@ -641,9 +729,20 @@ def answer_from_matches(
             declined=True,
         )
 
-    payload = completion.complete(SYSTEM_PROMPT, build_prompt(question, matches), ANSWER_SCHEMA)
+    reflecting = config.REFLECT if reflection is None else reflection
     papers = corpus.papers_by_id(sorted({match.chunk.arxiv_id for match in matches}))
-    return answer_from_payload(question, matches, payload, papers)
+    payload, reply = None, ""
+    try:
+        payload = completion.complete(SYSTEM_PROMPT, build_prompt(question, matches), ANSWER_SCHEMA)
+    except FormatError as failure:
+        if not reflecting:
+            raise
+        reply = failure.reply
+    if not reflecting:
+        return answer_from_payload(question, matches, payload, papers)
+    from verbatim.reflection import reflect  # reflection imports this module
+
+    return reflect(completion, question, matches, papers, payload, reply).answer
 
 
 def answer_from_payload(

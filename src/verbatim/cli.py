@@ -15,6 +15,7 @@ from verbatim.agent import answer_question
 from verbatim.answers import (
     OllamaCompletion,
     OllamaToolCaller,
+    RoleCompletion,
     answer_from_matches,
     subject_check,
 )
@@ -103,6 +104,7 @@ SCORED_KEYS = (
     Path("evals/retrieval.jsonl"),
     Path("evals/heldout.jsonl"),
     Path("evals/heldout-generated.jsonl"),
+    Path("evals/heldout-generated-2.jsonl"),
     Path("evals/gate.jsonl"),
     Path("evals/breadth/questions.jsonl"),
     Path("evals/conversational.jsonl"),
@@ -205,7 +207,8 @@ def run() -> None:
     eval_parser.add_argument("--limit", type=int, default=10, help="Results per query")
     eval_parser.add_argument("--max-per-paper", type=int, help="Diversity cap for hybrid")
     eval_parser.add_argument(
-        "--llm", default=None, help="Ollama model used for query rewriting"
+        "--llm", default=None,
+        help="Ollama model used for query rewriting, unless OLLAMA_MODEL_PLANNER names one"
     )
     eval_parser.add_argument(
         "--rewrites", type=int, default=0,
@@ -245,7 +248,11 @@ def run() -> None:
     )
     answers_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     answers_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
-    answers_parser.add_argument("--llm", help="Generation model")
+    answers_parser.add_argument(
+        "--llm",
+        help="Ollama model for every role without its own OLLAMA_MODEL_WRITER, _PLANNER, "
+             "_DESCRIBER or _REFLECTOR (default: $OLLAMA_MODEL or the first local model)",
+    )
     answers_parser.add_argument(
         "--limit", type=int, default=20, help="Questions to answer; each costs a generation"
     )
@@ -342,7 +349,11 @@ def run() -> None:
     team_parser.add_argument("question")
     team_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     team_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
-    team_parser.add_argument("--llm", help="Generation model")
+    team_parser.add_argument(
+        "--llm",
+        help="Ollama model for every role without its own OLLAMA_MODEL_WRITER, _PLANNER, "
+             "_DESCRIBER or _REFLECTOR (default: $OLLAMA_MODEL or the first local model)",
+    )
     team_parser.add_argument("--tasks", type=int, default=3,
                              help="Most tasks the coordinator may create")
     team_parser.add_argument("--needs", type=int, default=2,
@@ -561,7 +572,8 @@ def run() -> None:
     )
     ask_parser.add_argument(
         "--llm",
-        help="Ollama model (default: $OLLAMA_MODEL or the first local model)",
+        help="Ollama model for every role without its own OLLAMA_MODEL_WRITER, _PLANNER, "
+             "_DESCRIBER or _REFLECTOR (default: $OLLAMA_MODEL or the first local model)",
     )
     ask_parser.add_argument(
         "--supervisor", default="builtin", choices=["builtin", "langgraph"],
@@ -607,7 +619,9 @@ def run() -> None:
     report_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     report_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     report_parser.add_argument(
-        "--llm", help="Ollama model (default: $OLLAMA_MODEL or the first local model)"
+        "--llm",
+        help="Ollama model for every role without its own OLLAMA_MODEL_WRITER, _PLANNER, "
+             "_DESCRIBER or _REFLECTOR (default: $OLLAMA_MODEL or the first local model)",
     )
     report_parser.add_argument(
         "--sections", type=int, default=4, help="Maximum sections to plan"
@@ -994,7 +1008,7 @@ def run() -> None:
         from verbatim.team import run_team
 
         embedder = FastEmbedEmbedder(model_name=args.model)
-        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        completion = RoleCompletion(args.llm)
         with CorpusStore(args.state) as corpus, record_run(
             corpus, "team", question=args.question, tasks=args.tasks, llm=args.llm
         ) as run:
@@ -1131,7 +1145,7 @@ def run() -> None:
         )
         source_by_question = {c.question: source_of(c) for c in cases}
         embedder = FastEmbedEmbedder(model_name=args.model)
-        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        completion = RoleCompletion(args.llm)
         answered: list = []
         per_run: list[list] = []
         stopped: str | None = None
@@ -1195,14 +1209,17 @@ def run() -> None:
                       f"expected paper {_percent(got.cited_expected_paper, got.cases)}")
         if stopped is not None:
             print(f"\n  STOPPED after {len(answered)} answer(s): {stopped}")
+        judge = None
         if args.judge:
             print("\n  Does each cited quote support its claim? Real pairs are scored")
             print("  beside mismatched control pairs.\n")
+            # The judge is the measuring instrument, so no role setting moves it.
+            judge = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
             report = judge_with_control(
-                answered, lambda system, user: completion.complete_text(system, user)
+                answered, lambda system, user: judge.complete_text(system, user)
             )
             print(report.render())
-        print(f"\n  {_usage_footer(completion)}")
+        print(f"\n  {_usage_footer(completion, judge)}")
 
     if args.command == "index":
         embedder = FastEmbedEmbedder(model_name=args.model)
@@ -1595,9 +1612,9 @@ def run() -> None:
                 from verbatim.orchestrator import _supervisor
 
                 embedder = FastEmbedEmbedder(model_name=args.model)
-                completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+                completion = RoleCompletion(args.llm)
                 # The ladder's last rung is the tool-choosing agent, which needs a caller.
-                tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
+                tool_caller = OllamaToolCaller(config.role_model("planner", args.llm))
                 section, ledger = _supervisor(args.supervisor)(
                     corpus, embedder, completion, args.question,
                     caller=tool_caller,
@@ -1626,8 +1643,8 @@ def run() -> None:
                 return
             if args.tools:
                 embedder = FastEmbedEmbedder(model_name=args.model)
-                completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
-                tool_caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
+                completion = RoleCompletion(args.llm)
+                tool_caller = OllamaToolCaller(config.role_model("planner", args.llm))
                 answer, trace = answer_question(
                     corpus, embedder, tool_caller, completion, args.question,
                 )
@@ -1642,7 +1659,7 @@ def run() -> None:
                 print(f"\n  {_usage_footer(completion, tool_caller)}")
                 return
             embedder = FastEmbedEmbedder(model_name=args.model)
-            completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+            completion = RoleCompletion(args.llm)
             plan: list[str] = []
             if args.plan:
                 answer, plan, matches = research(
@@ -1723,7 +1740,7 @@ def run() -> None:
                 "router chooses each section's strategy. Drop one of the two."
             )
         embedder = FastEmbedEmbedder(model_name=args.model)
-        completion = OllamaCompletion(args.llm or config.OLLAMA_MODEL)
+        completion = RoleCompletion(args.llm)
         def progress(heading: str, done: int, total: int) -> None:
             print(f"  [{done}/{total}] {heading}", flush=True)
         ledger = None
@@ -1732,7 +1749,7 @@ def run() -> None:
                 from verbatim.contracts import Budget
                 from verbatim.orchestrator import orchestrate
 
-                caller = OllamaToolCaller(args.llm or config.OLLAMA_MODEL)
+                caller = OllamaToolCaller(config.role_model("planner", args.llm))
                 ceiling = Budget(
                     max_tokens=args.max_tokens, max_seconds=args.max_seconds,
                     max_attempts=args.max_attempts,
@@ -1897,8 +1914,8 @@ def _usage_footer(*clients: object) -> str:
 
 
 def _line_completion(model: str | None) -> Callable[[str, str], str]:
-    """A plain-text completion, for query rewriting."""
-    completion = OllamaCompletion(model or config.OLLAMA_MODEL)
+    """A plain-text completion, for query rewriting: the planner's work."""
+    completion = OllamaCompletion(config.role_model("planner", model))
     return lambda system, user: completion.complete_text(system, user)
 
 

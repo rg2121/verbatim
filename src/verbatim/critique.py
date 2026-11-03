@@ -18,8 +18,26 @@ from verbatim.expansion import strip_list_marker
 # Sentence boundaries: imperfect on "e.g.", good enough to count markers by.
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(])")
 MARKER = re.compile(r"\[(?:\d+|unverified)\]")
+CITED = re.compile(r"\[(\d+)\]")
 # Shorter sentences, such as "In summary.", are connectives rather than claims.
 MIN_CLAIM_WORDS = 5
+# Under this share of its content words in the passages it cites, a marked
+# sentence is not resting on them. Read one by one, a higher floor mostly catches
+# sound sentences; first drafts fall under this one for 1% of what they mark.
+MIN_BACKED_SHARE = 0.5
+CONTENT_WORD = re.compile(r"[a-z0-9]+")
+# Words any sentence has, and those an answer uses to talk about its passages.
+COMMON_WORDS = frozenset(
+    """a an the of in on at to for from by with and or but not no is are was were be
+    been being this that these those it its as such which who whom whose where when
+    how what why can could may might must shall should will would do does did has have
+    had than then there here their they them we our you your he she his her also both
+    each more most some any all into over under between through about against during
+    within without per via using used use based however furthermore specifically
+    additionally therefore thus while passages passage state states stated indicate
+    indicates describe describes described noted note provided show shows shown one
+    two""".split()
+)
 
 SUBJECTS_SYSTEM = (
     "You list the distinct subjects a research question asks about, one per "
@@ -54,6 +72,38 @@ def cited_sentences(text: str) -> tuple[str, ...]:
         for sentence in SENTENCE.split(text.strip())
         if MARKER.search(sentence) and "[unverified]" not in sentence
     )
+
+
+def unbacked_sentences(
+    answer: Answer, texts: dict[str, str], floor: float = MIN_BACKED_SHARE
+) -> tuple[str, ...]:
+    """Marked sentences with under `floor` of their content words in the passages they cite.
+
+    Needs no model. The quote check proves a quote's words are in its passage, not
+    that they say what the sentence says. Shared words cannot prove that either,
+    but too few of them show that the sentence is not resting on the passage.
+    """
+    unbacked = []
+    for sentence in cited_sentences(answer.text):
+        plain = re.sub(rf"\s*{MARKER.pattern}", "", sentence)
+        words = _content_words(plain)
+        if len(plain.split()) < MIN_CLAIM_WORDS or not words:
+            continue
+        cited = " ".join(
+            texts.get(answer.citations[int(number) - 1].chunk_id, "")
+            for number in CITED.findall(sentence)
+            if 0 < int(number) <= len(answer.citations)
+        )
+        if len(words & _content_words(cited)) / len(words) < floor:
+            unbacked.append(sentence)
+    return tuple(unbacked)
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        word for word in CONTENT_WORD.findall(text.lower())
+        if word not in COMMON_WORDS and len(word) > 1
+    }
 
 
 def unaddressed_subjects(

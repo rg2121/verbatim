@@ -104,3 +104,39 @@ def test_the_extraction_timeout_setting_reaches_the_chunker(tmp_path: Path) -> N
     )
 
     assert result.stdout.strip() == "7.0"
+
+
+def test_each_role_reads_its_own_model_setting(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", "from verbatim import config; print(config.ROLE_MODELS)"],
+        capture_output=True, text=True, check=True, cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+             "OLLAMA_MODEL_PLANNER": "small"},
+    )
+
+    assert result.stdout.strip() == (
+        "{'writer': None, 'planner': 'small', 'describer': None, 'reflector': None}"
+    )
+
+
+def test_a_role_with_no_model_of_its_own_takes_the_flag_then_ollama_model(monkeypatch) -> None:
+    from verbatim import config
+
+    monkeypatch.setattr(config, "ROLE_MODELS", {"writer": "big", "planner": None, "describer": None})
+    monkeypatch.setattr(config, "OLLAMA_MODEL", "general")
+
+    assert config.role_model("writer", "from-flag") == "big"
+    assert config.role_model("planner", "from-flag") == "from-flag"
+    assert config.role_model("planner") == "general"
+
+
+def test_reflection_is_off_unless_set(tmp_path: Path) -> None:
+    """Off until measured, like every other v2 change."""
+    script = "from verbatim import config; print(config.REFLECT)"
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    unset = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                           check=True, cwd=tmp_path, env=env)
+    on = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                        check=True, cwd=tmp_path, env={**env, "VERBATIM_REFLECT": "1"})
+
+    assert (unset.stdout.strip(), on.stdout.strip()) == ("False", "True")

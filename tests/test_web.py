@@ -131,6 +131,33 @@ def test_ask_reports_a_model_that_ignored_the_format(tmp_path: Path) -> None:
     assert [name for name, _ in events][-1] == "done"
 
 
+def test_with_reflection_on_the_final_answer_is_the_repaired_one(tmp_path: Path, monkeypatch) -> None:
+    """The page swaps the streamed draft for the final answer, so a repair lands there."""
+    from verbatim import config
+
+    monkeypatch.setattr(config, "REFLECT", True)
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
+    ) as store:
+        chunk_id = list(store.iter_chunks())[0].chunk_id
+
+    class Repairing(StreamingScript):
+        def revise(self, system, user, schema):
+            return {"answer": "They decohere quickly [1].", "citations": [{
+                "marker": 1, "chunk_id": chunk_id,
+                "quoted_text": "Superconducting qubits decohere quickly.",
+            }]}
+
+    draft = ["ANSWER: They decohere quickly [1].\n",
+             f"CITE [1] {chunk_id} :: Qubits decohere very quickly."]
+    app = create_app(tmp_path / "corpus.db", completion=Repairing(draft), encoder=StubEncoder())
+
+    events = sse_events(TestClient(app).get("/api/ask", params={"q": "qubits"}).text)
+
+    answer = next(payload for name, payload in events if name == "answer")
+    assert answer["rejected"] == [] and [c["arxiv_id"] for c in answer["citations"]] == ["2608.11111v1"]
+
+
 def test_a_search_result_can_be_traced_back_to_its_paper(tmp_path: Path) -> None:
     response = client(tmp_path).get("/api/search", params={"q": "qubits", "mode": "keyword"})
 

@@ -123,7 +123,9 @@ Passages go to a model through **Ollama**, the only backend - no API key, no
 second client. A local model keeps the corpus on the machine; a model whose
 name ends `-cloud` sends each prompt's passages to Ollama's servers. The choice
 is the user's, visible in `OLLAMA_MODEL`; left unset, only a local model is
-picked. The model replies in a flat `ANSWER:` / `CITE` line protocol, because
+picked. A role can run on a model of its own (`OLLAMA_MODEL_WRITER`, `_PLANNER`,
+`_DESCRIBER`, `_REFLECTOR`), so a combination is measured like any other arm;
+each kind of call goes to its role, and roles left empty share one client. The model replies in a flat `ANSWER:` / `CITE` line protocol, because
 JSON output and tool calling were unreliable on realistic prompts.
 
 **Every citation is then verified**: the quoted words must appear in the
@@ -132,6 +134,19 @@ around a quote. A citation that fails is rejected and its marker becomes
 `[unverified]`. This is a substring check, never a similarity score and never
 a second model call. It proves the words exist in the source. It does not
 prove the passage answers the question, and nothing strengthens it into that.
+
+**What the check finds can go back to the model**, once, behind
+`VERBATIM_REFLECT` (`reflection.py`): which quote is not in which passage, with
+the closest words that are; a marker with no citation; a claim with no marker;
+a reply with no `ANSWER:` line. Only facts code found are fed back, never a
+model's opinion of the answer. The revision is verified like the draft and
+replaces it only if it still cites every passage the draft cited, has fewer
+problems, and adds no unbacked sentence: a marked one with under half of its
+content words in the passages it cites (`critique.py`). Shared words cannot prove
+that a passage backs a sentence, but too few of them show that it does not. A
+draft that cites nothing is an abstention and is never sent back. It stays off
+until that rule has been tested on new questions
+([findings](findings.md#answers)).
 
 For that second problem the system **reports rather than judges**. Asking a
 model whether passages support an answer was measured seven ways and failed
