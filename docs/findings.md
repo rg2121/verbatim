@@ -387,6 +387,41 @@ turn a rejected example into training data and a failed quote into a refutation,
 and the scripts of earlier experiments write first drafts so that a rerun compares
 what they report. The `eval-answers` table at the top of this section predates it.
 
+**Quotation marks in an answer's own text were never checked; a check for them
+was built and ships off (2026-11-05), having failed its rule by its letter.** The
+quote check proves the words on each `CITE` line, but answers also put words in
+quotation marks in their prose, and a reader takes those as quotes too. The
+review's header claimed every quotation was verified character for character; it
+now says which were. Replayed with no model call over the 2,301 answers the
+reflection experiments saved, all three arms (`evals/quotation_check.py`):
+
+| quoted phrases of three words or more | 1,395 |
+|---|---|
+| word for word in a passage their marker names | 1,297 |
+| word for word, but in another cited passage | 14 |
+| in no cited passage, so their quotation marks go | 84 |
+| answers changed | 71 (3%) |
+
+Of the 84, 48 point at a verified citation, and 37 of those are quotes bent to
+fit a sentence: "perform competitively" for the paper's "performs competitively",
+a tense changed, a bracketed edit. The other 36 sit on `[unverified]` markers or
+have none, so the passage they came from, if any, is not among those cited.
+
+The rule, written in the script before it ran: nothing but the unquoted phrases'
+marks may change; every phrase it acts on, read by hand, must be one the model
+put in quotation marks, none running across two quotations or across a marker;
+and the eleven phrases a first scan found in no cited passage must lose their
+marks while the one it forgives, a capital first letter, keeps them. The first
+and third held. All 98 phrases it acted on are quotations, and none pairs the
+wrong marks, but one answer, in two arms, quotes a paper's own reference, "A
+recent work by [52] makes a broader... claim", and marker renumbering had already
+rewritten "[52]" as "[unverified]". Those quoted words run across a marker, so
+the rule says no. Unquoting them was right, since the text no longer said what
+the paper says: the fault is in renumbering, which rewrites any bracketed number,
+even inside a quotation. `VERBATIM_CHECK_QUOTATIONS=1` turns the check on, and
+`verify_citations` applies it to a client's answer either way, since that
+changes no answer of Verbatim's.
+
 ## What was tried and rejected
 
 **Asking a model whether passages are relevant.** Measured against questions

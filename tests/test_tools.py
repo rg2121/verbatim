@@ -583,6 +583,26 @@ def test_quotes_alone_get_no_sentence_findings(tmp_path: Path) -> None:
     assert report["checked_answer"] is None
     assert report["unmarked_sentences"] is None
     assert report["unbacked_sentences"] is None
+    assert report["quotation_problems"] is None
+
+
+def test_quotation_marks_in_a_clients_answer_are_checked_too(tmp_path: Path, monkeypatch) -> None:
+    """Claude quotes papers in its own prose; those quotes were never checked."""
+    # Whatever Verbatim's own answers do: this is a report on someone else's.
+    monkeypatch.setattr("verbatim.config.CHECK_QUOTATIONS", False)
+    with corpus_with_dates(tmp_path) as corpus:
+        chunk_id = _first_chunk(corpus).chunk_id
+        report = verify_citations(
+            corpus,
+            [_quote(chunk_id, SENTENCE)],
+            answer='As written, "flux threads the ring" [1], but "flux threads every ring it meets" [1].',
+        )
+
+    assert report["checked_answer"] == (
+        'As written, "flux threads the ring" [1], but flux threads every ring it meets [1].'
+    )
+    (problem,) = report["quotation_problems"]
+    assert problem["quote"] == "flux threads every ring it meets" and problem["found_in"] is None
 
 
 def test_export_renders_each_format_in_code(tmp_path: Path) -> None:

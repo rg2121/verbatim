@@ -13,6 +13,7 @@ import time
 from verbatim import config
 from verbatim.agent import answer_question
 from verbatim.answers import (
+    Answer,
     OllamaCompletion,
     OllamaToolCaller,
     RoleCompletion,
@@ -1663,6 +1664,7 @@ def run() -> None:
                     print(f"    {attempt.strategy:<8} {detail}")
                 for item in answer.rejected:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+                _flag_quotations(answer)
                 print(f"\n  {_usage_footer(completion, tool_caller)}")
                 return
             if args.tools:
@@ -1679,6 +1681,7 @@ def run() -> None:
                     print(render_bibliography(answer.citations))
                 for item in answer.rejected:
                     print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+                _flag_quotations(answer)
                 # Routing turns are model calls too, so both clients are billed.
                 print(f"\n  {_usage_footer(completion, tool_caller)}")
                 return
@@ -1746,6 +1749,7 @@ def run() -> None:
         for item in answer.rejected:
             # A rejected citation is what this tool exists to catch, so it is shown.
             print(f"\n! rejected citation ({item.reason}): {item.quoted_text[:80]!r}")
+        _flag_quotations(answer)
         print(f"\n  {_usage_footer(completion)}")
 
     if args.command == "report":
@@ -1906,6 +1910,12 @@ def _search_options(args: argparse.Namespace) -> dict[str, object]:
     elif getattr(args, "rerank", None):
         options["reranker"] = shared_reranker(args.rerank)
     return options
+
+
+def _flag_quotations(answer: Answer) -> None:
+    """Quoted phrases the check changed or found elsewhere, shown as rejected citations are."""
+    for problem in answer.quotation_problems:
+        print(f"\n! {problem.describe()}: {problem.quote[:80]!r}")
 
 
 def _refuse_ignored(mode: str, reason: str, given: dict[str, bool]) -> None:

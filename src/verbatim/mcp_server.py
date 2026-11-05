@@ -176,6 +176,13 @@ class Verdict(BaseModel):
     citation: CitationRecord | None = None
 
 
+class QuotationNote(BaseModel):
+    quote: str
+    marker: int | None = None
+    found_in: int | None = None
+    note: str
+
+
 class VerificationReport(BaseModel):
     all_verified: bool
     verified: int
@@ -186,6 +193,7 @@ class VerificationReport(BaseModel):
     checked_answer: str | None = None
     unmarked_sentences: list[str] | None = None
     unbacked_sentences: list[str] | None = None
+    quotation_problems: list[QuotationNote] | None = None
 
 
 class ExportedReferences(BaseModel):
@@ -217,7 +225,8 @@ AnswerToRead = Annotated[
     Field(
         description=(
             "Your answer, with [n] marking the nth citation. Reports markers whose quote failed, "
-            "sentences with no marker, and marked sentences sharing too few words with their passage"
+            "sentences with no marker, marked sentences sharing too few words with their passage, "
+            "and words in quotation marks that are not word for word in a cited passage"
         )
     ),
 ]

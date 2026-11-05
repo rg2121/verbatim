@@ -420,8 +420,9 @@ class Local:
         subject: str = "magnetic flux through a ring",
         parts: tuple[str, ...] = (QUESTION,),
         hold: threading.Event | None = None,
+        prose: str = "Magnetic flux threads the ring [1].",
     ) -> None:
-        self.chunk_id, self.quote, self.first_quote = chunk_id, quote, first_quote
+        self.chunk_id, self.quote, self.first_quote, self.prose = chunk_id, quote, first_quote, prose
         self.subject, self.parts, self.hold = subject, parts, hold
         self.calls: list[str] = []
         self.usage = Usage()
@@ -433,7 +434,7 @@ class Local:
         self.usage.record({"prompt_eval_count": 100, "eval_count": 10, "total_duration": 2_000_000_000})
         first = self.first_quote is not None and self.calls.count("complete") == 1
         return {
-            "answer": "Magnetic flux threads the ring [1].",
+            "answer": self.prose,
             "citations": [{
                 "marker": 1, "chunk_id": self.chunk_id,
                 "quoted_text": self.first_quote if first else self.quote,
@@ -525,6 +526,8 @@ async def test_ask_starts_a_job_at_once_and_get_job_returns_the_checked_answer(s
         done = await _collected(client, started)
 
     assert started.structured_content["status"] in ("queued", "running", "done")
+    # Nothing was running, so nothing was ahead of it.
+    assert "ahead" not in started.structured_content["next"]
     assert done["status"] == "done" and done["asked"] == QUESTION
     result = done["result"]
     assert result["answer"] == "Magnetic flux threads the ring [1]."
@@ -534,6 +537,7 @@ async def test_ask_starts_a_job_at_once_and_get_job_returns_the_checked_answer(s
     assert cited["url"] == "https://arxiv.org/abs/2608.11111v1"
     assert result["references"].startswith("[1] ")
     assert result["rejected"] == []
+    assert result["quotation_problems"] == []
     assert "Answered from" in result["evidence"][0]
     assert result["subject_warning"] is None
     assert result["passages"][0]["chunk_id"] == cited["chunk_id"]
@@ -795,3 +799,39 @@ async def test_the_command_line_turns_the_model_tools_on(tmp_path: Path) -> None
 
     assert JOB_TOOLS <= set(listed)
     assert refused.is_error is True and "cloud model" in _text(refused)
+
+
+@pytest.mark.anyio
+async def test_a_job_answer_with_a_bent_quote_comes_back_with_it_unquoted(
+    state: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", True)
+    model = Local(_chunk_id(state), prose='Flux "threads every ring it meets" [1].')
+
+    async with Client(job_server(state, model)) as client:
+        done = await _collected(client, await client.call_tool("ask", {"question": QUESTION}))
+
+    result = done["result"]
+    assert result["answer"] == "Flux threads every ring it meets [1]."
+    (problem,) = result["quotation_problems"]
+    assert problem["quote"] == "threads every ring it meets" and problem["marker"] == 1
+
+
+@pytest.mark.anyio
+async def test_quotation_marks_in_a_clients_answer_are_checked_over_the_protocol(state: Path) -> None:
+    chunk_id = _chunk_id(state)
+
+    async with Client(build_server(state, MODEL)) as client:
+        listed = await _tools(client)
+        result = await client.call_tool(
+            "verify_citations",
+            {
+                "citations": [{"chunk_id": chunk_id, "quote": SENTENCE}],
+                "answer": 'Flux "threads every ring it meets" [1].',
+            },
+        )
+
+    report = result.structured_content
+    assert "quotation_problems" in json.dumps(listed["verify_citations"].output_schema)
+    assert report["checked_answer"] == "Flux threads every ring it meets [1]."
+    assert report["quotation_problems"][0]["quote"] == "threads every ring it meets"

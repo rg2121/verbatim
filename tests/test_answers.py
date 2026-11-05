@@ -2,9 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from verbatim import config
 from verbatim.answers import (
     Answer,
     answer_from_matches,
+    answer_from_payload,
     build_prompt,
     renumber_markers,
 )
@@ -921,3 +923,50 @@ def test_a_plain_client_revises_with_the_same_call_it_answers_with(monkeypatch) 
 
     assert revised["answer"] == "Flux decoheres the qubit."
     assert sent[0]["model"] == "general" and "ANSWER:" in sent[0]["messages"][0]["content"]
+
+
+def _one_passage(tmp_path: Path):
+    with chunked_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux threads the ring."]}) as corpus:
+        chunk = list(corpus.iter_chunks())[0]
+        papers = corpus.papers_by_id(["2608.11111v1"])
+    return [ChunkMatch(chunk=chunk, score=1.0, snippet="")], papers, chunk.chunk_id
+
+
+def _quoting(chunk_id: str, prose: str) -> dict:
+    return {
+        "answer": prose,
+        "citations": [{"marker": 1, "chunk_id": chunk_id, "quoted_text": "Magnetic flux threads the ring."}],
+    }
+
+
+def test_words_in_quotation_marks_that_the_passage_lacks_lose_the_marks(tmp_path: Path, monkeypatch) -> None:
+    """The citation line verified, but the prose quoted words the passage never wrote."""
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", True)
+    matches, papers, chunk_id = _one_passage(tmp_path)
+
+    answer = answer_from_payload(
+        "q", matches, _quoting(chunk_id, 'Flux "threads every ring it meets" [1].'), papers
+    )
+
+    assert answer.text == "Flux threads every ring it meets [1]."
+    assert [problem.quote for problem in answer.quotation_problems] == ["threads every ring it meets"]
+    assert len(answer.citations) == 1 and answer.rejected == []
+    listed = answer.to_dict()["quotation_problems"]
+    assert listed[0]["quote"] == "threads every ring it meets" and "without quotation marks" in listed[0]["note"]
+
+
+def test_with_the_quotation_check_off_the_prose_is_left_as_written(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", False)
+    matches, papers, chunk_id = _one_passage(tmp_path)
+
+    answer = answer_from_payload(
+        "q", matches, _quoting(chunk_id, 'Flux "threads every ring it meets" [1].'), papers
+    )
+
+    assert answer.text == 'Flux "threads every ring it meets" [1].'
+    assert answer.quotation_problems == []
+
+
+def test_the_quotation_check_is_off_until_its_rule_passes() -> None:
+    """Its rule failed by its letter on saved answers (evals/quotation_check.py)."""
+    assert config.CHECK_QUOTATIONS is False

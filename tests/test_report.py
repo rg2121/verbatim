@@ -1,10 +1,13 @@
 from pathlib import Path
 
+from verbatim import config
+
 
 from verbatim.answers import Answer
 from verbatim.citations import Citation
 from verbatim.corpus import EmbeddingModel
 from verbatim.embedding import embed_pending
+from verbatim.quotations import QuotationProblem
 from verbatim.report import (
     Report,
     ReportSection,
@@ -223,3 +226,36 @@ def test_render_markdown_carries_the_subject_warning_per_section() -> None:
     assert "tensor slicing libraries" in markdown
     assert "0.31 similarity" in markdown
     assert "charge transport" not in markdown  # no warning above the threshold
+
+
+def test_the_review_says_what_was_checked(monkeypatch) -> None:
+    """It claimed every quotation was verified while only the citation lines were."""
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", True)
+    checked = render_markdown(report_with_shared_citation())
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", False)
+    unchecked = render_markdown(report_with_shared_citation())
+
+    assert "Every quotation was checked word for word against the passages cited" in checked
+    assert "lost their quotation marks" in checked
+    assert "Every cited quote was checked word for word against its passage" in unchecked
+    assert "quotation marks" not in unchecked
+    assert "character-for-character" not in checked + unchecked
+
+
+def test_a_section_says_when_its_quotation_marks_were_changed() -> None:
+    section = ReportSection(
+        heading="What is flux?",
+        answer=Answer(
+            question="What is flux?", text="Flux threads rings [1].",
+            citations=[citation("chunk-a", "2608.11111v1")], rejected=[],
+            quotation_problems=[
+                QuotationProblem(quote="threads every ring it meets", marker=1, found_in=None),
+                QuotationProblem(quote="decohere quickly at higher temperatures", marker=1, found_in=2),
+            ],
+        ),
+    )
+
+    markdown = render_markdown(Report(topic="flux", sections=[section], generated_at="2026-11-06"))
+
+    assert "1 quoted phrase(s) in this section were not word for word in a cited passage" in markdown
+    assert "1 quoted phrase(s) in this section come from a different source than their marker names" in markdown

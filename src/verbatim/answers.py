@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from verbatim import config
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.quotations import QuotationProblem, check_quotations
 
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
@@ -142,6 +143,8 @@ class Answer:
     citations: list[Citation]
     rejected: list[RejectedCitation]
     declined: bool = False
+    # Quoted phrases in the text that are not word for word where it says.
+    quotation_problems: list[QuotationProblem] = field(default_factory=list)
 
     @property
     def supporting_papers(self) -> int:
@@ -159,6 +162,7 @@ class Answer:
             "supporting_papers": self.supporting_papers,
             "citations": [citation.to_dict() for citation in self.citations],
             "rejected": [asdict(item) for item in self.rejected],
+            "quotation_problems": [problem.to_dict() for problem in self.quotation_problems],
         }
 
 
@@ -750,11 +754,15 @@ def answer_from_payload(
     matches: list[ChunkMatch],
     payload: dict[str, Any],
     papers: dict[str, Any],
+    *,
+    quotations: bool | None = None,
 ) -> Answer:
     """Verify a model's payload into an Answer.
 
     Streamed and non-streamed answers both finish here, so they are verified
     the same way. `papers` is passed in so this can run off the database thread.
+    `quotations` checks the prose's quotation marks too (VERBATIM_CHECK_QUOTATIONS
+    when None).
     """
     chunks = {match.chunk.chunk_id: match.chunk for match in matches}
 
@@ -788,9 +796,17 @@ def answer_from_payload(
         citations.append(citation_from_chunk(chunk, paper, quoted_text))
         if isinstance(raw.get("marker"), int):
             marker_positions[raw["marker"]] = len(citations)
+    text = renumber_markers(payload.get("answer", ""), citations, marker_positions)
+    problems: list[QuotationProblem] = []
+    if config.CHECK_QUOTATIONS if quotations is None else quotations:
+        # The prose's own quotation marks, held to the citation lines' rule.
+        text, problems = check_quotations(
+            text, [chunks[citation.chunk_id].text for citation in citations]
+        )
     return Answer(
         question=question,
-        text=renumber_markers(payload.get("answer", ""), citations, marker_positions),
+        text=text,
         citations=citations,
         rejected=rejected,
+        quotation_problems=problems,
     )

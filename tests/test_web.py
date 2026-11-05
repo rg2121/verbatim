@@ -948,3 +948,25 @@ def test_the_page_searches_as_every_front_end_does(tmp_path: Path, monkeypatch, 
 
     shared = default_search_options()
     assert {name: searched[name] for name in shared} == shared
+
+
+def test_the_page_says_when_quotation_marks_were_removed() -> None:
+    """The final answer replaces the streamed draft, so the change must be said, not just made."""
+    seen = run_page(r"""
+        const stream = submit("what threads the ring?");
+        stream.emit("answer", {
+            text: "Flux threads every ring it meets [1].", citations: [], rejected: [],
+            quotation_problems: [
+                { quote: "threads every ring it meets", marker: 1, found_in: null, note: "" },
+                { quote: "decohere quickly at higher temperatures", marker: 1, found_in: 2, note: "" },
+            ],
+        });
+        stream.emit("done", {});
+        const block = document.getElementById("thread").children[0];
+        const box = block.children.find((child) => child.className === "how");
+        const body = box.children.find((child) => child.className === "body");
+        report({ lines: body.children.map((line) => line.textContent) });
+    """)
+
+    assert any("quotation marks were removed" in line for line in seen["lines"])
+    assert any("different cited passage" in line for line in seen["lines"])

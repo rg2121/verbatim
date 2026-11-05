@@ -111,13 +111,18 @@ def render_markdown(
     """
     citations = []
     number_of: dict[str, int] = {}
+    checked = (
+        "Every quotation was checked word for word against the passages cited: "
+        "words not found there lost their quotation marks, and a claim whose "
+        "citation failed is marked [unverified]."
+        if config.CHECK_QUOTATIONS else
+        "Every cited quote was checked word for word against its passage, and "
+        "a claim whose citation failed is marked [unverified]."
+    )
     lines = [
         f"# {report.topic}",
         "",
-        f"*Generated {report.generated_at} from a local arXiv corpus. Every "
-        "quotation was verified character-for-character against the passage "
-        "it cites; a claim that could not be verified is marked "
-        "[unverified].*",
+        f"*Generated {report.generated_at} from a local arXiv corpus. {checked}*",
     ]
     for section in report.sections:
         mapping: dict[int, int] = {}
@@ -150,6 +155,20 @@ def render_markdown(
                 "",
                 f"> {len(section.answer.rejected)} citation(s) in this section "
                 "failed verification and are marked [unverified].",
+            ]
+        unquoted = sum(1 for p in section.answer.quotation_problems if p.found_in is None)
+        elsewhere = len(section.answer.quotation_problems) - unquoted
+        if unquoted:
+            lines += [
+                "",
+                f"> {unquoted} quoted phrase(s) in this section were not word for word "
+                "in a cited passage and are shown without quotation marks.",
+            ]
+        if elsewhere:
+            lines += [
+                "",
+                f"> {elsewhere} quoted phrase(s) in this section come from a different "
+                "source than their marker names.",
             ]
     if citations:
         lines += ["", "## References"]

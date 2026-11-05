@@ -135,6 +135,15 @@ around a quote. A citation that fails is rejected and its marker becomes
 a second model call. It proves the words exist in the source. It does not
 prove the passage answers the question, and nothing strengthens it into that.
 
+**Quotation marks in the answer's own text** can be held to the same rule
+(`quotations.py`, `VERBATIM_CHECK_QUOTATIONS=1`): a phrase of three words or more
+that no cited passage holds loses its quotation marks, since it is not a
+quotation, and one held by a different cited passage than its marker names is
+reported. It forgives what the citation check forgives, and a capital first
+letter. It is off, having failed its rule by its letter
+([findings](findings.md#answers)), and `verify_citations` applies it to a
+client's answer either way.
+
 **What the check finds goes back to the model**, once (`reflection.py`;
 `VERBATIM_REFLECT=0` turns this off): which quote is not in which passage, with
 the closest words that are; a marker with no citation; a claim with no marker;

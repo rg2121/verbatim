@@ -39,6 +39,31 @@ def test_allowing_the_cloud_without_a_model_is_refused_rather_than_ignored(monke
         run()
 
 
+def test_ask_shows_quoted_phrases_the_check_changed(tmp_path, monkeypatch, capsys) -> None:
+    import verbatim.cli as cli
+    from verbatim.answers import Answer
+    from verbatim.quotations import QuotationProblem
+
+    answer = Answer(
+        question="q", text="Flux threads every ring it meets [1].", citations=[], rejected=[],
+        quotation_problems=[
+            QuotationProblem(quote="threads every ring it meets", marker=1, found_in=None),
+            QuotationProblem(quote="decohere quickly at higher temperatures", marker=1, found_in=2),
+        ],
+    )
+    monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda **options: object())
+    monkeypatch.setattr(cli, "RoleCompletion", lambda *args, **options: object())
+    monkeypatch.setattr(cli, "hybrid_search", lambda *args, **options: [])
+    monkeypatch.setattr(cli, "answer_from_matches", lambda *args, **options: answer)
+    monkeypatch.setattr("sys.argv", ["verbatim", "ask", "q", "--state", str(tmp_path / "corpus.db")])
+
+    run()
+
+    printed = capsys.readouterr().out
+    assert "! not word for word in a cited passage, so shown without quotation marks: 'threads every ring it meets'" in printed
+    assert "! quoted from [2], not [1]: 'decohere quickly at higher temperatures'" in printed
+
+
 def test_a_blank_paper_in_graph_is_an_error_not_a_traceback(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("sys.argv", ["verbatim", "graph", "  ", "--state", str(tmp_path / "corpus.db")])
 

@@ -334,3 +334,22 @@ def test_ollama_not_running_is_refused_at_once_rather_than_after_retries() -> No
         preflight({"writer": "gemma4:e4b-mlx"}, host="http://127.0.0.1:9", timeout=2)
 
     assert time.perf_counter() - started < 5
+
+
+def test_a_job_is_said_to_wait_only_behind_jobs_that_are_there(tmp_path) -> None:
+    """The first job of a session read "Waiting for the job ahead of it" with none ahead."""
+    gate = Gate()
+    runner = JobRunner(JobStore(tmp_path / "corpus.db"), gate)
+
+    first = runner.submit("ask", {"question": "first"})
+    assert gate.entered.wait(5)
+    second = runner.submit("ask", {"question": "second"})
+    third = runner.submit("ask", {"question": "third"})
+    gate.release.set()
+
+    if first["status"] == "queued":  # the thread had not taken it yet
+        assert first["stage"] == "about to start" and "ahead" not in first["next"]
+    assert second["stage"] == "waiting behind 1 job" and "1 job ahead" in second["next"]
+    assert third["stage"] == "waiting behind 2 jobs" and "2 jobs ahead" in third["next"]
+    for view in (second, third):
+        _settled(runner, view["job_id"])

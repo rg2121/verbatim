@@ -57,6 +57,7 @@ def _section_payload(section: Any, entry: Any) -> dict[str, Any]:
         # The full citation, so the page renders review and answer sources alike.
         "citations": [citation.to_dict() for citation in section.answer.citations],
         "rejected": len(section.answer.rejected),
+        "quotation_problems": [problem.to_dict() for problem in section.answer.quotation_problems],
         "shape": entry.shape,
         "outcome": entry.outcome,
         "attempts": [
@@ -1042,6 +1043,7 @@ function runAsk(event) {
     if (answer.rejected.length) {
       how.push(answer.rejected.length + " quote(s) did not match their passage and were dropped.");
     }
+    quotationNotes(answer.quotation_problems || []).forEach((note) => how.push(note));
   });
   asking.addEventListener("ladder", (e) => {
     const climb = JSON.parse(e.data);
@@ -1127,6 +1129,15 @@ async function runSearch(event) {
 }
 
 // -- review -----------------------------------------------------------
+function quotationNotes(problems) {
+  const unquoted = problems.filter((problem) => problem.found_in === null).length;
+  const elsewhere = problems.length - unquoted;
+  const notes = [];
+  if (unquoted) notes.push(unquoted + " quoted phrase(s) were not word for word in a cited passage, so their quotation marks were removed.");
+  if (elsewhere) notes.push(elsewhere + " quoted phrase(s) come from a different cited passage than their marker says.");
+  return notes;
+}
+
 function renderSectionCard(payload) {
   const card = el("section", "section");
   card.appendChild(el("h3", null, payload.heading));
@@ -1141,6 +1152,7 @@ function renderSectionCard(payload) {
   const how = ["Read as " + (SHAPE[payload.shape] || payload.shape) + "."];
   how.push("Tried " + payload.attempts.map((a) => plain(a.strategy)).join(", then ") + ".");
   if (payload.rejected) how.push(payload.rejected + " quote(s) were dropped as unverifiable.");
+  how.push(...quotationNotes(payload.quotation_problems || []));
   card.appendChild(howBox(how));
   return card;
 }

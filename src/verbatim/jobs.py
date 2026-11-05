@@ -53,7 +53,7 @@ STAGES = {
     "choose_tool": "choosing what to search",
 }
 NEXT = {
-    "queued": "Waiting for the job ahead of it. Call get_job again with this job_id.",
+    "queued": "Queued. Call get_job again with this job_id.",
     "running": "Call get_job again with this job_id; each call waits for it a while.",
     "done": "Show the result unchanged: its quotes were checked against the passages.",
     "failed": "Fix what the error says, then start the job again.",
@@ -91,7 +91,7 @@ class Job:
     kind: str
     inputs: dict[str, Any]
     status: str = "queued"
-    stage: str | None = "waiting for its turn"
+    stage: str | None = "queued"
     created_at: str = field(default_factory=_now)
     started_at: str | None = None
     finished_at: str | None = None
@@ -338,11 +338,13 @@ class JobRunner:
 
     def _view(self, job: Job) -> dict[str, Any]:
         position = (list(self.waiting).index(job.job_id) + 1) if job.job_id in self.waiting else None
+        # Only jobs really there count as ahead: the first of a session has none.
+        running = any(other.status == "running" for other in self.jobs.values())
         return _describe({
             "job_id": job.job_id, "kind": job.kind, "inputs": job.inputs, "status": job.status,
             "stage": job.stage, "created_at": job.created_at, "started_at": job.started_at,
             "finished_at": job.finished_at, "result": job.result, "error": job.error,
-        }, position=position)
+        }, position=position, ahead=None if position is None else position - 1 + running)
 
 
 def _still_running(pid: int) -> bool:
@@ -360,25 +362,35 @@ def _still_running(pid: int) -> bool:
     return True
 
 
-def _describe(record: dict[str, Any], *, position: int | None = None) -> dict[str, Any]:
-    """A job as a client sees it."""
+def _describe(
+    record: dict[str, Any], *, position: int | None = None, ahead: int | None = None
+) -> dict[str, Any]:
+    """A job as a client sees it. `ahead` counts the jobs before a queued one, where known."""
     status = record["status"]
     began = record["started_at"] or record["created_at"]
     ended = record["finished_at"] or _now()
     inputs = record["inputs"]
+    stage, next_step = record["stage"] if status in ACTIVE else None, NEXT[status]
+    if status == "queued" and ahead == 0:
+        stage = "about to start"
+        next_step = "About to start. Call get_job with this job_id; each call waits for it a while."
+    elif status == "queued" and ahead:
+        jobs = f"{ahead} job{'s' if ahead != 1 else ''}"
+        stage = f"waiting behind {jobs}"
+        next_step = f"Waiting for the {jobs} ahead of it. Call get_job again with this job_id."
     return {
         "job_id": record["job_id"],
         "kind": record["kind"],
         "status": status,
         "asked": str(inputs.get("question") or inputs.get("topic") or ""),
-        "stage": record["stage"] if status in ACTIVE else None,
+        "stage": stage,
         "position": position if status == "queued" else None,
         "seconds": round(
             (datetime.fromisoformat(ended) - datetime.fromisoformat(began)).total_seconds(), 1
         ),
         "result": record["result"] if status == "done" else None,
         "error": record["error"] if status in ("failed", "cancelled", "lost") else None,
-        "next": NEXT[status].format(position=position),
+        "next": next_step,
     }
 
 
@@ -658,4 +670,5 @@ def _answered(answer: Answer) -> dict[str, Any]:
             {"chunk_id": item.chunk_id, "quote": item.quoted_text, "reason": item.reason}
             for item in answer.rejected
         ],
+        "quotation_problems": [problem.to_dict() for problem in answer.quotation_problems],
     }

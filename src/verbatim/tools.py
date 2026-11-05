@@ -338,6 +338,8 @@ def verify_citations(
             ],
         },
         papers,
+        # A report on someone else's answer, so it changes no answer of Verbatim's.
+        quotations=True,
     )
     verdicts = [
         _verdict(corpus, item["chunk_id"], item["quote"], chunks, papers) for item in citations
@@ -354,6 +356,9 @@ def verify_citations(
         "unmarked_sentences": None if answer is None else list(uncited_sentences(checked.text)),
         "unbacked_sentences": (
             None if answer is None else list(unbacked_sentences(checked, passage_texts(matches)))
+        ),
+        "quotation_problems": (
+            None if answer is None else [problem.to_dict() for problem in checked.quotation_problems]
         ),
     }
 
