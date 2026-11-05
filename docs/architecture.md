@@ -140,9 +140,11 @@ prove the passage answers the question, and nothing strengthens it into that.
 that no cited passage holds loses its quotation marks, since it is not a
 quotation, and one held by a different cited passage than its marker names is
 reported. It forgives what the citation check forgives, and a capital first
-letter. It is off, having failed its rule by its letter
-([findings](findings.md#answers)), and `verify_citations` applies it to a
-client's answer either way.
+letter. A bracket inside a quotation is the quoted text's own, such as a paper's
+reference number: renumbering keeps one inside a quotation a retrieved passage
+holds word for word, and whatever reads markers afterwards passes over it. The
+check is on (`VERBATIM_CHECK_QUOTATIONS=0` turns it off), and `verify_citations`
+applies it to a client's answer either way ([findings](findings.md#answers)).
 
 **What the check finds goes back to the model**, once (`reflection.py`;
 `VERBATIM_REFLECT=0` turns this off): which quote is not in which passage, with

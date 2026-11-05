@@ -7,10 +7,14 @@ line's rule: one that no cited passage holds loses its quotation marks, since it
 is not a quotation, and one found in a different cited passage than its marker
 names keeps them and is reported. Measured on saved answers in
 evals/quotation_check.py.
+
+A bracket inside a quotation is the quoted text's own, such as a paper's
+reference number, so whatever reads markers passes over it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import re
 
@@ -51,26 +55,12 @@ def check_quotations(text: str, passages: list[str]) -> tuple[str, list[Quotatio
     Returns the text with the quotation marks taken off words that no cited
     passage holds, and what was found. Nothing else in the text changes.
     """
-    from verbatim.answers import verify_quote  # answers imports this module
-
-    def holds(passage: str, quote: str) -> bool:
-        if verify_quote(quote, passage) is None:
-            return True
-        # A capital first letter dropped, or added, to fit the answer's sentence.
-        first = next((i for i, character in enumerate(quote) if character.isalpha()), None)
-        if first is None:
-            return False
-        swapped = quote[:first] + quote[first].swapcase() + quote[first + 1:]
-        return verify_quote(swapped, passage) is None
-
     problems: list[QuotationProblem] = []
     unquoted: list[int] = []
-    for opening, closing in quotation_spans(text):
+    for opening, closing in quotations(text):
         quote = text[opening + 1:closing]
-        if len(quote.split()) < MIN_WORDS:
-            continue
         named = _markers_after(text, closing + 1)
-        holding = [n for n, passage in enumerate(passages, start=1) if holds(passage, quote)]
+        holding = [n for n, passage in enumerate(passages, start=1) if word_for_word(quote, passage)]
         if any(n in holding for n in named) or (holding and not named):
             continue
         found_in = holding[0] if holding else None
@@ -82,6 +72,65 @@ def check_quotations(text: str, passages: list[str]) -> tuple[str, list[Quotatio
     for position in sorted(unquoted, reverse=True):
         text = text[:position] + text[position + 1:]
     return text, problems
+
+
+def word_for_word(quote: str, passage: str) -> bool:
+    """Whether the passage holds the quote, as the citation check reads it, or with its
+    first letter's case changed to fit the answer's sentence."""
+    from verbatim.answers import verify_quote  # answers imports this module
+
+    if verify_quote(quote, passage) is None:
+        return True
+    first = next((i for i, character in enumerate(quote) if character.isalpha()), None)
+    if first is None:
+        return False
+    swapped = quote[:first] + quote[first].swapcase() + quote[first + 1:]
+    return verify_quote(swapped, passage) is None
+
+
+def quotations(text: str) -> list[tuple[int, int]]:
+    """Each quotation of MIN_WORDS words or more, as its opening and closing mark."""
+    return [
+        (opening, closing) for opening, closing in quotation_spans(text)
+        if len(text[opening + 1:closing].split()) >= MIN_WORDS
+    ]
+
+
+def quoted_from(text: str, passages: Sequence[str]) -> list[tuple[int, int]]:
+    """The quotations one of the passages holds word for word, brackets and all."""
+    return [
+        (opening, closing) for opening, closing in quotations(text)
+        if any(word_for_word(text[opening + 1:closing], passage) for passage in passages)
+    ]
+
+
+def mask_quoted_brackets(text: str) -> str:
+    """The text with the brackets inside its quotations written as braces.
+
+    For reading markers only: the length is unchanged, so offsets and sentences
+    are the text's own. Checked answers keep only quotations a cited passage holds.
+    """
+    characters = list(text)
+    for opening, closing in quotations(text):
+        for position in range(opening + 1, closing):
+            if characters[position] in "[]":
+                characters[position] = "{" if characters[position] == "[" else "}"
+    return "".join(characters)
+
+
+def sub_outside(
+    pattern: re.Pattern[str],
+    replace: Callable[[re.Match[str]], str] | str,
+    text: str,
+    spans: Sequence[tuple[int, int]],
+) -> str:
+    """`pattern.sub(replace, text)`, leaving a match that starts inside a span as it is."""
+    def rewrite(match: re.Match[str]) -> str:
+        if any(opening < match.start() < closing for opening, closing in spans):
+            return match.group(0)
+        return replace(match) if callable(replace) else match.expand(replace)
+
+    return pattern.sub(rewrite, text)
 
 
 def quotation_spans(text: str) -> list[tuple[int, int]]:

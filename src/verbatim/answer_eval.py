@@ -16,7 +16,7 @@ import re
 
 from verbatim.answers import Answer
 from verbatim.citations import Citation
-from verbatim.critique import MARKER, SENTENCE, uncited_sentences
+from verbatim.critique import MARKER, sentences, uncited_sentences
 
 # Forced choice rather than yes/no, so "unrelated" is an answer, not a refusal.
 SUPPORT_SYSTEM = """You are given a CLAIM and a QUOTE taken from a research paper.
@@ -137,8 +137,8 @@ class JudgeReport:
 def claim_quote_pairs(case: AnsweredCase) -> list[tuple[str, Citation]]:
     """Each cited sentence paired with the citation its marker points at."""
     pairs: list[tuple[str, Citation]] = []
-    for sentence in SENTENCE.split(case.answer.text.strip()):
-        for marker in MARKER.findall(sentence):
+    for sentence, read in sentences(case.answer.text):
+        for marker in MARKER.findall(read):
             if not marker.strip("[]").isdigit():
                 continue
             position = int(marker.strip("[]"))

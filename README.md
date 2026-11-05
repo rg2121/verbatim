@@ -17,8 +17,8 @@ against its source, and writes literature reviews the same way.
   becomes `[unverified]`. No model is asked whether a citation is good. A flagged
   answer goes back to the model once, told what the check found, and the repair
   is checked the same way. Words the answer's own text puts in quotation marks
-  are held to the same rule with `VERBATIM_CHECK_QUOTATIONS=1`, off for now;
-  `verify_citations` checks them in a client's answer either way.
+  are held to the same rule: a phrase no cited passage holds loses its quotation
+  marks.
 - **Traceable sources.** Citations pin the exact arXiv version, the page or
   section, character offsets, source URL and licence.
 - **Hybrid retrieval.** Keyword and vector search fused by rank, plus a

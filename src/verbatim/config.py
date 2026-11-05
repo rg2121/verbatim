@@ -94,9 +94,10 @@ REFLECT = _text("VERBATIM_REFLECT", "1") not in {"0", "false", "False", ""}
 # Hold the words an answer puts in quotation marks to the citation lines' rule:
 # a phrase of three words or more that no cited passage holds loses its marks,
 # and one held by a different cited passage than its marker names is reported.
-# No model call. Off: its rule failed by its letter (evals/quotation_check.py);
-# 1 turns it on. verify_citations checks a client's answer either way.
-CHECK_QUOTATIONS = _text("VERBATIM_CHECK_QUOTATIONS", "0") not in {"0", "false", "False", ""}
+# No model call. On: its rule failed by its letter only on a quote renumbering had
+# broken, which is fixed (evals/quotation_check.py); 0 turns it off.
+# verify_citations checks a client's answer either way.
+CHECK_QUOTATIONS = _text("VERBATIM_CHECK_QUOTATIONS", "1") not in {"0", "false", "False", ""}
 
 # Stage events go to stderr so stdout stays parseable. "json" for a shipper,
 # "text" for a person.

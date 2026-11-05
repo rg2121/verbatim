@@ -431,3 +431,21 @@ def test_an_earlier_experiment_still_runs_what_its_findings_report(script: str) 
     source = (Path(__file__).parents[1] / "evals" / f"{script}.py").read_text()
 
     assert "config.REFLECT = False" in source
+
+
+def test_a_papers_own_reference_quoted_in_a_draft_is_not_a_marker_without_a_cite_line(tmp_path: Path) -> None:
+    passage = "A recent work by [52] makes a broader claim than ours about every survey."
+    with chunked_corpus(tmp_path, {"2608.33333v1": [passage]}) as corpus:
+        matches = _matches(corpus)
+        chunk_id = matches[0].chunk.chunk_id
+        payload = {
+            "answer": 'They note "A recent work by [52] makes a broader claim" [1]. '
+                      "It was never replicated by anyone at all.",
+            "citations": [_cite(1, chunk_id, "makes a broader claim than ours")],
+        }
+        draft = _verified(corpus, matches, payload)
+
+    found = findings(payload, draft, matches)
+
+    assert not any("[52]" in item for item in found)
+    assert any("has no marker" in item for item in found)

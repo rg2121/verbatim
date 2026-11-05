@@ -17,6 +17,7 @@ from verbatim.answers import Answer, Completion
 from verbatim.citations import render_bibliography
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import Embedder
+from verbatim.quotations import quotations, sub_outside
 from verbatim.research import parse_plan_lines
 
 MAX_SECTIONS = 6
@@ -136,7 +137,9 @@ def render_markdown(
             local = int(match.group(1))
             return f"[{mapping[local]}]" if local in mapping else match.group(0)
 
-        lines += ["", f"## {section.heading}", "", MARKER.sub(remap, section.answer.text)]
+        text = section.answer.text
+        # A bracket inside a quotation is the paper's own, not a marker to renumber.
+        lines += ["", f"## {section.heading}", "", sub_outside(MARKER, remap, text, quotations(text))]
         if section.evidence_lines:
             # Always shown, so the reader can judge what the section rests on.
             lines += ["", "> " + " ".join(section.evidence_lines)]

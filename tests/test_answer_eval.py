@@ -172,3 +172,12 @@ def test_discrimination_is_judged_against_the_hard_control_when_there_is_one() -
     # judge cannot tell a claim's own quote from its neighbour's.
     assert lenient.discriminates is False
     assert "does not separate" in lenient.render()
+
+
+def test_a_quoted_reference_is_not_paired_with_the_citation_it_numbers() -> None:
+    case = answered(
+        'They write "the method of [2] fails at every scale tried" [1].',
+        [citation("a", "fails at every scale tried"), citation("b", "other words")],
+    )
+
+    assert [quote.quoted_text for _claim, quote in claim_quote_pairs(case)] == ["fails at every scale tried"]

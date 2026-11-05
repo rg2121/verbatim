@@ -197,6 +197,25 @@ def test_an_answer_with_no_citation_is_not_an_example(tmp_path: Path) -> None:
     assert tally.rejected == {"no citation": 1, "writer declined": 1}
 
 
+def test_an_answer_the_quotation_check_changed_is_not_an_example(tmp_path: Path) -> None:
+    """Unquoting a bent quote makes the answer read well; the writer still misquoted."""
+    from dataclasses import replace
+
+    from verbatim.quotations import QuotationProblem
+
+    with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
+        citation, match = cited(corpus, "2608.00001v1")
+        tally = Tally()
+        changed = replace(
+            answer_with([citation]),
+            quotation_problems=[QuotationProblem(quote="loss dominate every qubit", marker=1, found_in=None)],
+        )
+        example = keep(changed, [match], corpus, generator_model="m", tally=tally)
+
+    assert example is None
+    assert tally.rejected == {"a quotation not word for word": 1}
+
+
 def test_an_ineligible_citation_is_a_fault_and_not_a_rejection(
     tmp_path: Path,
 ) -> None:

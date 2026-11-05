@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 import json
 import re
@@ -14,7 +15,7 @@ from urllib.request import Request, urlopen
 from verbatim import config
 from verbatim.citations import Citation, citation_from_chunk
 from verbatim.corpus import ChunkMatch, CorpusStore
-from verbatim.quotations import QuotationProblem, check_quotations
+from verbatim.quotations import QuotationProblem, check_quotations, quoted_from, sub_outside
 
 ANSWER_LINE_PATTERN = re.compile(r"^ANSWER:\s*(.+?)(?=^CITE\b|\Z)", re.M | re.S)
 CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
@@ -24,6 +25,7 @@ CITE_LINE_PATTERN = re.compile(r"^CITE\s*\[(\d+)\]\s*(\S+)\s*::\s*(.+)$", re.M)
 CITE_ID_LINE_PATTERN = re.compile(r"^CITE\s*\[([0-9a-f]{16,})\]\s*(?:\1\s*)?::\s*(.+)$", re.M)
 CHUNK_ID_PATTERN = re.compile(r"[0-9a-f]{16,}")
 MARKER_PATTERN = re.compile(r"\[([^\[\]]{1,64})\]")
+REPEATED_MARKER = re.compile(r"\[(\d+)\](?:\s*\[\1\])+")
 
 LINE_PROTOCOL = """
 Reply in exactly this format and nothing else:
@@ -612,14 +614,20 @@ def parse_line_protocol(content: str) -> dict[str, Any] | None:
 
 
 def renumber_markers(
-    text: str, citations: list[Citation], marker_positions: dict[int, int] | None = None
+    text: str,
+    citations: list[Citation],
+    marker_positions: dict[int, int] | None = None,
+    *,
+    passages: Sequence[str] = (),
 ) -> str:
     """Renumber inline markers to match the printed bibliography.
 
     Markers may be numbers or chunk ids. One whose citation was rejected
-    becomes [unverified].
+    becomes [unverified]. A bracket inside a quotation one of `passages` holds
+    word for word is the paper's own, such as a reference number, and is kept.
     """
     positions = marker_positions or {}
+    quoted = quoted_from(text, passages) if passages else []
     chunk_positions = {citation.chunk_id: n for n, citation in enumerate(citations, start=1)}
 
     def rewrite_one(token: str) -> str | None:
@@ -647,9 +655,9 @@ def renumber_markers(
             return "".join(rewrite_one(part) or "[unverified]" for part in grouped)
         return match.group(0)  # leave anything else alone
 
-    text = MARKER_PATTERN.sub(rewrite, text)
+    text = sub_outside(MARKER_PATTERN, rewrite, text, quoted)
     # Collapse the runs this can produce, e.g. "[1] [1]" or "[1][1]".
-    return re.sub(r"\[(\d+)\](?:\s*\[\1\])+", r"[\1]", text)
+    return sub_outside(REPEATED_MARKER, r"[\1]", text, quoted_from(text, passages) if passages else [])
 
 
 SUBJECT_SYSTEM = (
@@ -796,7 +804,10 @@ def answer_from_payload(
         citations.append(citation_from_chunk(chunk, paper, quoted_text))
         if isinstance(raw.get("marker"), int):
             marker_positions[raw["marker"]] = len(citations)
-    text = renumber_markers(payload.get("answer", ""), citations, marker_positions)
+    text = renumber_markers(
+        payload.get("answer", ""), citations, marker_positions,
+        passages=[match.chunk.text for match in matches],
+    )
     problems: list[QuotationProblem] = []
     if config.CHECK_QUOTATIONS if quotations is None else quotations:
         # The prose's own quotation marks, held to the citation lines' rule.

@@ -34,6 +34,7 @@ from verbatim.answers import (
 from verbatim.corpus import ChunkMatch
 from verbatim.critique import unbacked_sentences, uncited_sentences
 from verbatim.logs import event
+from verbatim.quotations import quoted_from
 
 UNVERIFIED = "[unverified]"
 # A hint holds at least half the quote's words, in order: an unrelated sentence
@@ -126,7 +127,7 @@ def findings(
     ]
     found.extend(
         f"The answer uses [{marker}], but there is no CITE [{marker}] line."
-        for marker in _dangling(payload)
+        for marker in _dangling(payload, list(texts.values()))
     )
     found.extend(
         f'This sentence makes a claim but has no marker: "{sentence}"'
@@ -241,8 +242,13 @@ def _rejected(item: RejectedCitation, marker: object, texts: dict[str, str]) -> 
     return f'{found} The closest words in that passage are: "{words}"'
 
 
-def _dangling(payload: dict[str, Any]) -> list[str]:
-    """Markers in the answer with no CITE line, read as renumbering reads them."""
+def _dangling(payload: dict[str, Any], passages: Sequence[str] = ()) -> list[str]:
+    """Markers in the answer with no CITE line, read as renumbering reads them.
+
+    So a bracket inside a quotation one of `passages` holds is the paper's, not a marker.
+    """
+    answer = payload.get("answer", "")
+    quoted = quoted_from(answer, passages) if passages else []
     citations = payload.get("citations", [])
     numbers = {raw.get("marker") for raw in citations}
     chunk_ids = {raw.get("chunk_id") for raw in citations}
@@ -251,7 +257,9 @@ def _dangling(payload: dict[str, Any]) -> list[str]:
         return token.isdigit() or CHUNK_ID_PATTERN.fullmatch(token) is not None
 
     found: list[str] = []
-    for match in MARKER_PATTERN.finditer(payload.get("answer", "")):
+    for match in MARKER_PATTERN.finditer(answer):
+        if any(opening < match.start() < closing for opening, closing in quoted):
+            continue
         parts = [part.strip() for part in match.group(1).split(",")]
         # "[see also, page 3]" is prose, not a group of markers.
         if not all(is_marker(part) for part in parts):

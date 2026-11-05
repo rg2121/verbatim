@@ -1,6 +1,15 @@
 """Quotation marks in an answer's own text, checked against the passages it cites."""
 
-from verbatim.quotations import QuotationProblem, check_quotations
+import re
+
+from verbatim.quotations import (
+    QuotationProblem,
+    check_quotations,
+    mask_quoted_brackets,
+    quoted_from,
+    sub_outside,
+    quotations,
+)
 
 FLUX = "## Intro\n\nMagnetic flux threads the ring. The current decays when the junction warms."
 QUBIT = "Superconducting qubits decohere quickly at higher temperatures."
@@ -124,3 +133,33 @@ def test_a_problem_says_what_was_done() -> None:
 
     assert "without quotation marks" in removed.describe()
     assert elsewhere.describe() == "quoted from [3], not [1]"
+
+
+DESI = "A recent work by [52] makes a broader, and apparently stronger claim than ours."
+
+
+def test_a_quotation_a_passage_holds_is_found_with_its_brackets() -> None:
+    text = 'They say "A recent work by [52] makes a broader" claim [1], and "a later work by [53] says" [1].'
+
+    found = [text[opening + 1:closing] for opening, closing in quoted_from(text, [DESI])]
+
+    assert found == ["A recent work by [52] makes a broader"]
+
+
+def test_brackets_inside_a_quotation_are_masked_for_readers_of_markers() -> None:
+    text = 'They write "the method of [52] fails at scale" [1]. A short "x [2]" stays [3].'
+
+    masked = mask_quoted_brackets(text)
+
+    assert len(masked) == len(text)
+    assert '"the method of {52} fails at scale" [1].' in masked
+    assert '"x [2]"' in masked  # under three words, so not a quotation
+    assert masked.endswith("stays [3].")
+
+
+def test_a_substitution_passes_over_what_lies_inside_the_spans_given() -> None:
+    text = 'Flux "threads the ring, as [2] showed" here [2].'
+
+    replaced = sub_outside(re.compile(r"\[(\d+)\]"), lambda match: "[9]", text, quotations(text))
+
+    assert replaced == 'Flux "threads the ring, as [2] showed" here [9].'

@@ -259,3 +259,22 @@ def test_a_section_says_when_its_quotation_marks_were_changed() -> None:
 
     assert "1 quoted phrase(s) in this section were not word for word in a cited passage" in markdown
     assert "1 quoted phrase(s) in this section come from a different source than their marker names" in markdown
+
+
+def test_merging_the_references_leaves_a_quoted_reference_number_alone() -> None:
+    """Sections are renumbered into one bibliography, and that pass rewrote quoted text too."""
+    first = ReportSection(
+        heading="What is flux?",
+        answer=Answer(question="What is flux?", text="Flux threads rings [1].",
+                      citations=[citation("chunk-a", "2608.11111v1")], rejected=[]),
+    )
+    second = ReportSection(
+        heading="What fails?",
+        answer=Answer(question="What fails?",
+                      text='As they put it, "the method of [1] fails at every scale" [1].',
+                      citations=[citation("chunk-b", "2608.22222v1")], rejected=[]),
+    )
+
+    markdown = render_markdown(Report(topic="flux", sections=[first, second], generated_at="2026-11-06"))
+
+    assert '"the method of [1] fails at every scale" [2].' in markdown

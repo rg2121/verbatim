@@ -194,3 +194,21 @@ def test_an_unreachable_model_degrades_to_the_mechanical_half() -> None:
 
     assert found.unaddressed == () and found.conflicts == ()
     assert found.action == "accept"
+
+
+def test_a_bracket_inside_a_quotation_is_not_a_marker() -> None:
+    """A paper's own reference, quoted, does not make the sentence quoting it cited."""
+    text = 'The authors write that "the method of [2] fails at every scale tried" without citing it.'
+
+    assert uncited_sentences(text) == (text,)
+
+
+def test_a_quoted_reference_is_not_measured_as_the_citation_it_numbers() -> None:
+    class Cited:
+        def __init__(self, chunk_id: str) -> None:
+            self.chunk_id = chunk_id
+
+    text = 'They report that "the method of [2] fails at every scale tried" on every benchmark.'
+    answer = Answer(question="q", text=text, citations=[Cited("aaa"), Cited("bbb")], rejected=[])
+
+    assert unbacked_sentences(answer, {"aaa": "", "bbb": "unrelated words entirely"}) == ()

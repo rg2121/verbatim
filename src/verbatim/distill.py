@@ -285,6 +285,11 @@ def keep(
         # A marker for a passage never cited becomes [unverified] with nothing rejected.
         tally.reject("an unverified marker in the text")
         return None
+    if answer.quotation_problems:
+        # Words the writer put in quotation marks were not the passage's, so the
+        # check changed the answer: what it wrote unaided was wrong.
+        tally.reject("a quotation not word for word")
+        return None
     if not answer.citations:
         tally.reject("no citation")
         return None

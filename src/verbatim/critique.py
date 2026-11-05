@@ -14,6 +14,7 @@ import re
 from verbatim.answers import Answer
 from verbatim.contracts import Critique, Gathered
 from verbatim.expansion import strip_list_marker
+from verbatim.quotations import mask_quoted_brackets
 
 # Sentence boundaries: imperfect on "e.g.", good enough to count markers by.
 SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z(])")
@@ -54,24 +55,43 @@ CONFLICT_SYSTEM = (
 )
 
 
+def sentences(text: str) -> list[tuple[str, str]]:
+    """Each sentence as written, and as its markers read.
+
+    A bracket inside a quotation is the quoted text's own, such as a paper's
+    reference number, so the second copy has it masked. Both split alike.
+    """
+    written = text.strip()
+    read = mask_quoted_brackets(written)
+    pieces, start = [], 0
+    for boundary in SENTENCE.finditer(read):
+        pieces.append((written[start:boundary.start()], read[start:boundary.start()]))
+        start = boundary.end()
+    pieces.append((written[start:], read[start:]))
+    return pieces
+
+
 def uncited_sentences(text: str) -> tuple[str, ...]:
     """Sentences making a claim with no citation marker. Needs no model."""
     uncited = []
-    for sentence in SENTENCE.split(text.strip()):
+    for sentence, read in sentences(text):
         cleaned = sentence.strip()
         if len(cleaned.split()) < MIN_CLAIM_WORDS:
             continue
-        if not MARKER.search(cleaned):
+        if not MARKER.search(read):
             uncited.append(cleaned)
     return tuple(uncited)
 
 
+def _cited(text: str) -> list[tuple[str, str]]:
+    return [
+        (sentence.strip(), read.strip()) for sentence, read in sentences(text)
+        if MARKER.search(read) and "[unverified]" not in read
+    ]
+
+
 def cited_sentences(text: str) -> tuple[str, ...]:
-    return tuple(
-        sentence.strip()
-        for sentence in SENTENCE.split(text.strip())
-        if MARKER.search(sentence) and "[unverified]" not in sentence
-    )
+    return tuple(sentence for sentence, _read in _cited(text))
 
 
 def unbacked_sentences(
@@ -84,14 +104,14 @@ def unbacked_sentences(
     but too few of them show that the sentence is not resting on the passage.
     """
     unbacked = []
-    for sentence in cited_sentences(answer.text):
-        plain = re.sub(rf"\s*{MARKER.pattern}", "", sentence)
+    for sentence, read in _cited(answer.text):
+        plain = re.sub(rf"\s*{MARKER.pattern}", "", read)
         words = _content_words(plain)
         if len(plain.split()) < MIN_CLAIM_WORDS or not words:
             continue
         cited = " ".join(
             texts.get(answer.citations[int(number) - 1].chunk_id, "")
-            for number in CITED.findall(sentence)
+            for number in CITED.findall(read)
             if 0 < int(number) <= len(answer.citations)
         )
         if len(words & _content_words(cited)) / len(words) < floor:

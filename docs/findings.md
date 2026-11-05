@@ -388,7 +388,8 @@ and the scripts of earlier experiments write first drafts so that a rerun compar
 what they report. The `eval-answers` table at the top of this section predates it.
 
 **Quotation marks in an answer's own text were never checked; a check for them
-was built and ships off (2026-11-05), having failed its rule by its letter.** The
+was built and is on (2026-11-05), having failed its rule by its letter on a fault
+in renumbering, which was then fixed.** The
 quote check proves the words on each `CITE` line, but answers also put words in
 quotation marks in their prose, and a reader takes those as quotes too. The
 review's header claimed every quotation was verified character for character; it
@@ -417,10 +418,14 @@ wrong marks, but one answer, in two arms, quotes a paper's own reference, "A
 recent work by [52] makes a broader... claim", and marker renumbering had already
 rewritten "[52]" as "[unverified]". Those quoted words run across a marker, so
 the rule says no. Unquoting them was right, since the text no longer said what
-the paper says: the fault is in renumbering, which rewrites any bracketed number,
-even inside a quotation. `VERBATIM_CHECK_QUOTATIONS=1` turns the check on, and
-`verify_citations` applies it to a client's answer either way, since that
-changes no answer of Verbatim's.
+the paper says: the fault is in renumbering, which rewrote any bracketed number,
+even inside a quotation. That answer is the only one of the 2,346 saved with a
+numbered bracket inside a quotation. Renumbering now keeps a bracket inside a
+quotation a retrieved passage holds word for word, and what reads markers after
+it, the sentence checks, the review's merged bibliography and answer scoring,
+passes over one. With that fixed the check was turned on at Rishab's word, the
+failure being the fault it exposed rather than one of its own. `verify_citations`
+applies it to a client's answer either way.
 
 ## What was tried and rejected
 

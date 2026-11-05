@@ -967,6 +967,46 @@ def test_with_the_quotation_check_off_the_prose_is_left_as_written(tmp_path: Pat
     assert answer.quotation_problems == []
 
 
-def test_the_quotation_check_is_off_until_its_rule_passes() -> None:
-    """Its rule failed by its letter on saved answers (evals/quotation_check.py)."""
-    assert config.CHECK_QUOTATIONS is False
+def test_the_quotation_check_is_on_unless_turned_off() -> None:
+    assert config.CHECK_QUOTATIONS is True
+
+
+DESI = (
+    "A recent work by [52] makes a broader, and apparently stronger claim: that the "
+    "galaxy distribution is anisotropic."
+)
+QUOTING_DESI = 'They note that "A recent work by [52] makes a broader, and apparently stronger claim" [1].'
+
+
+class _OneCitation:
+    chunk_id = "aaa"
+
+
+def test_a_papers_own_reference_inside_a_quotation_is_left_as_written() -> None:
+    """Renumbering read a quoted "[52]" as a marker without a citation and wrote [unverified] into the quote."""
+    assert renumber_markers(QUOTING_DESI, [_OneCitation()], {1: 1}, passages=[DESI]) == QUOTING_DESI
+
+
+def test_a_marker_inside_quotation_marks_no_passage_holds_is_still_a_marker() -> None:
+    text = 'They note that "a broader claim than any made before it [2]" here.'
+
+    assert renumber_markers(text, [_OneCitation()], {2: 1}, passages=[DESI]) == (
+        'They note that "a broader claim than any made before it [1]" here.'
+    )
+
+
+def test_a_quoted_reference_survives_the_whole_check(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(config, "CHECK_QUOTATIONS", True)
+    with chunked_corpus(tmp_path, {"2608.11111v1": [DESI]}) as corpus:
+        chunk = list(corpus.iter_chunks())[0]
+        papers = corpus.papers_by_id(["2608.11111v1"])
+    payload = {
+        "answer": QUOTING_DESI,
+        "citations": [{"marker": 1, "chunk_id": chunk.chunk_id,
+                       "quoted_text": "makes a broader, and apparently stronger claim"}],
+    }
+
+    answer = answer_from_payload("q", [ChunkMatch(chunk=chunk, score=1.0, snippet="")], payload, papers)
+
+    assert answer.text == QUOTING_DESI
+    assert answer.quotation_problems == []

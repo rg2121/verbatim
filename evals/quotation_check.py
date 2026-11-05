@@ -37,6 +37,11 @@ work by [52] makes a broader... claim", which marker renumbering had already
 rewritten as "[unverified]". Those quoted words run across a marker, so the
 second condition fails by its letter, and the check ships off. Unquoting them was
 right, since the text no longer said what the paper says (docs/findings.md).
+
+Turned on the same day at Rishab's word, once renumbering was fixed to keep a
+bracket inside a quotation a passage holds word for word: the failure was the
+fault the check exposed, not one of its own. A rerun over these saved answers
+still reports it, since they were written before the fix.
 """
 
 from __future__ import annotations
