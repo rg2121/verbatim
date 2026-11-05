@@ -265,7 +265,7 @@ relevance - and far too weak to gate anything. It is the evidence for keeping
 verification a substring check.
 
 **Sending a flagged answer back with what the check found is on by default
-(2026-11-04), having won its first test, failed its rule, been fixed and passed
+(2026-11-05), having won its first test, failed its rule, been fixed and passed
 on new questions.** A draft the quote check flags goes back to the model once:
 which quote is not in which passage and the closest words that are, which marker
 has no citation, which sentence has no marker. A draft that cites nothing is an
