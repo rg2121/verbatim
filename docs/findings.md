@@ -26,7 +26,7 @@ negative result is recorded, not deleted.
 | `evals/retrieval.jsonl` | 87 | alongside the system | development |
 | `evals/heldout.jsonl` | 93 | blind, from title and abstract, frozen before scoring | an honest estimate |
 | `evals/heldout-generated.jsonl` | 400 | the same way, by a model | a larger held-out sample, always reported apart |
-| `evals/heldout-generated-2.jsonl` | 240 | the same way, from papers no other key names | kept back to retest reflection |
+| `evals/heldout-generated-2.jsonl` | 240 | the same way, from papers no other key names | retesting reflection, scored once |
 | `evals/conversational.jsonl` | 30 | blind, two turns | whether a follow-up still finds its paper |
 | `evals/breadth/questions.jsonl` | 24 | from two linked abstracts, under [a pre-registered protocol](../evals/breadth/PROTOCOL.md) | whether `team` earns its cost |
 | `evals/gate.jsonl` | 12 | against the committed sample | a CI tripwire, floor mrr 0.90 |
@@ -264,13 +264,14 @@ signal - entailment is a question a model can partly answer, unlike
 relevance - and far too weak to gate anything. It is the evidence for keeping
 verification a substring check.
 
-**Sending a flagged answer back with what the check found wins by a wide
-margin, and stays off (2026-11-03).** With `VERBATIM_REFLECT`, a draft the quote
-check flags goes back to the model once: which quote is not in which passage
-and the closest words that are, which marker has no citation, which sentence
-has no marker. The repair replaces the draft only if it still cites every
-passage the draft cited with a verified quote and has fewer problems. A draft
-that cites nothing is an abstention and is never sent back.
+**Sending a flagged answer back with what the check found is on by default
+(2026-11-04), having won its first test, failed its rule, been fixed and passed
+on new questions.** A draft the quote check flags goes back to the model once:
+which quote is not in which passage and the closest words that are, which marker
+has no citation, which sentence has no marker. A draft that cites nothing is an
+abstention and is never sent back. In the first test, the repair replaced the
+draft if it still cited every passage the draft cited with a verified quote and
+had fewer problems.
 
 All three arms start from one draft per question, and the control is the same
 prompt asked again under the same keep rule, because against the plain draft
@@ -298,14 +299,14 @@ interval +9 to +16, no resample at or below zero), on hand-written questions
 kept repair leaves 93% of the draft's sentences word for word; a kept second
 asking leaves none. Answers stay the same length, 84 words.
 
-It still fails its rule, by one answer: 3 against plain's 2 say the passages
+It still failed its rule, by one answer: 3 against plain's 2 say the passages
 lack the answer while citing them. The third is a fault in the guard, not in
 the answers. Its draft already said so, and the repair fixed the rejected quote
 beside those words, which is what made it count as citing. No repair added
 those words to a draft, and by the words alone, citing or not, both arms have 7.
-The guard is to be corrected before the next test, not argued away for this one.
+The guard was corrected before the next test, not argued away for this one.
 
-The better reason to leave it off is one the clean count cannot see: **a
+The better reason to leave it off was one the clean count cannot see: **a
 sentence with no marker can be made clean by giving it one.** Kept repairs marked
 68 such sentences, 54 of them by reusing a quote the draft already had. Against
 the sentences first drafts marked themselves, a median of 69% of their content
@@ -328,9 +329,9 @@ with only unmarked sentences 27-6. Of 12 of the 75 newly written quotes read one
 by one, 10 say what their sentences claim, 2 say part of it, and none copied an
 unrelated hint.
 
-`VERBATIM_REFLECT` stays off. What it needs next is a keep rule that does not
-count a marker as a fix when the passage does not share the sentence's words,
-tested on questions this run has not seen.
+So it stayed off, until a keep rule that does not count a marker as a fix when
+the passage does not share the sentence's words had been tested on questions this
+run had not seen.
 
 One tuning idea was tried on these spent questions and dropped. Telling the
 writer which passage holds most of an unmarked sentence's words, or that none
@@ -339,6 +340,52 @@ does, took clean repairs of the 62 drafts with only unmarked sentences from 41 t
 detail this" deleted, another such sentence given a citation, and two weak markers
 that cleared the floor by citing another passage. Repairs that dropped a verified
 passage rose from 0 to 5.
+
+**The retest passed.** The keep rule now also discards a repair with more unbacked
+sentences than its draft: marked sentences with under half of their content words
+in the passages they cite. A clean answer may have none, and the guard counts only
+words a repair added. That rule and 240 new questions were committed before any arm
+ran, and scored once.
+
+| out of 240 | plain | asked again | sent back with findings |
+|---|---|---|---|
+| **clean answer** | 138 | 175 | **203** |
+| clean, with 60% of words shared | 124 | 160 | 174 |
+| clean, with 70% of words shared | 106 | 133 | 142 |
+| at least one verified citation | 234 | 239 | 240 |
+| every claim carries a marker | 182 | 199 | 223 |
+| citations rejected | 59 | 29 | 10 |
+| an `[unverified]` marker | 60 | 26 | 18 |
+| an unbacked sentence | 8 | 4 | 7 |
+| cited the paper the question was written from | 226 | 230 | 232 |
+| says the passages lack the answer, while citing them | 1 | 1 | 1 |
+| extra seconds a question, on a 63 s draft | | 29 | 33 |
+
+It beats the control 38 to 10 (p < 0.0001, mean difference +12 points, 95% interval
++6 to +17, no resample at or below zero), and neither repairing arm added words
+disowning the evidence. The check flags 99 of the 240 drafts. The second answer is
+kept 83 times against the control's 52, and the new rule discards 11 against 5. A
+kept repair leaves 93% of the draft's sentences word for word.
+
+Passing made it eligible, and the 140 sentences kept repairs newly cited were read
+one by one before the default changed. About 110 are sound. About 18 are held by
+their passage, but the quote a reader sees is another from it, since a second quote
+from one passage adds no reference; first drafts do this as often (23% of either's
+sentences share under 30% of their content words with the quote shown). About 6 are
+weak or only partly supported. About 5 are not backed at all: "Yes, the passages
+state that dependency topology does correlate with functional organization across
+various domains [1]" cites "We ask whether dependency topology correlates with
+functional load-bearing organization". Those are what the win costs.
+
+The evidence has limits. The questions are all generated and repeat their papers'
+terms, which makes words easier to share. Shared words are a floor: a sentence on
+the same topic saying the opposite passes, and a sound one reworded can fail. It was
+measured on single questions answered as `ask` answers them; review sections,
+planned questions and teams make the same call and were not measured separately.
+Training examples and the gap falsifier stay on first drafts, where a repair would
+turn a rejected example into training data and a failed quote into a refutation,
+and the scripts of earlier experiments write first drafts so that a rerun compares
+what they report. The `eval-answers` table at the top of this section predates it.
 
 ## What was tried and rejected
 
@@ -646,6 +693,14 @@ into its state.
   line catches 7 of 9 questions on uncovered subjects and 0 of 4 whose subject
   is covered but unanswered - the second kind is not a retrieval problem, and
   nothing tried detects it.
+- **A repair can delete an honest caveat.** A sentence saying the passages do not
+  give something counts as an unmarked claim, so it is flagged, and a repair may
+  remove it. It is rare on answerable questions: by a rough pattern, 11 of 488
+  drafts had one, and each repairing arm deleted one. Questions the corpus cannot
+  answer have not been tested.
+- **A marker shows the first quote from its passage**, which may not be the one
+  that states the sentence, because a second quote from a passage is merged into
+  the first reference.
 - **The corpus starts as a slice of recent work.** `grow` fills in what it
   cites - GPT-4, Adam, BERT and PPO were each cited dozens of times and absent
   until it ran - but "what is a tensor" still has no defining paper to anchor to.

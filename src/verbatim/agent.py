@@ -65,7 +65,7 @@ def gather(
             result = {"error": str(error)}
         trace.steps.append((name, arguments))
 
-        for item in result if isinstance(result, list) else [result]:
+        for item in _rows(result):
             if isinstance(item, dict) and "chunk_id" in item:
                 chunk = corpus.chunks_by_id([item["chunk_id"]])
                 if chunk:
@@ -134,13 +134,32 @@ SYSTEM_PROMPT = (
 )
 
 
-def _summarise(result: Any) -> str:
-    """Feed a compact form of the result back, not whole passages."""
+def _rows(result: Any) -> list[Any]:
+    """A tool result's rows: a list, the passages read_pages returns, or one record."""
     if isinstance(result, list):
-        return f"{len(result)} result(s): " + json.dumps(
-            [{k: v for k, v in item.items() if k != "text"} for item in result[:10]]
-        )[:1200]
-    return json.dumps(result)[:1200]
+        return result
+    if isinstance(result, dict) and "passages" in result:
+        return result["passages"]
+    return [result]
+
+
+def _summarise(result: Any) -> str:
+    """Feed a compact form of the result back: not whole passages, and not what only a client reads.
+
+    The extra fields stay out of a prompt that was measured without them.
+    """
+    if isinstance(result, dict) and "passages" not in result:
+        return json.dumps({k: v for k, v in result.items() if k != "total"})[:1200]
+    if result is None:
+        return json.dumps(result)
+    rows = _rows(result)
+    return f"{len(rows)} result(s): " + json.dumps([_brief_row(row) for row in rows[:10]])[:1200]
+
+
+def _brief_row(row: dict[str, Any]) -> dict[str, Any]:
+    if "chunk_id" in row:
+        return {k: row[k] for k in ("chunk_id", "arxiv_id", "page", "section") if k in row}
+    return {k: v for k, v in row.items() if k != "text"}
 
 
 def _format_metadata(records: list[dict[str, Any]]) -> str:

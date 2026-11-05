@@ -36,6 +36,8 @@ def main() -> int:
              "the supervisor. Without it, a route that differs proves nothing",
     )
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
     arms = [a.strip() for a in args.arms.split(",")]
     if len(arms) != 2:
         parser.error("--arms takes exactly two, comma-separated")

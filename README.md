@@ -14,7 +14,9 @@ against its source, and writes literature reviews the same way.
 
 - **Verified citations.** Every quote is checked character for character
   against the passage it cites. One that fails is rejected and its marker
-  becomes `[unverified]`. No model is asked whether a citation is good.
+  becomes `[unverified]`. No model is asked whether a citation is good. A flagged
+  answer goes back to the model once, told what the check found, and the repair
+  is checked the same way.
 - **Traceable sources.** Citations pin the exact arXiv version, the page or
   section, character offsets, source URL and licence.
 - **Hybrid retrieval.** Keyword and vector search fused by rank, plus a
@@ -118,7 +120,7 @@ Every command takes `--help`: `uv run verbatim <command> --help`.
 | | `gaps` | claims of what the literature lacks, which another agent tries to refute |
 | **Evaluate** | `eval`, `eval-answers`, `author-cases` | score retrieval, score answers, write held-out questions |
 | **Share** | `serve` | the web page and JSON API on `127.0.0.1:8000` |
-| | `mcp` | the corpus as MCP tools, over stdio |
+| | `mcp` | the corpus and the quote check as MCP tools, over stdio; `ask` and `report` too, with `--llm` |
 | | `sample` | export a small self-contained corpus |
 | | `distill` | training examples from openly licensed papers only |
 
@@ -140,11 +142,31 @@ questions, and a review panel that shows each section as it is written. The
 JSON routes are documented at `/docs` once it runs. It binds to loopback unless
 `--host` says otherwise.
 
-**`mcp`**, from an MCP client's config:
+**`mcp`** serves the corpus to another assistant. Give the client full paths: it
+starts the server from a folder of its own, often without `uv` on its `PATH`, and
+the server refuses to start without a corpus. For Claude Code:
+
+```bash
+claude mcp add --scope user verbatim -- /full/path/to/uv --directory /path/to/verbatim run verbatim mcp
+```
+
+For a client's JSON config, such as Claude Desktop's:
 
 ```json
-{"mcpServers": {"verbatim": {"command": "uv", "args": ["run", "verbatim", "mcp"], "cwd": "/path/to/verbatim"}}}
+{"mcpServers": {"verbatim": {"command": "/full/path/to/uv", "args": ["--directory", "/path/to/verbatim", "run", "verbatim", "mcp"]}}}
 ```
+
+The client's model writes its own answers, so nothing checks them unless it asks:
+`verify_citations` runs the same quote check as `ask`, and `export_citations`
+renders the references. Tool calls are logged beside the corpus, and `verbatim
+runs --mcp` shows them.
+
+Add `--llm` and a local Ollama model, as in `... run verbatim mcp --llm
+gemma4:e4b-mlx`, and the client can also run `ask` and `report` themselves,
+answered on this machine and checked as the commands check them. Each returns a
+job id at once and `get_job` collects the result, since an answer takes minutes
+and some clients give up on a call after one. A cloud model is refused, and a
+job writes a ledger row, as the command would.
 
 **In a container:** `docker compose run --rm verbatim search "..." --state
 sample/corpus.db`, `docker compose up verbatim-web` for the page, and

@@ -1,15 +1,19 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from verbatim.citations import (
     Citation,
     citation_from_chunk,
+    export_references,
     format_authors,
     render_bibliography,
     render_citation,
 )
 from verbatim.chunking import Chunk
 
-from helpers import chunked_corpus, paper
+from helpers import chunked_corpus, paper, titled_paper
 
 
 def chunk(arxiv_id: str = "2608.05440v1") -> Chunk:
@@ -123,3 +127,85 @@ def test_a_pdf_citation_still_cites_a_page() -> None:
     from verbatim.citations import locator
 
     assert locator(_citation(page_number=7, section_path="2 Method")) == "p. 7"
+
+
+LICENCE = "http://creativecommons.org/licenses/by/4.0/"
+AWKWARD = "Fish & Chips: {a} 50% of #1 at $2_x ~ ^y \\ z"
+
+
+def _exported(fmt: str, *citations: Citation, title: str = "A Paper") -> str:
+    papers = {cited.arxiv_id: titled_paper(cited.arxiv_id, title) for cited in citations}
+    return export_references(list(citations), papers, fmt)
+
+
+def test_markdown_references_name_the_licence() -> None:
+    lines = _exported(
+        "markdown", _citation(license_url=LICENCE), _citation(arxiv_id="2608.05441v2", chunk_id="def")
+    ).splitlines()
+
+    assert lines[0].startswith('[1] Lovelace, "A Paper", arXiv:2608.05440v1, p. 1.')
+    assert lines[0].endswith(f"Licence: {LICENCE}.")
+    assert lines[1].startswith("[2] ")
+    assert lines[1].endswith("Licence: not reported.")
+
+
+def test_bibtex_cites_the_exact_version_with_the_locator_and_licence() -> None:
+    entry = _exported(
+        "bibtex",
+        _citation(source_kind="html", section_path="3 Model > 3.3 YaRN", license_url=LICENCE),
+    )
+
+    assert entry.startswith("@misc{arxiv:2608.05440v1,")
+    assert "title = {A Paper}" in entry
+    assert "author = {Ada Lovelace}" in entry
+    assert "year = {2026}" in entry
+    assert "eprint = {2608.05440v1}" in entry
+    assert "archivePrefix = {arXiv}" in entry
+    assert "primaryClass = {cs.LG}" in entry
+    assert "url = {https://arxiv.org/abs/2608.05440v1}" in entry
+    assert "section 3.3 YaRN" in entry
+    assert "Licence" in entry
+
+
+def test_bibtex_has_one_entry_per_paper_with_every_locator() -> None:
+    entry = _exported(
+        "bibtex", _citation(page_number=2, chunk_id="a"), _citation(page_number=9, chunk_id="b"),
+    )
+
+    assert entry.count("@misc{") == 1
+    assert "p. 2; p. 9" in entry
+
+
+def test_bibtex_survives_a_title_with_its_special_characters() -> None:
+    """One unbalanced brace in a title breaks the whole .bib file."""
+    entry = _exported("bibtex", _citation(), title=AWKWARD)
+    title = next(line for line in entry.splitlines() if "title =" in line)
+
+    assert title.count(r"\{") == title.count(r"\}") == 1
+    for special in ("&", "%", "#", "$", "_"):
+        assert f"\\{special}" in title
+    assert entry.count("{") - entry.count(r"\{") == entry.count("}") - entry.count(r"\}")
+
+
+def test_an_old_style_id_makes_a_usable_bibtex_key() -> None:
+    entry = _exported("bibtex", _citation(arxiv_id="cs/0301001v1"))
+
+    assert entry.startswith("@misc{arxiv:cs-0301001v1,")
+
+
+def test_csl_json_parses_and_names_its_authors() -> None:
+    (item,) = json.loads(_exported("csl-json", _citation(license_url=LICENCE), title=AWKWARD))
+
+    assert item["id"] == "arxiv:2608.05440v1"
+    assert item["type"] == "article"
+    assert item["title"] == AWKWARD
+    assert item["author"] == [{"family": "Lovelace", "given": "Ada"}]
+    assert item["issued"] == {"date-parts": [[2026, 8, 1]]}
+    assert item["URL"] == "https://arxiv.org/abs/2608.05440v1"
+    assert item["number"] == "arXiv:2608.05440v1"
+    assert "p. 1" in item["note"] and LICENCE in item["note"]
+
+
+def test_an_unknown_format_is_refused() -> None:
+    with pytest.raises(ValueError, match="format must be"):
+        _exported("word", _citation())

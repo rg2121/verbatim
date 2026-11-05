@@ -49,6 +49,8 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=OUT)
     parser.add_argument("--llm")
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
 
     if not committed_unchanged(args.questions):
         raise SystemExit(

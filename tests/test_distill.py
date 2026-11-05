@@ -11,6 +11,7 @@ from verbatim.answers import Answer, RejectedCitation
 from verbatim.citations import Citation
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
 from verbatim.distill import (
+    build_example,
     Tally,
     attributions,
     source_papers,
@@ -151,6 +152,37 @@ def test_an_unverified_quote_rejects_the_whole_example(tmp_path: Path) -> None:
 
     assert example is None
     assert tally.rejected == {"a quote failed verification": 1}
+
+
+def test_a_flagged_draft_is_not_repaired_into_training_data(tmp_path: Path, monkeypatch) -> None:
+    """A rejected draft stays rejected: an example is what the writer got right unaided."""
+    from verbatim import config
+    monkeypatch.setattr(config, "REFLECT", True)
+
+    class Repairable:
+        revised = 0
+
+        def complete(self, system, user, schema):
+            chunk_id = user.split('chunk_id="')[1].split('"')[0]
+            self.chunk_id = chunk_id
+            return {"answer": "Dielectric loss dominates [1].", "citations": [
+                {"marker": 1, "chunk_id": chunk_id, "quoted_text": "words in no passage at all"},
+            ]}
+
+        def revise(self, system, user, schema):
+            self.revised += 1
+            return {"answer": "Dielectric loss dominates [1].", "citations": []}
+
+    with seeded(tmp_path, {"2608.00001v1": "open"}) as corpus:
+        writer = Repairable()
+        tally = Tally()
+        example = build_example(
+            corpus, StubEmbedder(), writer, "what causes dielectric loss?",
+            passages=1, max_per_paper=1, generator_model="m", tally=tally,
+        )
+
+    assert writer.revised == 0
+    assert example is None and tally.rejected == {"a quote failed verification": 1}
 
 
 def test_an_answer_with_no_citation_is_not_an_example(tmp_path: Path) -> None:

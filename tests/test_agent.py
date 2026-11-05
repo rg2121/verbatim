@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from verbatim.agent import answer_question, gather
+from verbatim.agent import _summarise, answer_question, gather
+from verbatim.tools import TOOL_SCHEMAS, get_citations, read_pages
 
 from helpers import chunked_corpus, paper
 
@@ -100,3 +101,42 @@ def test_an_empty_metadata_result_is_not_reported_as_no_passages(tmp_path: Path)
     assert "no records matching" in answer.text
     assert "list_papers" in answer.text
     assert "passages" not in answer.text
+
+
+def test_a_bad_call_goes_back_to_the_model_with_what_was_wrong(tmp_path: Path) -> None:
+    """Validation raises, and the loop feeds that back so the model can correct itself."""
+
+    class Remembering(ScriptedCaller):
+        def choose_tool(self, system, messages, tools):
+            self.messages = list(messages)
+            return super().choose_tool(system, messages, tools)
+
+    with corpus(tmp_path) as c:
+        caller = Remembering([("list_papers", {"since": "last week"}), ("list_papers", {"limit": 1})])
+        gather(c, None, caller, "what is new?")
+
+    assert "since must be" in str(caller.messages)
+
+
+def test_the_local_model_is_told_only_what_it_was_told_before(tmp_path: Path) -> None:
+    """Fields added for MCP clients stay out of a prompt that was measured without them."""
+    with corpus(tmp_path) as c:
+        read = read_pages(c, "2608.11111v1", [1])
+        citers = get_citations(c, "2608.11111v1")
+
+    passages = _summarise(read)
+    assert passages.startswith("1 result(s): ")
+    assert '"chunk_id"' in passages and '"arxiv_id"' in passages and '"page": 1' in passages
+    for added in ("locator", "license_url", "next_skip", "position", "Magnetic flux"):
+        assert added not in passages
+    assert '"total"' not in _summarise(citers)
+    assert '"papers"' in _summarise(citers)
+
+
+def test_the_local_model_is_offered_only_the_tools_it_had() -> None:
+    """A small model gets one more way to choose wrong with every tool."""
+    assert {schema["name"] for schema in TOOL_SCHEMAS} == {
+        "search_chunks", "get_paper", "list_papers", "get_citations", "read_pages",
+    }
+    read = next(schema for schema in TOOL_SCHEMAS if schema["name"] == "read_pages")
+    assert set(read["parameters"]["properties"]) == {"arxiv_id", "pages"}

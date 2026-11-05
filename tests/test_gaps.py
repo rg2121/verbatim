@@ -111,6 +111,40 @@ def test_a_refutation_has_to_be_a_verified_quote(tmp_path: Path) -> None:
     assert genuine.citation.arxiv_id == "2608.11111v1"
 
 
+def test_a_falsifier_is_not_sent_back_to_find_a_quote(tmp_path: Path, monkeypatch) -> None:
+    """A repair could talk a failed quote into a refutation the search never found."""
+    from verbatim import config
+
+    monkeypatch.setattr(config, "REFLECT", True)
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
+
+        class Repairable:
+            revised = 0
+
+            def complete(self, system, user, schema):
+                return cite(chunk.chunk_id, "Magnetic flux threads every ring.")
+
+            def judge(self, system, user):
+                return "flux"
+
+            def revise(self, system, user, schema):
+                self.revised += 1
+                return cite(chunk.chunk_id, "Magnetic flux threads the ring.")
+
+        def four_queries(system, user):
+            return "".join(
+                f"QUERY: flux {n}\n" for n in ("ring", "thread", "magnet", "charge")
+            )
+
+        falsifier = Repairable()
+        gap = Gap(topic="flux", claim="no paper measures flux in cold rings")
+        finding = falsify(corpus, StubEmbedder(), falsifier, four_queries, gap)
+
+    assert falsifier.revised == 0
+    assert finding.verdict != REFUTED
+
+
 def test_effort_is_counted_not_judged() -> None:
     """Whether an attempt was genuine is arithmetic, by contract."""
     thin = Effort(queries=("a", "b"), papers=tuple(f"p{n}" for n in range(20)),

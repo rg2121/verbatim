@@ -131,6 +131,83 @@ def test_ask_reports_a_model_that_ignored_the_format(tmp_path: Path) -> None:
     assert [name for name, _ in events][-1] == "done"
 
 
+def _repairable_client(tmp_path: Path, monkeypatch, draft, revise) -> tuple[TestClient, str]:
+    """A client whose model writes `draft` and answers a repair with `revise(chunk_id)`."""
+    from verbatim import config
+
+    monkeypatch.setattr(config, "REFLECT", True)
+    with chunked_corpus(
+        tmp_path, {"2608.11111v1": ["Superconducting qubits decohere quickly."]}
+    ) as store:
+        chunk_id = list(store.iter_chunks())[0].chunk_id
+
+    class Repairing(StreamingScript):
+        def revise(self, system, user, schema):
+            return revise(chunk_id)
+
+    app = create_app(
+        tmp_path / "corpus.db", completion=Repairing(draft(chunk_id)), encoder=StubEncoder()
+    )
+    return TestClient(app), chunk_id
+
+
+def _fixed(chunk_id: str) -> dict:
+    return {"answer": "They decohere quickly [1].", "citations": [{
+        "marker": 1, "chunk_id": chunk_id, "quoted_text": "Superconducting qubits decohere quickly.",
+    }]}
+
+
+def test_a_flagged_draft_tells_the_page_before_the_repair_runs(tmp_path: Path, monkeypatch) -> None:
+    """A repair takes about as long as the draft, and the page would otherwise sit still."""
+    app, _ = _repairable_client(
+        tmp_path, monkeypatch,
+        lambda chunk_id: ["ANSWER: They decohere quickly [1].\n",
+                          f"CITE [1] {chunk_id} :: Qubits decohere very quickly."],
+        _fixed,
+    )
+
+    names = [name for name, _ in sse_events(app.get("/api/ask", params={"q": "qubits"}).text)]
+
+    assert names.index("repairing") < names.index("answer")
+
+
+def test_a_draft_the_check_passes_is_not_announced_as_repaired(tmp_path: Path, monkeypatch) -> None:
+    def never(chunk_id):
+        raise AssertionError("a clean draft is not sent back")
+
+    app, _ = _repairable_client(
+        tmp_path, monkeypatch,
+        lambda chunk_id: ["ANSWER: They decohere quickly [1].\n",
+                          f"CITE [1] {chunk_id} :: Superconducting qubits decohere quickly."],
+        never,
+    )
+
+    names = [name for name, _ in sse_events(app.get("/api/ask", params={"q": "qubits"}).text)]
+
+    assert "repairing" not in names and "answer" in names
+
+
+def test_a_model_that_ignores_the_format_twice_is_reported(tmp_path: Path, monkeypatch) -> None:
+    from verbatim.answers import FormatError
+
+    def refuses(chunk_id):
+        raise FormatError("did not answer in the expected format", "Still an essay.")
+
+    app, _ = _repairable_client(
+        tmp_path, monkeypatch, lambda chunk_id: ["I refuse to follow formats."], refuses,
+    )
+
+    events = sse_events(app.get("/api/ask", params={"q": "qubits"}).text)
+
+    failed = next(payload for name, payload in events if name == "failed")
+    assert "format" in failed["message"]
+    assert [name for name, _ in events][-1] == "done"
+
+
+def test_the_page_shows_a_repair_while_it_runs() -> None:
+    assert 'addEventListener("repairing"' in PAGE
+
+
 def test_with_reflection_on_the_final_answer_is_the_repaired_one(tmp_path: Path, monkeypatch) -> None:
     """The page swaps the streamed draft for the final answer, so a repair lands there."""
     from verbatim import config

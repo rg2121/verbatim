@@ -257,7 +257,8 @@ def build_example(
     if not matches:
         tally.reject("no eligible passages")
         return None
-    answer = answer_from_matches(corpus, completion, question, matches)
+    # First drafts only: a repair would turn a rejected draft into an example.
+    answer = answer_from_matches(corpus, completion, question, matches, reflection=False)
     return keep(answer, matches, corpus,
                 generator_model=generator_model, classes=classes, tally=tally)
 

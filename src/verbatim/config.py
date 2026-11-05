@@ -88,10 +88,9 @@ EMBED_WITH_CONTEXT = _text("VERBATIM_EMBED_WITH_CONTEXT", "0") not in {"0", "fal
 # or "tools" (Ollama tool calling, measured no better).
 ANSWER_PROTOCOL = _text("VERBATIM_ANSWER_PROTOCOL", "lines")
 # Send an answer the quote check flags back once, with what the check found,
-# and keep the repair only if it is better. Off: it won on clean answers, but a
-# repair could mark a sentence with a quote that did not back it, and the fix
-# for that is untested.
-REFLECT = _text("VERBATIM_REFLECT", "0") not in {"0", "false", "False", ""}
+# and keep the repair only if it is better. On: it won on questions kept back for
+# it. A flagged answer costs a second model call; 0 turns this off.
+REFLECT = _text("VERBATIM_REFLECT", "1") not in {"0", "false", "False", ""}
 
 # Stage events go to stderr so stdout stays parseable. "json" for a shipper,
 # "text" for a person.

@@ -23,3 +23,5 @@ evals/results/
 # even the committed sample - creates these beside it.
 *.db-shm
 *.db-wal
+# The MCP server's log of tool calls, beside whichever corpus it serves.
+*.calls.db

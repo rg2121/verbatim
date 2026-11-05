@@ -130,13 +130,13 @@ def test_a_role_with_no_model_of_its_own_takes_the_flag_then_ollama_model(monkey
     assert config.role_model("planner") == "general"
 
 
-def test_reflection_is_off_unless_set(tmp_path: Path) -> None:
-    """Off until measured, like every other v2 change."""
+def test_reflection_is_on_unless_turned_off(tmp_path: Path) -> None:
+    """On since it passed its rule on questions kept back for it."""
     script = "from verbatim import config; print(config.REFLECT)"
     env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     unset = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                            check=True, cwd=tmp_path, env=env)
-    on = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                        check=True, cwd=tmp_path, env={**env, "VERBATIM_REFLECT": "1"})
+    off = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                         check=True, cwd=tmp_path, env={**env, "VERBATIM_REFLECT": "0"})
 
-    assert (unset.stdout.strip(), on.stdout.strip()) == ("False", "True")
+    assert (unset.stdout.strip(), off.stdout.strip()) == ("True", "False")

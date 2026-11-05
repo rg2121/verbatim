@@ -66,6 +66,8 @@ def main() -> int:
     parser.add_argument("--fresh", action="store_true",
                         help="ignore the checkpoint and retrieve everything again")
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
 
     if not committed_unchanged(args.cases):
         raise SystemExit(

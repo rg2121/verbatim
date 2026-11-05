@@ -3,14 +3,20 @@
 Each row records when the command ran, whether it succeeded, its inputs and
 outputs, and the corpus counts before and after. Recording is best-effort: a
 ledger error never fails the command itself.
+
+An MCP client's tool calls are kept apart, in ToolCallLog. A model's bad argument
+is not a failed run, which `verbatim runs` exits non-zero on; a chat's worth of
+searches would push real commands out of what the health check reads; and the
+ledger's corpus counts take about a second, twice per run.
 """
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
+from pathlib import Path
 import sqlite3
 from typing import Any
 from uuid import uuid4
@@ -127,6 +133,88 @@ def record_run(corpus: Any, command: str, **inputs: Any):
             pass
 
 
+class ToolCallLog:
+    """What an MCP client asked of the server, in a small database beside the corpus.
+
+    Beside it, not in it: a tool that reads the corpus should leave it as it found
+    it, and a long ingest holding the corpus's write lock should not hold up a
+    search. Best-effort, like the ledger. Two copies of a server can share one.
+    """
+
+    TIMEOUT_SECONDS = 5
+    SCHEMA = """
+    CREATE TABLE IF NOT EXISTS tool_calls (
+        call_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tool TEXT NOT NULL,
+        called_at TEXT NOT NULL,
+        seconds REAL,
+        ok INTEGER NOT NULL,
+        error TEXT,
+        inputs_json TEXT NOT NULL,
+        outputs_json TEXT NOT NULL
+    )
+    """
+
+    def __init__(self, corpus_path: Path) -> None:
+        self.path = corpus_path.with_name(f"{corpus_path.stem}.calls.db")
+
+    def record(
+        self,
+        tool: str,
+        *,
+        inputs: dict[str, Any],
+        outputs: dict[str, Any] | None,
+        seconds: float,
+        error: str | None = None,
+    ) -> None:
+        try:
+            with closing(sqlite3.connect(self.path, timeout=self.TIMEOUT_SECONDS)) as connection, connection:
+                connection.execute(self.SCHEMA)
+                connection.execute(
+                    "INSERT INTO tool_calls (tool, called_at, seconds, ok, error, inputs_json,"
+                    " outputs_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        tool,
+                        datetime.now(UTC).isoformat(),
+                        seconds,
+                        int(error is None),
+                        None if error is None else error[:500],
+                        json.dumps(_plain(inputs)),
+                        json.dumps(_plain(outputs or {})),
+                    ),
+                )
+        except (sqlite3.Error, OSError):
+            pass
+
+    def recent(self, *, tool: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """The last calls, newest first, in the shape `recent_runs` returns."""
+        if not self.path.exists():  # connecting would create it
+            return []
+        try:
+            with closing(sqlite3.connect(self.path, timeout=self.TIMEOUT_SECONDS)) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT * FROM tool_calls"
+                    + (" WHERE tool = ?" if tool else "")
+                    + " ORDER BY call_id DESC LIMIT ?",
+                    ((tool, limit) if tool else (limit,)),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        return [
+            {
+                "command": row["tool"],
+                "started_at": row["called_at"],
+                "seconds": row["seconds"],
+                "ok": bool(row["ok"]),
+                "error": row["error"],
+                "inputs": json.loads(row["inputs_json"]),
+                "outputs": json.loads(row["outputs_json"]),
+            }
+            for row in rows
+        ]
+
+
 def _plain(values: dict[str, Any]) -> dict[str, Any]:
     """Whatever a caller passed, in something JSON will accept."""
     plain = {}
@@ -179,7 +267,8 @@ def render_runs(runs: list[dict[str, Any]]) -> str:
     """The ledger as a table, for a person rather than a machine."""
     if not runs:
         return "  no runs recorded yet"
-    lines = [f"  {'when':<20} {'command':<12} {'':<3} {'took':>8}  what it did"]
+    width = max(12, *(len(run["command"]) for run in runs))
+    lines = [f"  {'when':<20} {'command':<{width}} {'':<3} {'took':>8}  what it did"]
     for run in runs:
         mark = "ok " if run["ok"] else ("..." if run["ok"] is None else "FAIL")
         took = f"{run['seconds']:.1f}s" if run.get("seconds") else "-"
@@ -187,6 +276,6 @@ def render_runs(runs: list[dict[str, Any]]) -> str:
         if run.get("error"):
             detail = run["error"][:60]
         lines.append(
-            f"  {run['started_at'][:19]:<20} {run['command']:<12} {mark:<3} {took:>8}  {detail}"
+            f"  {run['started_at'][:19]:<20} {run['command']:<{width}} {mark:<3} {took:>8}  {detail}"
         )
     return "\n".join(lines)

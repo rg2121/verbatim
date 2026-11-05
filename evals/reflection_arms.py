@@ -41,11 +41,12 @@ words saying the passages lack the answer, while citing them, to no more answers
 than resample does. Passing makes it eligible: what repairs newly marked is read
 before the default changes. The repair prompt may be tuned on the development
 questions (evals/retrieval.jsonl, answerable, not title-seeded) and the spent
-held-out questions before the run, which is made once. Reported for every arm and
-deciding nothing: how often the check fires and the second answer is kept, by
-kind of problem; clean answers at higher floors; cited the expected paper; how
-much of the draft a kept answer keeps word for word; and the extra calls, tokens
-and seconds. Results go to evals/results/reflection-<split>.jsonl, checkpointed
+held-out questions before the run, which is made once. Reflect beat resample 38-10
+and passed; its repairs were read, and it became the default on 2026-11-04
+(docs/findings.md). Reported for every arm and deciding nothing: how often the
+check fires and the second answer is kept, by kind of problem; clean answers at
+higher floors; cited the expected paper; how much of the draft a kept answer keeps
+word for word; and the extra calls, tokens and seconds. Results go to evals/results/reflection-<split>.jsonl, checkpointed
 after every question, so an interrupted run resumes.
 """
 

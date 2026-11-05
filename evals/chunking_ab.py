@@ -266,6 +266,8 @@ def main() -> int:
     # A -cloud model would send passages off the machine, so one must be named.
     parser.add_argument("--llm", help="The local Ollama model --answers uses")
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
 
     if args.build:
         build(args.state)

@@ -11,3 +11,4 @@ evals/results
 .ruff_cache
 *.db-shm
 *.db-wal
+*.calls.db

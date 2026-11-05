@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+import json
+import re
 
 from verbatim.arxiv import Paper
 from verbatim.chunking import Chunk
 from verbatim.corpus import split_arxiv_version
 
 MAX_NAMED_AUTHORS = 3
+EXPORT_FORMATS = ("markdown", "bibtex", "csl-json")
+BIBTEX_SPECIAL = {
+    "\\": r"\textbackslash{}", "{": r"\{", "}": r"\}", "&": r"\&", "%": r"\%", "$": r"\$",
+    "#": r"\#", "_": r"\_", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+}
 
 
 @dataclass(frozen=True)
@@ -108,6 +115,87 @@ def render_bibliography(citations: list[Citation]) -> str:
     return "\n".join(
         render_citation(marker, citation) for marker, citation in enumerate(citations, start=1)
     )
+
+
+def export_references(
+    citations: list[Citation], papers: dict[str, Paper], fmt: str = "markdown"
+) -> str:
+    """A reference list rendered by code, so that no model retypes one.
+
+    Markdown numbers each passage, as the answer's markers do. BibTeX and CSL-JSON
+    hold one record per paper version, with every cited locator in its note.
+    """
+    if fmt == "markdown":
+        return "\n".join(
+            f"{render_citation(marker, citation)} "
+            f"Licence: {citation.license_url or 'not reported'}."
+            for marker, citation in enumerate(citations, start=1)
+        )
+    groups: dict[str, list[Citation]] = {}
+    for citation in citations:
+        groups.setdefault(citation.arxiv_id, []).append(citation)
+    if fmt == "bibtex":
+        return "\n\n".join(
+            _bibtex_entry(group, papers[arxiv_id]) for arxiv_id, group in groups.items()
+        )
+    if fmt == "csl-json":
+        return json.dumps(
+            [_csl_item(group, papers[arxiv_id]) for arxiv_id, group in groups.items()],
+            indent=2,
+            ensure_ascii=False,
+        )
+    raise ValueError(f"format must be one of {', '.join(EXPORT_FORMATS)}, got {fmt!r}")
+
+
+def _record_key(arxiv_id: str) -> str:
+    """A citation key, which an old-style id's slash would break."""
+    return f"arxiv:{arxiv_id}".replace("/", "-")
+
+
+def _record_note(group: list[Citation]) -> str:
+    where = "; ".join(dict.fromkeys(locator(citation) for citation in group))
+    return f"{where}. Licence: {group[0].license_url or 'not reported'}."
+
+
+def _bibtex_text(text: str) -> str:
+    """Escaped, since one unbalanced brace in a title breaks the whole .bib file."""
+    return re.sub(r"[\\{}&%$#_~^]", lambda found: BIBTEX_SPECIAL[found.group()], " ".join(text.split()))
+
+
+def _bibtex_entry(group: list[Citation], paper: Paper) -> str:
+    cited = group[0]
+    fields = {
+        "title": _bibtex_text(paper.title),
+        "author": _bibtex_text(" and ".join(paper.authors)),
+        "year": paper.published[:4],
+        "eprint": cited.arxiv_id,
+        "archivePrefix": "arXiv",
+        "primaryClass": paper.categories[0] if paper.categories else "",
+        "url": cited.source_url,
+        "note": _bibtex_text(_record_note(group)),
+    }
+    lines = ",\n".join(f"  {name} = {{{value}}}" for name, value in fields.items() if value)
+    return f"@misc{{{_record_key(cited.arxiv_id)},\n{lines}\n}}"
+
+
+def _csl_author(author: str) -> dict[str, str]:
+    given = " ".join(author.split()[:-1])
+    return {"family": _surname(author), **({"given": given} if given else {})}
+
+
+def _csl_item(group: list[Citation], paper: Paper) -> dict[str, object]:
+    cited = group[0]
+    published = re.match(r"(\d{4})-(\d{2})-(\d{2})", paper.published)
+    return {
+        "id": _record_key(cited.arxiv_id),
+        "type": "article",
+        "title": paper.title,
+        "author": [_csl_author(author) for author in paper.authors],
+        **({"issued": {"date-parts": [[int(part) for part in published.groups()]]}} if published else {}),
+        "URL": cited.source_url,
+        "number": f"arXiv:{cited.arxiv_id}",
+        "note": _record_note(group),
+    }
 
 
 def _surname(author: str) -> str:

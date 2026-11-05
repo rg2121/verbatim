@@ -421,3 +421,13 @@ def test_with_reflection_a_reply_with_no_answer_line_is_asked_for_again(tmp_path
         answer = answer_from_matches(corpus, writer, "q", matches)
 
     assert answer.citations and len(writer.revised) == 1
+
+
+@pytest.mark.parametrize(
+    "script", ["breadth_arms", "chunking_ab", "conversation_arms", "supervisors", "team_arms", "three_arm"]
+)
+def test_an_earlier_experiment_still_runs_what_its_findings_report(script: str) -> None:
+    """Its arms were scored on first drafts, so a rerun has to write first drafts too."""
+    source = (Path(__file__).parents[1] / "evals" / f"{script}.py").read_text()
+
+    assert "config.REFLECT = False" in source

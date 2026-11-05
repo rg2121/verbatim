@@ -32,7 +32,7 @@ from verbatim.conversation import Turn, standalone_question
 from verbatim.corpus import ChunkMatch, CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
 from verbatim.orchestrator import orchestrate, work_section
-from verbatim.reflection import reflect
+from verbatim.reflection import problem_count, reflect
 from verbatim.report import render_markdown
 from verbatim.retrieval import default_search_options, hybrid_search
 from verbatim.runs import last_run_per_command, recent_runs
@@ -547,6 +547,10 @@ def create_app(
                 reply = "".join(collected)
                 payload = parse_line_protocol(reply)
                 if config.REFLECT:
+                    if payload is None or problem_count(
+                        answer_from_payload(asked, matches, payload, papers)
+                    ):
+                        yield _event("repairing", {})
                     # The final answer replaces the streamed draft, so a repair lands there.
                     answer = reflect(answering(), asked, matches, papers, payload, reply).answer
                 elif payload is None:
@@ -961,10 +965,12 @@ function runAsk(event) {
   resolved.hidden = true;
   const body = el("div", "answer thinking");
   body.textContent = "Looking through the corpus…";
+  const repairing = el("p", "thinking");
+  repairing.hidden = true;
   const caution = el("p", "caution");
   caution.hidden = true;
   const sources = el("div");
-  block.append(resolved, body, caution, sources);
+  block.append(resolved, body, repairing, caution, sources);
   $("thread").appendChild(block);
   block.scrollIntoView({block: "start", behavior: "smooth"});
 
@@ -1017,8 +1023,15 @@ function runAsk(event) {
       draft.split(/\\n\\s*CITE\\s*\\[/)[0].replace(/^[\\s\\S]*?ANSWER:\\s*/, "");
     block.scrollIntoView({block: "end"});
   });
+  asking.addEventListener("repairing", () => {
+    // The draft stays on screen until the checked answer replaces it.
+    repairing.hidden = false;
+    repairing.textContent = "The quote check flagged this draft, so it has gone back to the model…";
+    how.push("The quote check flagged the first draft, so it went back to the model once.");
+  });
   asking.addEventListener("answer", (e) => {
     const answer = JSON.parse(e.data);
+    repairing.hidden = true;
     body.className = "answer";
     body.innerHTML = renderAnswer(answer.text, turn);
     thread.push({question: question, answer: answer.text});
@@ -1045,6 +1058,7 @@ function runAsk(event) {
     }
   });
   asking.addEventListener("failed", (e) => {
+    repairing.hidden = true;
     body.className = "answer";
     body.textContent = "That did not work: " + JSON.parse(e.data).message;
   });
@@ -1060,6 +1074,7 @@ function runAsk(event) {
     asking.close();
     asking = null;
     $("askgo").disabled = false;
+    repairing.hidden = true;
     if (!draft) {
       body.className = "answer";
       body.textContent = "The connection dropped while answering.";

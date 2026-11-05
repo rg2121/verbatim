@@ -197,6 +197,8 @@ def main() -> int:
     parser.add_argument("--report-only", action="store_true",
                         help="score the checkpoint without calling the model")
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     unknown = [a for a in arms if a not in ARMS]

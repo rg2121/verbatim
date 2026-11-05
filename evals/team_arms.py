@@ -35,6 +35,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--llm")
     args = parser.parse_args()
+    # Its arms were scored on first drafts, so a rerun writes first drafts too.
+    config.REFLECT = False
 
     cases = [c for c in load_key([p for p in KEYS if p.exists()]) if not c.expect_none]
     cases = stratified_sample(cases, size=args.sample, seed=args.seed)

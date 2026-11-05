@@ -233,8 +233,9 @@ def falsify(
 
     answer: Answer | None = None
     if seen:
+        # First drafts only: a repair would turn a failed quote into a refutation.
         answer = answer_from_matches(
-            corpus, completion, gap.as_question(), list(seen.values())
+            corpus, completion, gap.as_question(), list(seen.values()), reflection=False
         )
     if answer is not None and answer.citations:
         # A refutation is a verified citation or nothing.

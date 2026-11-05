@@ -6,11 +6,92 @@ import pytest
 
 from verbatim.corpus import CorpusStore
 from verbatim.runs import (
+    ToolCallLog,
     last_run_per_command,
     recent_runs,
     record_run,
     render_runs,
 )
+
+
+def test_a_tool_call_is_logged_beside_the_corpus_not_in_it(tmp_path: Path) -> None:
+    state = tmp_path / "corpus.db"
+    CorpusStore(state).close()
+    before = state.read_bytes()
+    log = ToolCallLog(state)
+
+    log.record("search_chunks", inputs={"query": "flux"}, outputs={"results": 3}, seconds=0.25)
+
+    assert state.read_bytes() == before
+    assert log.path == tmp_path / "corpus.calls.db"
+    with CorpusStore(state) as corpus:
+        assert recent_runs(corpus) == []
+
+    (call,) = log.recent()
+    assert call["command"] == "search_chunks"
+    assert call["ok"] is True and call["error"] is None
+    assert call["inputs"] == {"query": "flux"}
+    assert call["outputs"] == {"results": 3}
+    assert call["seconds"] == 0.25
+    assert call["started_at"]
+
+
+def test_a_failed_call_records_why(tmp_path: Path) -> None:
+    log = ToolCallLog(tmp_path / "corpus.db")
+
+    log.record("list_papers", inputs={"days": -5}, outputs=None, seconds=0.0, error="days must be")
+
+    (call,) = log.recent()
+    assert call["ok"] is False and call["error"] == "days must be"
+    assert call["outputs"] == {}
+
+
+def test_recent_calls_are_newest_first_and_can_be_filtered(tmp_path: Path) -> None:
+    log = ToolCallLog(tmp_path / "corpus.db")
+    for tool in ("get_paper", "search_chunks", "get_paper"):
+        log.record(tool, inputs={}, outputs={}, seconds=0.0)
+    log.record("read_pages", inputs={}, outputs={}, seconds=0.0)
+
+    assert [c["command"] for c in log.recent(limit=2)] == ["read_pages", "get_paper"]
+    assert [c["command"] for c in log.recent(tool="get_paper")] == ["get_paper", "get_paper"]
+
+
+def test_reading_a_log_that_was_never_written_creates_nothing(tmp_path: Path) -> None:
+    log = ToolCallLog(tmp_path / "corpus.db")
+
+    assert log.recent() == []
+    assert not log.path.exists()
+
+
+def test_a_log_that_cannot_be_written_never_fails_the_call(tmp_path: Path) -> None:
+    log = ToolCallLog(tmp_path / "no" / "such" / "folder" / "corpus.db")
+
+    log.record("get_paper", inputs={}, outputs={}, seconds=0.0)
+
+    assert log.recent() == []
+
+
+def test_two_servers_can_write_one_log(tmp_path: Path) -> None:
+    """Claude Desktop was seen running two copies of the server."""
+    one, two = ToolCallLog(tmp_path / "corpus.db"), ToolCallLog(tmp_path / "corpus.db")
+
+    one.record("get_paper", inputs={}, outputs={}, seconds=0.0)
+    two.record("read_pages", inputs={}, outputs={}, seconds=0.0)
+
+    assert [c["command"] for c in one.recent()] == ["read_pages", "get_paper"]
+
+
+def test_the_table_fits_the_longest_tool_name() -> None:
+    rendered = render_runs(
+        [
+            {"started_at": "2026-11-05T17:00:00", "command": "verify_citations", "ok": True,
+             "seconds": 0.1, "outputs": {"verified": 2}, "error": None},
+            {"started_at": "2026-11-05T17:00:01", "command": "get_paper", "ok": True,
+             "seconds": 0.1, "outputs": {}, "error": None},
+        ]
+    ).splitlines()
+
+    assert rendered[1].index("ok ") == rendered[2].index("ok ")
 
 
 def test_a_successful_run_records_what_it_did(tmp_path: Path) -> None:

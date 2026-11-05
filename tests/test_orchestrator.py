@@ -142,6 +142,61 @@ def test_a_section_whose_citation_fails_is_retried_with_a_different_strategy(
     assert [c.arxiv_id for c in section.answer.citations] == ["2608.11111v1"]
 
 
+class RepairingCompletion(QueueCompletion):
+    """Scripted the same way, for the second call a flagged draft gets."""
+
+    def revise(self, system, user, schema):
+        return self.complete(system, user, schema)
+
+
+def test_with_reflection_a_repaired_section_needs_no_other_strategy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from verbatim import config
+
+    monkeypatch.setattr(config, "REFLECT", True)
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
+        completion = RepairingCompletion(
+            [
+                cite(chunk.chunk_id, "Flux never threads anything."),     # flagged
+                cite(chunk.chunk_id, "Magnetic flux threads the ring."),  # repaired
+            ]
+        )
+        _section, ledger = work_section(
+            corpus, StubEmbedder(), completion,
+            "how does flux differ from charge?", caller=None,
+        )
+
+    assert [a.strategy for a in ledger.attempts] == ["compare"]
+    assert [a.verdict for a in ledger.attempts] == [ACCEPTED]
+    assert ledger.attempts[0].rejected == 0 and ledger.attempts[0].verified == 1
+
+
+def test_with_reflection_a_section_the_repair_cannot_save_still_climbs_the_ladder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from verbatim import config
+
+    monkeypatch.setattr(config, "REFLECT", True)
+    with flux_corpus(tmp_path) as corpus:
+        chunk = next(c for c in list(corpus.iter_chunks()) if c.arxiv_id == "2608.11111v1")
+        completion = RepairingCompletion(
+            [
+                cite(chunk.chunk_id, "Flux never threads anything."),     # flagged
+                cite(chunk.chunk_id, "Flux still threads nothing."),      # no better
+                cite(chunk.chunk_id, "Magnetic flux threads the ring."),  # next strategy
+            ]
+        )
+        _section, ledger = work_section(
+            corpus, StubEmbedder(), completion,
+            "how does flux differ from charge?", caller=None,
+        )
+
+    assert [a.strategy for a in ledger.attempts] == ["compare", "titles"]
+    assert [a.verdict for a in ledger.attempts] == [RETRY, ACCEPTED]
+
+
 def test_a_section_no_strategy_can_support_is_declared_a_gap(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
         nothing = {"relevant": True, "answer": "The passages do not say.", "citations": []}

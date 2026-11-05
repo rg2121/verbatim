@@ -135,8 +135,8 @@ around a quote. A citation that fails is rejected and its marker becomes
 a second model call. It proves the words exist in the source. It does not
 prove the passage answers the question, and nothing strengthens it into that.
 
-**What the check finds can go back to the model**, once, behind
-`VERBATIM_REFLECT` (`reflection.py`): which quote is not in which passage, with
+**What the check finds goes back to the model**, once (`reflection.py`;
+`VERBATIM_REFLECT=0` turns this off): which quote is not in which passage, with
 the closest words that are; a marker with no citation; a claim with no marker;
 a reply with no `ANSWER:` line. Only facts code found are fed back, never a
 model's opinion of the answer. The revision is verified like the draft and
@@ -144,9 +144,10 @@ replaces it only if it still cites every passage the draft cited, has fewer
 problems, and adds no unbacked sentence: a marked one with under half of its
 content words in the passages it cites (`critique.py`). Shared words cannot prove
 that a passage backs a sentence, but too few of them show that it does not. A
-draft that cites nothing is an abstention and is never sent back. It stays off
-until that rule has been tested on new questions
-([findings](findings.md#answers)).
+draft that cites nothing is an abstention and is never sent back. Training
+examples and the gap falsifier take first drafts only, since for them a repair
+would turn a failure into a result. It is on because it passed its rule on
+questions kept back for it ([findings](findings.md#answers)).
 
 For that second problem the system **reports rather than judges**. Asking a
 model whether passages support an answer was measured seven ways and failed
@@ -213,10 +214,37 @@ The CLI, a FastAPI page (`serve`) and an MCP server (`mcp`) share one
 retrieval and answering path, so their behaviour cannot drift; the defaults
 each passes are tested too. The page streams: first what was retrieved, then
 the draft as the model writes it, then the verified answer that replaces it -
-streaming changes when text is shown, never what is accepted. `report` is not
-an MCP tool, because a ten-minute blocking call is a worse version of the
-streaming route. The server binds to loopback, and the corpus is never served
-to a network unless someone says so.
+streaming changes when text is shown, never what is accepted. Over MCP, `ask`
+and `report` are jobs rather than calls, since a ten-minute blocking call is a
+worse version of the streaming route and some clients give up after a minute:
+the call returns a job id and `get_job` waits a while for the result. The server
+binds to loopback, and the corpus is never served to a network unless someone
+says so.
+
+Over MCP the client's model writes the answer, so the quote check cannot run by
+itself as it does in `ask`. `verify_citations` offers the same check, through
+`answer_from_payload` so the two cannot drift, and `export_citations` renders
+references in code so that no model retypes them. The server's instructions ask
+a client to use them, and nothing can make it. Paper text goes out labelled as
+data, which lowers the risk of instructions planted in a paper and does not
+remove it; rewriting the text would break quoting.
+
+The MCP tools leave the corpus as they found it. Their calls go to a small log
+beside it rather than the ledger: a model's bad argument is not a failed run, and
+a chat's searches would push real commands out of what the health check reads.
+
+Started with `--llm`, the server also runs `ask` and `report` on the local model,
+so the client receives Verbatim's own checked answer rather than writing one.
+Jobs run one at a time on their own thread and corpus connection, so searches
+still answer, and each job writes the ledger row its command would. A job is
+also a row in the call log's database, result included, because a client may
+run two copies of the server and either may be asked; one whose process has
+gone is reported lost rather than running. Each model call first checks whether
+the job was cancelled; the check raises a BaseException, so that no fallback in
+the pipeline can absorb it. Before queueing, every job asks Ollama what it
+holds: a cloud model is refused, since the question and the passages would leave
+the machine, and a stopped Ollama is reported at once rather than after a minute
+of retries.
 
 Every command writes a row to the run ledger - when, what it was asked, what it
 produced, and failures - and `/api/health` reads it, so a corpus whose last

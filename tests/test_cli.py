@@ -4,6 +4,39 @@ import pytest
 
 from verbatim.answers import Usage
 from verbatim.cli import _usage_footer, run
+from verbatim.runs import ToolCallLog
+
+
+def test_runs_can_show_the_mcp_servers_calls(monkeypatch, tmp_path, capsys) -> None:
+    """A model's bad argument shows as a failed call, and is not a failed run."""
+    state = tmp_path / "corpus.db"
+    log = ToolCallLog(state)
+    log.record("verify_citations", inputs={}, outputs={"verified": 2}, seconds=0.1)
+    log.record("list_papers", inputs={"days": -5}, outputs=None, seconds=0.0, error="days must be")
+    monkeypatch.setattr("sys.argv", ["verbatim", "runs", "--mcp", "--state", str(state)])
+
+    run()
+
+    printed = capsys.readouterr().out
+    assert "verify_citations" in printed and "verified=2" in printed
+    assert "days must be" in printed
+    assert not state.exists()
+
+
+def test_mcp_refuses_an_empty_model_name(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("sys.argv", ["verbatim", "mcp", "--llm", " ", "--state", str(tmp_path / "corpus.db")])
+
+    with pytest.raises(SystemExit, match="--llm needs a model name"):
+        run()
+
+    assert not (tmp_path / "corpus.db").exists()
+
+
+def test_a_blank_paper_in_graph_is_an_error_not_a_traceback(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("sys.argv", ["verbatim", "graph", "  ", "--state", str(tmp_path / "corpus.db")])
+
+    with pytest.raises(SystemExit, match="identifier is empty"):
+        run()
 
 
 def test_use_compare_with_agents_is_refused_rather_than_ignored(monkeypatch) -> None:

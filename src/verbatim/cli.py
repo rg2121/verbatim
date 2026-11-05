@@ -59,7 +59,7 @@ from verbatim.references import references_from_file
 from verbatim.reranking import RERANKERS, default_reranker, rerank, shared_reranker
 from verbatim.research import research
 from verbatim.retrieval import default_search_options, hybrid_search, vector_search
-from verbatim.runs import record_run, recent_runs, render_runs
+from verbatim.runs import ToolCallLog, record_run, recent_runs, render_runs
 from verbatim.sampling import export_sample
 from verbatim.storage import (
     load_download_manifest,
@@ -409,6 +409,10 @@ def run() -> None:
         "--json", action="store_true",
         help="Emit the ledger as JSON",
     )
+    runs_parser.add_argument(
+        "--mcp", action="store_true",
+        help="The MCP server's tool calls, rather than commands; --command names a tool",
+    )
 
     graph_parser = subparsers.add_parser(
         "graph",
@@ -480,6 +484,12 @@ def run() -> None:
     )
     mcp_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     mcp_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
+    mcp_parser.add_argument(
+        "--llm",
+        help="Also offer ask and report, run as jobs on this local Ollama model; "
+             "OLLAMA_MODEL_WRITER, _PLANNER, _DESCRIBER and _REFLECTOR still apply, "
+             "and a cloud model is refused",
+    )
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
     embed_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -1400,9 +1410,14 @@ def run() -> None:
     if args.command == "mcp":
         from verbatim.mcp_server import serve
 
-        serve(state=args.state, embedding_model=args.model)
+        serve(state=args.state, embedding_model=args.model, llm=args.llm)
 
     if args.command == "runs":
+        if args.mcp:
+            # A model's bad argument is not a failed run, so this never exits non-zero.
+            calls = ToolCallLog(args.state).recent(tool=args.command_filter, limit=args.limit)
+            print(json.dumps(calls, indent=1) if args.json else render_runs(calls))
+            return
         with CorpusStore(args.state) as corpus:
             listed = recent_runs(corpus, command=args.command_filter, limit=args.limit)
         if args.json:
@@ -1435,7 +1450,10 @@ def run() -> None:
                             f"arXiv:{cited_paper.arxiv_id}  {cited_paper.title}"
                         )
                 return
-            citers = get_citations(corpus, args.identifier, direction="cited_by", limit=args.limit)
+            try:
+                citers = get_citations(corpus, args.identifier, direction="cited_by", limit=args.limit)
+            except ValueError as error:
+                raise SystemExit(f"error: {error}") from error
             if citers is None:
                 raise SystemExit(f"error: no paper in the corpus matches {args.identifier!r}")
             builds_on = get_citations(corpus, args.identifier, direction="references", limit=args.limit)
