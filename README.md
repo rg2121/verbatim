@@ -165,8 +165,10 @@ Add `--llm` and a local Ollama model, as in `... run verbatim mcp --llm
 gemma4:e4b-mlx`, and the client can also run `ask` and `report` themselves,
 answered on this machine and checked as the commands check them. Each returns a
 job id at once and `get_job` collects the result, since an answer takes minutes
-and some clients give up on a call after one. A cloud model is refused, and a
-job writes a ledger row, as the command would.
+and some clients give up on a call after one. A job writes a ledger row, as the
+command would. A cloud model is refused unless `--allow-cloud` is added too, as
+in `--llm gemma4:31b-cloud --allow-cloud`: the question and the passages then go
+to Ollama's servers.
 
 **In a container:** `docker compose run --rm verbatim search "..." --state
 sample/corpus.db`, `docker compose up verbatim-web` for the page, and

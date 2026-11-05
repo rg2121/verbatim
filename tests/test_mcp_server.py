@@ -18,6 +18,7 @@ import pytest
 from verbatim import config
 from verbatim.answers import Usage
 from verbatim.corpus import ChunkMatch, CorpusStore, EmbeddingModel
+from verbatim.jobs import Refused
 from verbatim.mcp_server import CLIENT_TOOL_SCHEMAS, build_server, render_result, serve
 from verbatim.runs import recent_runs, record_run
 import verbatim.tools as tools
@@ -732,8 +733,38 @@ async def test_a_cloud_model_is_refused_and_nothing_leaves_the_machine(state: Pa
 
     assert JOB_TOOLS <= set(listed)
     assert refused.is_error is True and "cloud model" in _text(refused)
+    assert "--allow-cloud" in _text(refused)
     with CorpusStore(state) as corpus:
         assert recent_runs(corpus) == []
+
+
+@pytest.mark.anyio
+async def test_an_allowed_cloud_model_is_checked_and_the_client_is_told_where_it_runs(
+    state: Path, monkeypatch
+) -> None:
+    checked = []
+
+    def recorded(models, **options):
+        checked.append((models["writer"], options))
+        raise Refused("checked, and stopped before any model ran")
+
+    monkeypatch.setattr("verbatim.mcp_server.preflight", recorded)
+
+    async with Client(build_server(state, MODEL, llm="gemma4:31b-cloud", allow_cloud=True)) as client:
+        instructions = client.instructions
+        refused = await client.call_tool("ask", {"question": QUESTION})
+
+    assert checked == [("gemma4:31b-cloud", {"allow_cloud": True})]
+    assert "stopped before any model ran" in _text(refused)
+    assert "gemma4:31b-cloud" in instructions and "Ollama's cloud" in instructions
+
+
+@pytest.mark.anyio
+async def test_a_local_model_is_described_as_local(state: Path) -> None:
+    async with Client(build_server(state, MODEL, llm="gemma4:e4b-mlx")) as client:
+        instructions = client.instructions
+
+    assert "local model gemma4:e4b-mlx" in instructions and "cloud" not in instructions
 
 
 @pytest.mark.anyio

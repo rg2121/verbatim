@@ -486,9 +486,14 @@ def run() -> None:
     mcp_parser.add_argument("--model", default=config.EMBEDDING_MODEL, help="Embedding model")
     mcp_parser.add_argument(
         "--llm",
-        help="Also offer ask and report, run as jobs on this local Ollama model; "
+        help="Also offer ask and report, run as jobs on this Ollama model; "
              "OLLAMA_MODEL_WRITER, _PLANNER, _DESCRIBER and _REFLECTOR still apply, "
-             "and a cloud model is refused",
+             "and a cloud model is refused unless --allow-cloud is given",
+    )
+    mcp_parser.add_argument(
+        "--allow-cloud", action="store_true",
+        help="Let the jobs run on an Ollama cloud model, which sends the question "
+             "and the passages to Ollama's servers",
     )
 
     embed_parser = subparsers.add_parser("embed", help="Embed chunks that have no vector yet")
@@ -1410,7 +1415,8 @@ def run() -> None:
     if args.command == "mcp":
         from verbatim.mcp_server import serve
 
-        serve(state=args.state, embedding_model=args.model, llm=args.llm)
+        serve(state=args.state, embedding_model=args.model, llm=args.llm,
+              allow_cloud=args.allow_cloud)
 
     if args.command == "runs":
         if args.mcp:

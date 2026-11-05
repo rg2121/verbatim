@@ -32,6 +32,13 @@ def test_mcp_refuses_an_empty_model_name(monkeypatch, tmp_path) -> None:
     assert not (tmp_path / "corpus.db").exists()
 
 
+def test_allowing_the_cloud_without_a_model_is_refused_rather_than_ignored(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("sys.argv", ["verbatim", "mcp", "--allow-cloud", "--state", str(tmp_path / "corpus.db")])
+
+    with pytest.raises(SystemExit, match="--allow-cloud only applies with --llm"):
+        run()
+
+
 def test_a_blank_paper_in_graph_is_an_error_not_a_traceback(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("sys.argv", ["verbatim", "graph", "  ", "--state", str(tmp_path / "corpus.db")])
 

@@ -233,8 +233,8 @@ The MCP tools leave the corpus as they found it. Their calls go to a small log
 beside it rather than the ledger: a model's bad argument is not a failed run, and
 a chat's searches would push real commands out of what the health check reads.
 
-Started with `--llm`, the server also runs `ask` and `report` on the local model,
-so the client receives Verbatim's own checked answer rather than writing one.
+Started with `--llm`, the server also runs `ask` and `report` on the model it
+names, so the client receives Verbatim's own checked answer rather than writing one.
 Jobs run one at a time on their own thread and corpus connection, so searches
 still answer, and each job writes the ledger row its command would. A job is
 also a row in the call log's database, result included, because a client may
@@ -242,9 +242,9 @@ run two copies of the server and either may be asked; one whose process has
 gone is reported lost rather than running. Each model call first checks whether
 the job was cancelled; the check raises a BaseException, so that no fallback in
 the pipeline can absorb it. Before queueing, every job asks Ollama what it
-holds: a cloud model is refused, since the question and the passages would leave
-the machine, and a stopped Ollama is reported at once rather than after a minute
-of retries.
+holds: a cloud model is refused unless the server was started with
+`--allow-cloud`, since the question and the passages would leave the machine, and
+a stopped Ollama is reported at once rather than after a minute of retries.
 
 Every command writes a row to the run ledger - when, what it was asked, what it
 produced, and failures - and `/api/health` reads it, so a corpus whose last

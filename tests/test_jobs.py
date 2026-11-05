@@ -285,6 +285,22 @@ def test_a_cloud_model_is_refused_before_ollama_is_asked_anything() -> None:
     assert "gemma4:31b-cloud" in str(refused.value) and "--llm" in str(refused.value)
 
 
+def test_a_cloud_refusal_says_how_to_allow_one() -> None:
+    with pytest.raises(Refused, match="--allow-cloud"):
+        preflight({"writer": "gemma4:31b-cloud"}, listed=_listing(LOCAL))
+
+
+def test_a_cloud_model_runs_when_the_server_allows_it() -> None:
+    served = [{"name": "gemma4:31b-cloud", "remote_host": "https://ollama.com", "size": 312}]
+
+    preflight({"writer": "gemma4:31b-cloud"}, allow_cloud=True, listed=_listing(served))
+
+
+def test_allowing_the_cloud_still_needs_the_model_to_be_there() -> None:
+    with pytest.raises(Refused, match="no model named 'gpt-oss:120b-cloud'"):
+        preflight({"writer": "gpt-oss:120b-cloud"}, allow_cloud=True, listed=_listing(LOCAL))
+
+
 def test_a_role_set_to_a_cloud_model_names_its_setting(monkeypatch) -> None:
     monkeypatch.setitem(config.ROLE_MODELS, "reflector", "glm-4.6:cloud")
 

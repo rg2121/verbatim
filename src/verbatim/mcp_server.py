@@ -4,7 +4,7 @@ A client's model writes its own answers, so the quote check cannot run by itself
 here as it does in `ask`. `verify_citations` offers the same check as a tool and
 the server's instructions ask for it, but nothing can make a client call it.
 
-Started with a local model (`--llm`), the server also runs `ask` and `report`
+Started with an Ollama model (`--llm`), the server also runs `ask` and `report`
 themselves, as jobs, so the answer is Verbatim's own; see `verbatim.jobs`.
 """
 
@@ -285,15 +285,15 @@ WaitSeconds = Annotated[
 ]
 
 ASK_DESCRIPTION = (
-    "Answer a question with Verbatim's own pipeline on the local model, on this machine, as "
-    "`verbatim ask` does: search, the answer, the quote check and its repair, what the passages "
-    "are about, and references. It takes one to three minutes, so it returns a job_id at once: "
-    "call get_job with it until status is done. Use it when asked for Verbatim's answer."
+    "Answer a question with Verbatim's own pipeline and model, as `verbatim ask` does: search, "
+    "the answer, the quote check and its repair, what the passages are about, and references. "
+    "It can take minutes, so it returns a job_id at once: call get_job with it until status is "
+    "done. Use it when asked for Verbatim's answer."
 )
 REPORT_DESCRIPTION = (
-    "Write a sectioned literature review on a topic with the local model, every quote checked, as "
-    "`verbatim report` does. It takes a few minutes per section, so it returns a job_id at once: "
-    "call get_job with it until status is done."
+    "Write a sectioned literature review on a topic with Verbatim's model, every quote checked, as "
+    "`verbatim report` does. It takes minutes, so it returns a job_id at once: call get_job with it "
+    "until status is done."
 )
 GET_JOB_DESCRIPTION = (
     "Collect an ask or report job: wait up to wait_seconds for it to finish, then say where it "
@@ -311,15 +311,17 @@ def build_server(
     embedding_model: str,
     *,
     llm: str | None = None,
+    allow_cloud: bool = False,
     completion: Any = None,
     encoder: Any = None,
     tool_caller: Any = None,
 ) -> Any:
     """Create the MCP server, or stop if there is no corpus to serve.
 
-    With `llm`, a local Ollama model, it also runs `ask` and `report` as jobs.
-    Tests inject `completion`, `encoder` and `tool_caller` instead, so no model
-    loads. The embedder and the connection tools use are opened on first use.
+    With `llm`, an Ollama model, it also runs `ask` and `report` as jobs; a cloud
+    model only with `allow_cloud`. Tests inject `completion`, `encoder` and
+    `tool_caller` instead, so no model loads. The embedder and the connection
+    tools use are opened on first use.
     """
     from mcp.server.mcpserver import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
@@ -329,6 +331,9 @@ def build_server(
         llm = llm.strip()
         if not llm:
             raise SystemExit("error: --llm needs a model name, such as gemma4:e4b-mlx (see `ollama list`)")
+    if allow_cloud and llm is None and completion is None:
+        # Refused rather than ignored: without a model there are no jobs to allow.
+        raise SystemExit("error: --allow-cloud only applies with --llm, which names the model")
     answering = llm is not None or completion is not None
     if completion is not None:
         named = str(getattr(completion, "model", "an injected model"))
@@ -337,9 +342,13 @@ def build_server(
         models = role_models(llm) if llm else {}
     cloud = [f"{role} {name}" for role, name in models.items() if is_cloud(name)]
     if completion is None and cloud:
-        # Each job refuses too; this tells whoever reads the client's log.
-        print(f"warning: ask and report will refuse to run on cloud models ({', '.join(cloud)})",
-              file=sys.stderr)
+        # For whoever reads the client's log; each job checks again.
+        print(
+            f"note: ask and report send the question and the passages to Ollama's cloud ({', '.join(cloud)})"
+            if allow_cloud else
+            f"warning: ask and report will refuse to run on cloud models ({', '.join(cloud)})",
+            file=sys.stderr,
+        )
 
     state = Path(state).resolve()
     papers, newest = _corpus_facts(state)
@@ -347,7 +356,11 @@ def build_server(
         SERVER_NAME,
         title="Verbatim",
         version=_package_version(),
-        instructions=_instructions(papers, newest, answering=models.get("writer") if answering else None),
+        instructions=_instructions(
+            papers, newest,
+            answering=models.get("writer") if answering else None,
+            remote=bool(cloud) and allow_cloud,
+        ),
     )
     # Tools run on one worker thread: off the event loop, and on the only thread
     # allowed to use the SQLite connection, so calls serialise.
@@ -487,8 +500,8 @@ def build_server(
         def begin() -> dict[str, Any]:
             inputs = prepare()
             if completion is None:
-                # Every time: Ollama may have stopped, and a cloud model must never run.
-                preflight(models)
+                # Every time: Ollama may have stopped, and a cloud model runs only if allowed.
+                preflight(models, allow_cloud=allow_cloud)
             return runner.submit(kind, inputs)
 
         return off_the_loop(kind, arguments, begin)
@@ -559,8 +572,8 @@ def build_server(
         return JobView(**await off_the_loop("cancel_job", {"job_id": job_id}, lambda: runner.cancel(job_id)))
 
     for function, name, title, description, hints in (
-        (ask, "ask", "Answer with the local model", ASK_DESCRIPTION, starting),
-        (report, "report", "Write a review with the local model", REPORT_DESCRIPTION, starting),
+        (ask, "ask", "Answer with Verbatim's model", ASK_DESCRIPTION, starting),
+        (report, "report", "Write a review with Verbatim's model", REPORT_DESCRIPTION, starting),
         (collect, "get_job", "Collect a job", GET_JOB_DESCRIPTION, reading),
         (cancel, "cancel_job", "Stop a job", CANCEL_DESCRIPTION, stopping),
     ):
@@ -606,9 +619,12 @@ def _corpus_facts(state: Path) -> tuple[int, str]:
     return papers, newest
 
 
-def _instructions(papers: int, newest: str, *, answering: str | None = None) -> str:
+def _instructions(
+    papers: int, newest: str, *, answering: str | None = None, remote: bool = False
+) -> str:
+    where = f"on {answering}, a model on Ollama's cloud" if remote else f"on the local model {answering}"
     jobs = (
-        f"- ask and report run Verbatim's own pipeline on the local model {answering}: search, "
+        f"- ask and report run Verbatim's own pipeline {where}: search, "
         "the answer, the quote check and its repair, the subject check and the references. Each "
         "returns a job_id at once; call get_job until status is done, then show the answer, its "
         "markers, quotes and references unchanged. One job runs at a time.\n"
@@ -740,9 +756,14 @@ def render_result(result: Any) -> str:
 
 
 def serve(
-    *, state: Path | None = None, embedding_model: str | None = None, llm: str | None = None
+    *,
+    state: Path | None = None,
+    embedding_model: str | None = None,
+    llm: str | None = None,
+    allow_cloud: bool = False,
 ) -> None:
     """Run the server on stdio, which is how MCP clients launch a local server."""
     build_server(
-        state or config.STATE_PATH, embedding_model or config.EMBEDDING_MODEL, llm=llm
+        state or config.STATE_PATH, embedding_model or config.EMBEDDING_MODEL,
+        llm=llm, allow_cloud=allow_cloud,
     ).run(transport="stdio")
