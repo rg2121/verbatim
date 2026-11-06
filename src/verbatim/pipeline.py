@@ -30,6 +30,8 @@ STAGE_ARGUMENTS: dict[str, tuple[str, ...]] = {
     # Skip chunks an older chunker made; re-chunking would discard their vectors.
     "embed": ("--only-current",),
 }
+# Run last when asked: deletes the PDFs fully ingested papers no longer need.
+PRUNE_STAGE = ("prune", "pdfs_prunable")
 # Stages whose own default takes a few items a run (`download` takes 3 PDFs).
 # Inside the pipeline each is asked for everything pending, or a large sync
 # would be ingested a few papers per run.
@@ -86,24 +88,31 @@ def run_pipeline(
     state: str,
     stages: Sequence[tuple[str, str]] = STAGES,
     execute: Callable[[str, Sequence[str], str], tuple[bool, str]] | None = None,
-    max_rounds: int = MAX_ROUNDS,
+    max_rounds: int | None = MAX_ROUNDS,
     on_stage: Callable[[StageResult], None] | None = None,
     stage_arguments: dict[str, tuple[str, ...]] | None = None,
     on_start: Callable[[str, int | None], None] | None = None,
+    batch: int | None = None,
 ) -> list[RoundResult]:
     """Run the stages in rounds until nothing is pending or a round changes nothing.
 
     Some work never completes (a PDF that is always truncated), so a round with
     no progress ends the run. `stage_arguments` adds arguments per stage.
     `on_start` hears each stage and its pending count (None when it keeps
-    none, as `index` does) before it runs.
+    none, as `index` does) before it runs. `batch` caps what each limited
+    stage takes per round, which bounds the PDFs on disk at once; `max_rounds`
+    None runs rounds until one makes no progress.
     """
-    if max_rounds < 1:
+    if max_rounds is not None and max_rounds < 1:
         raise ValueError("max_rounds must be at least 1")
+    if batch is not None and batch < 1:
+        raise ValueError("batch must be at least 1")
     runner = execute or (lambda name, args, st: run_stage(name, args, state=st))
     rounds: list[RoundResult] = []
 
-    for number in range(1, max_rounds + 1):
+    number = 0
+    while max_rounds is None or number < max_rounds:
+        number += 1
         result = RoundResult(number=number)
         for name, counter in stages:
             before = pending().get(counter, 0) if counter else 0
@@ -112,7 +121,8 @@ def run_pipeline(
                 continue
             arguments = (
                 *STAGE_ARGUMENTS.get(name, ()),
-                *(("--limit", str(before)) if name in LIMITED_STAGES else ()),
+                *(("--limit", str(before if batch is None else min(before, batch)))
+                  if name in LIMITED_STAGES else ()),
                 *(stage_arguments or {}).get(name, ()),
             )
             if on_start is not None:
@@ -157,7 +167,7 @@ def render_left(
     pending: dict[str, int],
     rounds: Sequence[RoundResult],
     *,
-    max_rounds: int,
+    max_rounds: int | None,
     stages: Sequence[tuple[str, str]] = STAGES,
 ) -> str:
     """Say what is still pending after a run and why the run stopped, or that nothing is."""
@@ -165,7 +175,7 @@ def render_left(
     left = [(name, count) for name, count in left if count]
     if not left:
         return "  Nothing is left to do."
-    if rounds and rounds[-1].progressed and len(rounds) >= max_rounds:
+    if rounds and rounds[-1].progressed and max_rounds is not None and len(rounds) >= max_rounds:
         reason = f"it reached its {max_rounds}-round limit"
     else:
         reason = "its last round made no progress"

@@ -29,6 +29,9 @@ VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Bibliographies that were read, at the checksum they were read from. Needed
 # for the ones that yield no entries, which otherwise look unread for ever.
 BIBLIOGRAPHIES_READ = "bibliographies_read"
+# PDFs deleted once nothing reads them again (`verbatim prune`). Created on
+# first use too, and the download record stays, with the URL and checksum.
+PRUNED_PDFS = "pruned_pdfs"
 # Long enough for one stage's write to finish while another waits: chunking
 # holds the write lock for minutes.
 BUSY_TIMEOUT_SECONDS = 300
@@ -375,6 +378,81 @@ class CorpusStore:
                 [(now, fingerprint, s.sha256, s.arxiv_id) for s in sources],
             )
 
+    def _prunable(self) -> str:
+        """SQL condition on downloads `d` and html_sources `h`: nothing reads this PDF again.
+
+        The paper has a usable rendering, so its PDF was only compared with it;
+        its passages were cut from that rendering by the current chunker, every
+        passage has a vector, and its bibliography has been read. Takes the
+        chunker fingerprint, then the model id.
+        """
+        condition = (
+            "h.usable = 1 AND h.chunked_with = ? AND h.chunked_sha256 = h.sha256"
+            f" AND NOT ({self._unread_bibliography('h')})"
+            " AND EXISTS (SELECT 1 FROM chunks AS c WHERE c.arxiv_id = d.arxiv_id)"
+            " AND NOT EXISTS ("
+            "  SELECT 1 FROM chunks AS c WHERE c.arxiv_id = d.arxiv_id AND NOT EXISTS ("
+            "   SELECT 1 FROM embeddings AS e"
+            "   WHERE e.chunk_id = c.chunk_id AND e.model_id = ?))"
+        )
+        if self._table_exists(PRUNED_PDFS):
+            condition += f" AND d.arxiv_id NOT IN (SELECT arxiv_id FROM {PRUNED_PDFS})"
+        return condition
+
+    def prunable_pdfs(
+        self, chunker_fingerprint: str, model_id: str, *, limit: int | None = None
+    ) -> list[DownloadedPaper]:
+        """Downloads whose PDF nothing reads again; see `_prunable`."""
+        rows = self.connection.execute(
+            "SELECT d.* FROM downloads AS d JOIN html_sources AS h ON h.arxiv_id = d.arxiv_id"
+            f" WHERE {self._prunable()} ORDER BY d.arxiv_id LIMIT ?",
+            (chunker_fingerprint, model_id, -1 if limit is None else limit),
+        ).fetchall()
+        return [_download_from_row(row) for row in rows]
+
+    def prunable_pdf_count(self, chunker_fingerprint: str, model_id: str) -> int:
+        row = self.connection.execute(
+            "SELECT COUNT(*) FROM downloads AS d JOIN html_sources AS h ON h.arxiv_id = d.arxiv_id"
+            f" WHERE {self._prunable()}",
+            (chunker_fingerprint, model_id),
+        ).fetchone()
+        return int(row[0])
+
+    def record_pruned(self, arxiv_ids: Sequence[str]) -> None:
+        """Record PDFs deleted from disk; their download records stay as they were."""
+        now = _timestamp()
+        with self.connection:
+            self.connection.execute(
+                f"CREATE TABLE IF NOT EXISTS {PRUNED_PDFS} ("
+                " arxiv_id TEXT PRIMARY KEY REFERENCES downloads(arxiv_id) ON DELETE CASCADE,"
+                " pruned_at TEXT NOT NULL)"
+            )
+            self.connection.executemany(
+                f"INSERT INTO {PRUNED_PDFS} (arxiv_id, pruned_at) VALUES (?, ?)"
+                " ON CONFLICT(arxiv_id) DO UPDATE SET pruned_at = excluded.pruned_at",
+                [(arxiv_id, now) for arxiv_id in arxiv_ids],
+            )
+
+    def pruned_downloads(self, *, limit: int | None = None) -> list[DownloadedPaper]:
+        """Downloads whose PDF was deleted, with the checksum it had."""
+        if not self._table_exists(PRUNED_PDFS):
+            return []
+        rows = self.connection.execute(
+            f"SELECT d.* FROM downloads AS d JOIN {PRUNED_PDFS} AS x ON x.arxiv_id = d.arxiv_id"
+            " ORDER BY d.arxiv_id LIMIT ?",
+            (-1 if limit is None else limit,),
+        ).fetchall()
+        return [_download_from_row(row) for row in rows]
+
+    def forget_pruned(self, arxiv_ids: Sequence[str]) -> None:
+        """A restored PDF is on disk again."""
+        if not self._table_exists(PRUNED_PDFS):
+            return
+        with self.connection:
+            self.connection.executemany(
+                f"DELETE FROM {PRUNED_PDFS} WHERE arxiv_id = ?", [(i,) for i in arxiv_ids]
+            )
+
     def download_for(self, arxiv_id: str) -> DownloadedPaper | None:
         """The stored PDF for one paper, if it has been downloaded."""
         row = self.connection.execute(
@@ -522,6 +600,7 @@ class CorpusStore:
 
         def scalar(sql: str, args: tuple = ()) -> int:
             return int(self.connection.execute(sql, args).fetchone()[0])
+        pruned = self._table_exists(PRUNED_PDFS)
         return {
             "papers": scalar("SELECT COUNT(*) FROM papers"),
             "papers_current": scalar("SELECT COUNT(*) FROM papers WHERE is_latest = 1"),
@@ -574,7 +653,16 @@ class CorpusStore:
                 " SELECT 1 FROM embeddings AS e WHERE e.chunk_id = c.chunk_id AND e.model_id = ?)",
                 (model_id,),
             ),
-            "bytes_on_disk": scalar("SELECT COALESCE(SUM(byte_count), 0) FROM downloads"),
+            "bytes_on_disk": scalar(
+                "SELECT COALESCE(SUM(byte_count), 0) FROM downloads"
+                + (f" WHERE arxiv_id NOT IN (SELECT arxiv_id FROM {PRUNED_PDFS})"
+                   if pruned else "")
+            ),
+            "pdfs_pruned": scalar(f"SELECT COUNT(*) FROM {PRUNED_PDFS}") if pruned else 0,
+            "bytes_pruned": scalar(
+                "SELECT COALESCE(SUM(d.byte_count), 0) FROM downloads AS d"
+                f" JOIN {PRUNED_PDFS} AS x ON x.arxiv_id = d.arxiv_id"
+            ) if pruned else 0,
         }
 
     def license_summary(self) -> dict[str, int]:

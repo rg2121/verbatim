@@ -303,3 +303,53 @@ def test_the_closing_report_says_when_what_is_left_made_no_progress() -> None:
 
     assert "made no progress" in rendered
     assert "5 pending" in rendered
+
+
+def test_with_a_batch_a_fetching_stage_takes_at_most_that_many() -> None:
+    """A batch bounds how many PDFs sit on disk before pruning frees them."""
+    state = {"downloads_pending": 1_234}
+    execute, calls = honours_limit(state, "downloads_pending", default=3)
+
+    run_pipeline(
+        lambda: dict(state), state="x", stages=(("download", "downloads_pending"),),
+        execute=execute, batch=100, max_rounds=1,
+    )
+
+    assert limit_of(calls[0][1]) == "100"
+
+
+def test_a_batched_run_keeps_going_until_nothing_is_left() -> None:
+    state = {"downloads_pending": 1_000}
+    execute, _ = honours_limit(state, "downloads_pending", default=3)
+
+    rounds = run_pipeline(
+        lambda: dict(state), state="x", stages=(("download", "downloads_pending"),),
+        execute=execute, batch=100, max_rounds=None,
+    )
+
+    assert state["downloads_pending"] == 0
+    assert len(rounds) >= 10
+
+
+def test_a_batch_must_be_at_least_one() -> None:
+    with pytest.raises(ValueError, match="batch"):
+        run_pipeline(lambda: {}, state="x", batch=0)
+
+
+def test_without_a_round_limit_a_round_with_no_progress_still_ends_the_run() -> None:
+    state = {"alpha_pending": 5, "beta_pending": 0}
+    execute, _ = driver(state, {})
+
+    rounds = run_pipeline(
+        lambda: dict(state), state="x", stages=STAGES, execute=execute, max_rounds=None
+    )
+
+    assert len(rounds) == 1
+
+
+def test_without_a_round_limit_the_closing_report_blames_no_progress() -> None:
+    rounds = [RoundResult(number=1, stages=[StageResult("download", True, 9, 8)])]
+
+    rendered = render_left({"downloads_pending": 8}, rounds, max_rounds=None)
+
+    assert "made no progress" in rendered

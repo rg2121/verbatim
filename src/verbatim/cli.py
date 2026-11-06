@@ -55,7 +55,14 @@ from verbatim.html_source import (
     parse_html_sections,
 )
 from verbatim.logs import configure_logging
-from verbatim.pipeline import MAX_ROUNDS, render_left, render_rounds, run_pipeline
+from verbatim.pipeline import (
+    MAX_ROUNDS,
+    PRUNE_STAGE,
+    STAGES,
+    render_left,
+    render_rounds,
+    run_pipeline,
+)
 from verbatim.references import references_from_file
 from verbatim.reranking import RERANKERS, default_reranker, rerank, shared_reranker
 from verbatim.research import research
@@ -467,8 +474,41 @@ def run() -> None:
     pipeline_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
     pipeline_parser.add_argument("--model", default=config.EMBEDDING_MODEL)
     pipeline_parser.add_argument(
-        "--max-rounds", type=int, default=MAX_ROUNDS,
-        help="Stop after this many rounds even if work remains",
+        "--max-rounds", type=int,
+        help=f"Stop after this many rounds even if work remains (default {MAX_ROUNDS}; "
+             "with --batch, when a round makes no progress)",
+    )
+    pipeline_parser.add_argument(
+        "--batch", type=int,
+        help="Papers each fetching stage takes per round; with --prune-pdfs this bounds "
+             "how many PDFs are on disk at once",
+    )
+    pipeline_parser.add_argument(
+        "--prune-pdfs", action="store_true",
+        help="End each round with `verbatim prune`: delete the PDFs fully ingested "
+             "papers no longer need, keeping their HTML, passages and vectors",
+    )
+
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="Delete the PDFs fully ingested papers no longer need; --restore fetches them back",
+    )
+    prune_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
+    prune_parser.add_argument(
+        "--model", default=config.EMBEDDING_MODEL,
+        help="Embedding model whose vectors a paper must have before its PDF goes",
+    )
+    prune_parser.add_argument("--limit", type=int, help="Delete or restore at most this many")
+    prune_parser.add_argument(
+        "--dry-run", action="store_true", help="Say what would be deleted and stop"
+    )
+    prune_parser.add_argument(
+        "--restore", action="store_true",
+        help="Download deleted PDFs again and compare them with the checksum recorded before",
+    )
+    prune_parser.add_argument(
+        "--delay", type=float, default=config.DOWNLOAD_DELAY,
+        help="Seconds between PDF requests when restoring",
     )
 
     sample_parser = subparsers.add_parser(
@@ -788,11 +828,17 @@ def run() -> None:
         # Count under the id `embed` writes, which adds "+context" when used.
         model_id = FastEmbedEmbedder(model_name=args.model).model_id
         with CorpusStore(args.state) as corpus:
-            counts = corpus.pipeline_stats(
-                chunker_fingerprint(args.chunk_size, args.overlap), model_id
-            )
+            fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
+            counts = corpus.pipeline_stats(fingerprint, model_id)
             synced = corpus.sync_summary()
+            prunable = corpus.prunable_pdfs(fingerprint, model_id)
         print(format_stats(counts))
+        if prunable:
+            freed = sum(download.byte_count for download in prunable) / 1e9
+            many = len(prunable) != 1
+            print(f"\n  {len(prunable):,} PDF{'s' if many else ''} ({freed:.1f} GB)"
+                  f" {'are' if many else 'is'} no longer read: fully ingested from HTML."
+                  " `verbatim prune` deletes them.")
         if synced:
             print("\n  synced categories")
             for category, watermark, seen in synced:
@@ -1391,18 +1437,32 @@ def run() -> None:
         fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
         model_id = FastEmbedEmbedder(model_name=args.model).model_id
 
+        stages = (*STAGES, PRUNE_STAGE) if args.prune_pdfs else STAGES
+        # A batched run needs as many rounds as it has batches.
+        max_rounds = (
+            args.max_rounds if args.max_rounds is not None
+            else None if args.batch else MAX_ROUNDS
+        )
+
         def pending() -> dict[str, int]:
             with CorpusStore(args.state) as corpus:
-                return corpus.pipeline_stats(fingerprint, model_id)
+                counts = corpus.pipeline_stats(fingerprint, model_id)
+                if args.prune_pdfs:
+                    # Counted only when asked: it reads every passage's vector.
+                    counts["pdfs_prunable"] = corpus.prunable_pdf_count(fingerprint, model_id)
+                return counts
 
         rounds = run_pipeline(
             pending,
             state=str(args.state),
-            max_rounds=args.max_rounds,
-            # The stages that make and index vectors use the model counted above.
+            stages=stages,
+            max_rounds=max_rounds,
+            batch=args.batch,
+            # The stages that make, index and prune by vectors use the model counted above.
             stage_arguments={
                 "embed": ("--model", args.model),
                 "index": ("--model", args.model),
+                "prune": ("--model", args.model),
             },
             # A stage takes everything pending, so a large one can run for hours.
             on_start=lambda name, waiting: print(
@@ -1419,7 +1479,29 @@ def run() -> None:
         print()
         print(render_rounds(rounds))
         print()
-        print(render_left(pending(), rounds, max_rounds=args.max_rounds))
+        print(render_left(pending(), rounds, max_rounds=max_rounds, stages=stages))
+
+    if args.command == "prune":
+        from verbatim.pruning import describe_prune, describe_restore, prune_pdfs, restore_pdfs
+
+        fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+        model_id = FastEmbedEmbedder(model_name=args.model).model_id
+        with CorpusStore(args.state) as corpus, record_run(
+            corpus, "prune", limit=args.limit, dry_run=args.dry_run, restore=args.restore
+        ) as run:
+            if args.restore:
+                restored = restore_pdfs(corpus, limit=args.limit, delay=args.delay)
+                run.record(restored=restored.restored, changed=restored.changed,
+                           failed=len(restored.failed))
+                message = describe_restore(restored)
+            else:
+                pruned = prune_pdfs(
+                    corpus, fingerprint, model_id, limit=args.limit, dry_run=args.dry_run
+                )
+                run.record(deleted=pruned.deleted, bytes_freed=pruned.bytes_freed,
+                           already_gone=pruned.already_gone, refused=len(pruned.refused))
+                message = describe_prune(pruned, dry_run=args.dry_run)
+        print(message)
 
     if args.command == "mcp":
         from verbatim.mcp_server import serve
@@ -2021,6 +2103,9 @@ def format_stats(counts: dict[str, int]) -> str:
          f"{counts['licences_pending']:,} to look up", "verbatim licenses"),
         ("pdfs",
          f"{counts['downloaded']:,} ({gigabytes:.1f} GB)"
+         + (f", {counts['pdfs_pruned']:,} deleted after ingest"
+            f" ({counts['bytes_pruned'] / 1e9:.1f} GB freed)"
+            if counts.get("pdfs_pruned") else "")
          + (f", {counts['downloads_unavailable']:,} arXiv has none for"
             if counts["downloads_unavailable"] else ""),
          f"{counts['downloads_pending']:,} to fetch", "verbatim download"),

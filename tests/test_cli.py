@@ -1,5 +1,7 @@
 """The command line, where the answering paths actually diverge."""
 
+from pathlib import Path
+
 import pytest
 
 from verbatim.answers import Usage
@@ -277,6 +279,109 @@ def test_pipeline_hands_its_model_to_the_stages_it_runs(monkeypatch, tmp_path) -
 
     for stage in ("embed", "index"):
         assert captured["stage_arguments"][stage] == ("--model", "other/model")
+
+
+def _captured_pipeline(monkeypatch, tmp_path, *flags: str) -> dict:
+    captured: dict = {}
+
+    def capture(pending, **options):
+        captured.update(options)
+        return []
+
+    monkeypatch.setattr("verbatim.cli.run_pipeline", capture)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "pipeline", "--state", str(tmp_path / "c.db"), "--model", "stub", *flags],
+    )
+    run()
+    return captured
+
+
+def test_pipeline_keeps_its_pdfs_unless_asked(monkeypatch, tmp_path) -> None:
+    captured = _captured_pipeline(monkeypatch, tmp_path)
+
+    assert "prune" not in [name for name, _ in captured["stages"]]
+
+
+def test_pipeline_can_delete_pdfs_once_their_papers_are_ingested(monkeypatch, tmp_path) -> None:
+    captured = _captured_pipeline(monkeypatch, tmp_path, "--prune-pdfs")
+
+    assert captured["stages"][-1] == ("prune", "pdfs_prunable")
+    assert captured["stage_arguments"]["prune"] == ("--model", "stub")
+
+
+def test_a_batched_pipeline_runs_until_done(monkeypatch, tmp_path) -> None:
+    from verbatim.pipeline import MAX_ROUNDS
+
+    batched = _captured_pipeline(monkeypatch, tmp_path, "--batch", "500")
+    plain = _captured_pipeline(monkeypatch, tmp_path)
+    capped = _captured_pipeline(monkeypatch, tmp_path, "--batch", "500", "--max-rounds", "3")
+
+    assert batched["batch"] == 500 and batched["max_rounds"] is None
+    assert plain["batch"] is None and plain["max_rounds"] == MAX_ROUNDS
+    assert capped["max_rounds"] == 3
+
+
+def test_prune_deletes_ingested_pdfs_and_says_what_it_freed(tmp_path, capsys, monkeypatch) -> None:
+    from test_prune import MODEL, ingest
+    from verbatim import config
+    from verbatim.chunking import chunker_fingerprint
+    from verbatim.corpus import CorpusStore
+
+    with CorpusStore(tmp_path / "c.db") as corpus:
+        record = ingest(
+            corpus, tmp_path,
+            fingerprint=chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP),
+        )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "prune", "--state", str(tmp_path / "c.db"), "--model", MODEL.model_id],
+    )
+    run()
+
+    out = capsys.readouterr().out
+    assert not Path(record.local_path).exists()
+    assert "Deleted 1 PDF" in out
+
+
+def test_stats_show_the_space_pruning_freed(tmp_path, capsys, monkeypatch) -> None:
+    from test_prune import MODEL, ingest
+    from verbatim import config
+    from verbatim.chunking import chunker_fingerprint
+    from verbatim.corpus import CorpusStore
+    from verbatim.pruning import prune_pdfs
+
+    fingerprint = chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+    with CorpusStore(tmp_path / "c.db") as corpus:
+        ingest(corpus, tmp_path, fingerprint=fingerprint)
+        prune_pdfs(corpus, fingerprint, MODEL.model_id)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "stats", "--state", str(tmp_path / "c.db"), "--model", MODEL.model_id],
+    )
+    run()
+
+    assert "1 deleted after ingest" in capsys.readouterr().out
+
+
+def test_stats_say_how_much_pruning_would_free(tmp_path, capsys, monkeypatch) -> None:
+    from test_prune import MODEL, ingest
+    from verbatim import config
+    from verbatim.chunking import chunker_fingerprint
+    from verbatim.corpus import CorpusStore
+
+    with CorpusStore(tmp_path / "c.db") as corpus:
+        ingest(
+            corpus, tmp_path,
+            fingerprint=chunker_fingerprint(config.CHUNK_SIZE, config.CHUNK_OVERLAP),
+        )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "stats", "--state", str(tmp_path / "c.db"), "--model", MODEL.model_id],
+    )
+    run()
+
+    assert "1 PDF (" in capsys.readouterr().out
 
 
 def test_pipeline_ends_by_saying_what_is_left(monkeypatch, tmp_path, capsys) -> None:

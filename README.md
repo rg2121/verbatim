@@ -99,6 +99,11 @@ most and does not yet hold.
   `--full` run cannot resume, so deepen a large category in stages.
 - `download --license open` keeps only papers whose licence permits
   redistribution. arXiv's default licence grants rights to arXiv, not to you.
+- PDFs are most of the disk: 3.6 MB a paper, against about 1 MB for its HTML
+  and database rows. `pipeline --prune-pdfs` deletes each PDF once its paper is
+  fully ingested from the HTML rendering, keeping the HTML, passages and vectors;
+  add `--batch 1000` so only one batch of PDFs is on disk at a time. Answers never
+  read the files. `prune --restore` downloads them again and checks the checksum.
 
 ## Commands
 
@@ -113,6 +118,7 @@ Every command takes `--help`: `uv run verbatim <command> --help`.
 | | `chunk`, `embed`, `index` | cut passages, embed them, reconcile the vector index |
 | | `grow` | add the papers the corpus cites most and does not hold |
 | | `pipeline` | run every stage above until nothing is pending |
+| | `prune` | delete the PDFs fully ingested papers no longer need; `--restore` |
 | | `fetch` | a one-off metadata snapshot, outside the corpus |
 | **Inspect** | `stats` | corpus size and work remaining |
 | | `runs` | what each command did, and whether it failed |

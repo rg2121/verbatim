@@ -20,6 +20,7 @@ costs the batch in flight and nothing more.
 |---|---|
 | `papers` | every version seen; `is_latest` marks the current one |
 | `downloads` / `download_failures` | local PDFs with checksums; the papers arXiv has no PDF for |
+| `pruned_pdfs` | PDFs deleted after ingest; their `downloads` rows stay, for a restore |
 | `html_sources` | local HTML renderings, and the papers arXiv renders nothing for |
 | `chunks` | passages with character offsets, from HTML or PDF, never both |
 | `chunks_fts` / `papers_fts` | BM25 over passages and over titles |
@@ -38,7 +39,13 @@ some work never completes, such as the 33 papers that return a truncated PDF
 every time. Each stage runs as its own process, so one failure does not end the
 ingest. Every stage is incremental: chunking is keyed on
 `version:chunk_size:overlap` (plus the cutter, when `VERBATIM_CHUNKER` is not
-windows), embedding on `(chunk_id, model_id)`.
+windows), embedding on `(chunk_id, model_id)`. With `--prune-pdfs` a last
+stage deletes the PDFs no stage reads again: the paper has a usable HTML
+rendering (so the PDF was only used to check it was not truncated), passages
+cut by the current chunker, a vector for every passage and its bibliography
+read. The download row keeps the URL and checksum, and `pruned_pdfs`, created on
+first use so opening the committed sample never changes it, records the deletion. `--batch` caps each
+fetching stage per round, so a large ingest holds one batch of PDFs at a time.
 
 **`sync`** pages a category newest first and stops at a stored watermark, so a
 repeat costs one request. A failed run leaves the watermark where it was, so
