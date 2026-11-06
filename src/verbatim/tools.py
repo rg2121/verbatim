@@ -8,6 +8,7 @@ that, where an empty result would read as an answer.
 
 `verify_citations` and `export_citations` are for MCP clients only, and so are
 not in TOOL_SCHEMAS: the local agent's answers are checked as they are written.
+`corpus_overview` and `paper_record` are what the server's resources return.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import json
 from typing import Any
 
 from verbatim.answers import answer_from_payload, verify_quote
-from verbatim.arxiv import Paper
+from verbatim.arxiv import Paper, license_class
 from verbatim.chunking import Chunk
 from verbatim.citations import (
     EXPORT_FORMATS,
@@ -129,6 +130,10 @@ def get_paper(corpus: CorpusStore, identifier: str) -> dict[str, Any] | None:
         paper = candidates[0] if candidates else None
     if paper is None:
         return None
+    return _paper_fields(paper)
+
+
+def _paper_fields(paper: Paper) -> dict[str, Any]:
     return {
         "arxiv_id": paper.arxiv_id,
         "title": paper.title,
@@ -139,6 +144,48 @@ def get_paper(corpus: CorpusStore, identifier: str) -> dict[str, Any] | None:
         "abstract": paper.summary,
         "url": paper.source_url,
         "license_url": paper.license_url,
+    }
+
+
+def paper_record(corpus: CorpusStore, arxiv_id: str) -> dict[str, Any] | None:
+    """One paper by arXiv ID, never by title: an address names a single paper."""
+    wanted = _clean_id(arxiv_id)
+    if not wanted:
+        raise ValueError("arxiv_id is empty: name a paper, as in verbatim://paper/2401.12345")
+    paper = corpus.get_paper(wanted) or corpus.latest_version_of(wanted)
+    if paper is None:
+        return None
+    base_arxiv_id, _ = split_arxiv_version(paper.arxiv_id)
+    passages, first, last = corpus.passage_span(paper.arxiv_id)
+    return {
+        **_paper_fields(paper),
+        "licence": license_class(paper.license_url),
+        "cited_by": corpus.citation_counts([base_arxiv_id]).get(base_arxiv_id, 0),
+        "references_held": len(corpus.papers_cited_by(paper.arxiv_id, limit=100_000)),
+        "passages": passages,
+        # What read_pages accepts; for HTML a position counts sections, not pages.
+        "positions": {"first": first, "last": last} if passages else None,
+    }
+
+
+def corpus_overview(corpus: CorpusStore, *, listed: int = 10) -> dict[str, Any]:
+    """What the corpus holds and lacks, so a client can judge whether it can answer at all."""
+    graph = corpus.citation_graph_stats()
+    return {
+        **corpus.holdings(),
+        "citation_graph": {
+            "edges": graph["edges"],
+            "connected_papers": graph["connected_papers"],
+            "bibliography_entries": corpus.reference_count(),
+        },
+        "most_cited_held": [
+            {"arxiv_id": paper.arxiv_id, "title": paper.title, "cited_by": citations}
+            for paper, citations in corpus.most_cited_held_papers(limit=listed)
+        ],
+        "most_cited_missing": [
+            {"arxiv_id": arxiv_id, "cited_by": citations}
+            for arxiv_id, citations in corpus.most_cited_absent_papers(limit=listed)
+        ],
     }
 
 

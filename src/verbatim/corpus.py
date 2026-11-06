@@ -586,6 +586,39 @@ class CorpusStore:
         ).fetchall()
         return {row["license"]: row["n"] for row in rows}
 
+    def holdings(self, *, categories: int = 10) -> dict[str, object]:
+        """What the current versions add up to, for judging what the corpus can answer."""
+        papers, earliest, latest, updated = self.connection.execute(
+            "SELECT COUNT(*), MIN(published), MAX(published), MAX(updated)"
+            " FROM papers WHERE is_latest = 1"
+        ).fetchone()
+        passages = self.connection.execute(
+            "SELECT COUNT(*) FROM chunks"
+            " WHERE arxiv_id IN (SELECT arxiv_id FROM papers WHERE is_latest = 1)"
+        ).fetchone()[0]
+        licences = self.connection.execute(
+            "SELECT COALESCE(license_class, 'unknown') AS licence, COUNT(*) AS n FROM papers"
+            " WHERE is_latest = 1 GROUP BY licence ORDER BY n DESC, licence"
+        ).fetchall()
+        # A paper counts once in each category it lists.
+        listed = self.connection.execute(
+            "SELECT category.value AS name, COUNT(*) AS n"
+            " FROM papers, json_each(papers.categories_json) AS category"
+            " WHERE papers.is_latest = 1 GROUP BY name ORDER BY n DESC, name LIMIT ?",
+            (categories,),
+        ).fetchall()
+        return {
+            "papers": int(papers),
+            "passages": int(passages),
+            "published": {
+                "earliest": earliest[:10] if earliest else None,
+                "latest": latest[:10] if latest else None,
+            },
+            "updated_up_to": updated[:10] if updated else None,
+            "licences": {row["licence"]: int(row["n"]) for row in licences},
+            "categories": {row["name"]: int(row["n"]) for row in listed},
+        }
+
     def papers_updated_since(
         self,
         since: str | None = None,
@@ -649,6 +682,14 @@ class CorpusStore:
             (arxiv_id, *pages),
         ).fetchall()
         return [_chunk_from_row(row) for row in rows]
+
+    def passage_span(self, arxiv_id: str) -> tuple[int, int | None, int | None]:
+        """How many passages one paper has, and the first and last positions they sit at."""
+        count, first, last = self.connection.execute(
+            "SELECT COUNT(*), MIN(page_number), MAX(page_number) FROM chunks WHERE arxiv_id = ?",
+            (arxiv_id,),
+        ).fetchone()
+        return int(count), first, last
 
     def get_paper(self, arxiv_id: str) -> Paper | None:
         row = self.connection.execute(

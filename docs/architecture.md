@@ -241,9 +241,19 @@ a client to use them, and nothing can make it. Paper text goes out labelled as
 data, which lowers the risk of instructions planted in a paper and does not
 remove it; rewriting the text would break quoting.
 
-The MCP tools leave the corpus as they found it. Their calls go to a small log
-beside it rather than the ledger: a model's bad argument is not a failed run, and
-a chat's searches would push real commands out of what the health check reads.
+Prompts move the choice of who writes from the client's model to the person.
+`cite_check` walks the client through checking its own quotes; with `--llm`,
+`verbatim_answer` and `literature_review` spell out the job's call, arguments
+and all, so the question reaches Verbatim unreworded. A prompt pushes harder
+than the instructions and still guarantees nothing. Two read-only resources give
+context: an overview of what the corpus holds and lacks, counted again only once
+the corpus changes, since it takes about 2 s on the thread every search waits
+for, and one paper's record, found by arXiv ID and never by title.
+
+The MCP tools and resources leave the corpus as they found it. Their calls and
+reads go to a small log beside it rather than the ledger: a model's bad argument
+is not a failed run, and a chat's searches would push real commands out of what
+the health check reads.
 
 Started with `--llm`, the server also runs `ask` and `report` on the model it
 names, so the client receives Verbatim's own checked answer rather than writing one.

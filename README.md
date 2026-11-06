@@ -160,18 +160,24 @@ For a client's JSON config, such as Claude Desktop's:
 
 The client's model writes its own answers, so nothing checks them unless it asks:
 `verify_citations` runs the same quote check as `ask`, and `export_citations`
-renders the references. Tool calls are logged beside the corpus, and `verbatim
-runs --mcp` shows them.
+renders the references. Tool calls and resource reads are logged beside the
+corpus, and `verbatim runs --mcp` shows them.
 
 Add `--llm` and a local Ollama model, as in `... run verbatim mcp --llm
 gemma4:e4b-mlx`, and the client can also run `ask` and `report` themselves,
 answered on this machine and checked as the commands check them. They take the
 commands' main choices too: `plan` or `deep`, `agents`, and the `builtin` or
-`langgraph` supervisor. Each returns a job id at once and `get_job` collects the result, since an answer takes minutes
-and some clients give up on a call after one. A job writes a ledger row, as the
-command would. A cloud model is refused unless `--allow-cloud` is added too, as
-in `--llm gemma4:31b-cloud --allow-cloud`: the question and the passages then go
-to Ollama's servers.
+`langgraph` supervisor. Each returns a job id at once and `get_job` collects the
+result, since an answer takes minutes and some clients give up on a call after
+one. A job writes a ledger row, as the command would. A cloud model is refused
+unless `--allow-cloud` is added too, as in `--llm gemma4:31b-cloud
+--allow-cloud`: the question and the passages then go to Ollama's servers.
+
+Prompts, picked in the client, fix who writes: `cite_check` has the client
+answer and check every quote, and with `--llm`, `verbatim_answer` and
+`literature_review` have Verbatim write and the client pass it on. Two resources
+give read-only context: `verbatim://corpus/overview` says what the corpus holds
+and lacks, and `verbatim://paper/{arxiv_id}` is one paper's record.
 
 **In a container:** `docker compose run --rm verbatim search "..." --state
 sample/corpus.db`, `docker compose up verbatim-web` for the page, and
