@@ -1,7 +1,9 @@
 """The MCP front end onto the corpus, driven as a client drives it."""
 
+import asyncio
 from contextlib import closing
 from importlib.metadata import version
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,8 +20,10 @@ import pytest
 from verbatim import config
 from verbatim.answers import Usage
 from verbatim.corpus import ChunkMatch, CorpusStore, EmbeddingModel
+import verbatim.graph_supervisor as graph_supervisor
 from verbatim.jobs import Refused
 from verbatim.mcp_server import CLIENT_TOOL_SCHEMAS, build_server, render_result, serve
+from verbatim.orchestrator import SUPERVISORS
 from verbatim.runs import recent_runs, record_run
 import verbatim.tools as tools
 from verbatim.tools import TOOL_SCHEMAS
@@ -34,6 +38,10 @@ AGENT_TOOLS = {schema["name"] for schema in TOOL_SCHEMAS}
 CLIENT_ONLY = {"verify_citations", "export_citations", "list_runs"}
 JOB_TOOLS = {"ask", "report", "get_job", "cancel_job"}
 QUESTION = "What threads the ring?"
+NEEDS_LANGGRAPH = pytest.mark.skipif(
+    importlib.util.find_spec("langgraph") is None,
+    reason="the optional langgraph extra: uv sync --extra langgraph",
+)
 
 
 @pytest.fixture
@@ -617,6 +625,143 @@ async def test_deep_climbs_the_ladder_and_reports_each_rung(state: Path) -> None
     assert done["result"]["citations"][0]["quote"] == SENTENCE
 
 
+def _through_the_graph(monkeypatch) -> list[str]:
+    """Each question the LangGraph supervisor climbs for, while it still climbs."""
+    climbed: list[str] = []
+    real = graph_supervisor.work_section_with_graph
+
+    def spy(corpus, embedder, completion, heading, **options):
+        climbed.append(heading)
+        return real(corpus, embedder, completion, heading, **options)
+
+    monkeypatch.setattr(graph_supervisor, "work_section_with_graph", spy)
+    return climbed
+
+
+def _route(ladder: dict) -> list[tuple[str, str]]:
+    return [(attempt["strategy"], attempt["verdict"]) for attempt in ladder["attempts"]]
+
+
+@pytest.mark.anyio
+async def test_both_job_tools_offer_the_commands_supervisors(state: Path) -> None:
+    """The choice --supervisor gives, on the two tools that climb a ladder."""
+    async with Client(job_server(state, Local(_chunk_id(state)))) as client:
+        listed = await _tools(client)
+
+    for tool, needs in (("ask", "deep"), ("report", "agents")):
+        offered = listed[tool].input_schema["properties"]["supervisor"]
+        assert offered["enum"] == list(SUPERVISORS)
+        assert offered["default"] == "builtin"
+        assert f"Only with {needs}" in offered["description"]
+
+
+@NEEDS_LANGGRAPH
+@pytest.mark.anyio
+async def test_deep_climbs_the_same_ladder_through_langgraph(state: Path, monkeypatch) -> None:
+    """The same route and answer as the loop. Equal results cannot show the graph ran, so a spy does."""
+    climbed = _through_the_graph(monkeypatch)
+    results, calls = {}, {}
+    for supervisor in SUPERVISORS:
+        model = Local(_chunk_id(state), first_quote="Magnetic flux never threads anything")
+        async with Client(job_server(state, model)) as client:
+            done = await _collected(client, await client.call_tool(
+                "ask", {"question": QUESTION, "strategy": "deep", "supervisor": supervisor}
+            ))
+        results[supervisor], calls[supervisor] = done["result"], model.calls
+
+    builtin, graphed = results["builtin"], results["langgraph"]
+    assert climbed == [QUESTION]
+    assert builtin["ladder"]["supervisor"] == "builtin"
+    assert graphed["ladder"]["supervisor"] == "langgraph"
+    assert _route(graphed["ladder"]) == _route(builtin["ladder"])
+    assert len(graphed["ladder"]["attempts"]) > 1 and graphed["ladder"]["outcome"] == "accepted"
+    assert graphed["answer"] == builtin["answer"] and calls["langgraph"] == calls["builtin"]
+    with CorpusStore(state) as corpus:
+        assert {row["inputs"]["supervisor"] for row in recent_runs(corpus)} == set(SUPERVISORS)
+
+
+@NEEDS_LANGGRAPH
+@pytest.mark.anyio
+async def test_a_review_with_agents_can_work_its_sections_through_langgraph(
+    state: Path, monkeypatch
+) -> None:
+    headings = (QUESTION, "How does magnetic flux behave?")
+    climbed = _through_the_graph(monkeypatch)
+    results = {}
+    for supervisor in SUPERVISORS:
+        async with Client(job_server(state, Local(_chunk_id(state), parts=headings))) as client:
+            done = await _collected(client, await client.call_tool(
+                "report",
+                {"topic": "magnetic flux", "sections": 2, "agents": True, "supervisor": supervisor},
+            ))
+        results[supervisor] = done["result"]
+
+    assert climbed == list(headings)
+    assert results["builtin"]["supervisor"] == "builtin"
+    assert results["langgraph"]["supervisor"] == "langgraph"
+    assert results["langgraph"]["sections"] == results["builtin"]["sections"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "supervisor", ["builtin", pytest.param("langgraph", marks=NEEDS_LANGGRAPH)]
+)
+async def test_a_cancelled_deep_job_stops_before_its_next_model_call(
+    state: Path, monkeypatch, supervisor: str
+) -> None:
+    """The cancel is a BaseException, and it must get through LangGraph as it gets through the loop."""
+    climbed = _through_the_graph(monkeypatch)
+    gate = threading.Event()
+    model = Local(_chunk_id(state), hold=gate)
+
+    async with Client(job_server(state, model)) as client:
+        started = await client.call_tool(
+            "ask", {"question": QUESTION, "strategy": "deep", "supervisor": supervisor}
+        )
+        for _ in range(100):
+            if model.calls:
+                break
+            await asyncio.sleep(0.05)
+        await client.call_tool("cancel_job", {"job_id": started.structured_content["job_id"]})
+        gate.set()
+        done = await _collected(client, started)
+
+    assert done["status"] == "cancelled"
+    assert model.calls == ["complete"]
+    assert climbed == ([QUESTION] if supervisor == "langgraph" else [])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("ask", {"question": QUESTION, "strategy": "deep", "supervisor": "langgraph"}),
+        ("report", {"topic": "magnetic flux", "agents": True, "supervisor": "langgraph"}),
+    ],
+)
+async def test_langgraph_without_its_extra_is_refused_before_a_job_starts(
+    state: Path, monkeypatch, tool: str, arguments: dict
+) -> None:
+    """At once, as a missing model is: a job that failed later would leave a failed run behind."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name.startswith("langgraph"):
+            raise ImportError("no langgraph here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+
+    async with Client(job_server(state, Local(_chunk_id(state)))) as client:
+        refused = await client.call_tool(tool, arguments)
+
+    assert refused.is_error is True and "uv sync --extra langgraph" in _text(refused)
+    with CorpusStore(state) as corpus:
+        assert recent_runs(corpus) == []
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("tool", "arguments", "complaint"),
@@ -624,8 +769,16 @@ async def test_deep_climbs_the_ladder_and_reports_each_rung(state: Path) -> None
         ("ask", {"question": "  "}, "question is empty"),
         ("ask", {"question": QUESTION, "strategy": "deep", "arxiv_id": "2608.11111"}, "no effect with deep"),
         ("ask", {"question": QUESTION, "arxiv_id": "9999.99999"}, "no paper"),
+        ("ask", {"question": QUESTION, "supervisor": "langgraph"}, "only applies with strategy deep"),
+        (
+            "ask",
+            {"question": QUESTION, "strategy": "plan", "supervisor": "langgraph"},
+            "only applies with strategy deep",
+        ),
+        ("ask", {"question": QUESTION, "strategy": "deep", "supervisor": "crew"}, "'builtin' or 'langgraph'"),
         ("report", {"topic": ""}, "topic is empty"),
         ("report", {"topic": "flux", "sections": 7}, "sections must be"),
+        ("report", {"topic": "flux", "supervisor": "langgraph"}, "only applies with agents"),
         ("get_job", {"job_id": "nope"}, "no job 'nope'"),
         ("get_job", {"job_id": "x", "wait_seconds": 99}, "wait_seconds must be"),
         ("cancel_job", {"job_id": "nope"}, "no job 'nope'"),
@@ -650,6 +803,7 @@ async def test_a_job_writes_one_ledger_row_as_the_command_would(state: Path) -> 
         (row,) = recent_runs(corpus)
     assert row["command"] == "ask" and row["ok"] is True
     assert row["inputs"]["via"] == "mcp" and row["inputs"]["strategy"] == "default"
+    assert row["inputs"]["supervisor"] == "builtin"
     assert row["outputs"]["citations"] == 1
 
 
@@ -683,6 +837,8 @@ async def test_a_report_job_returns_the_review_with_its_references(state: Path) 
     assert f"## {QUESTION}" in result["markdown"] and "## References" in result["markdown"]
     assert [section["heading"] for section in result["sections"]] == list(headings)
     assert all(section["citations"] == 1 for section in result["sections"])
+    # The plain review climbs no ladder, so no supervisor ran.
+    assert result["supervisor"] is None
     with CorpusStore(state) as corpus:
         (row,) = recent_runs(corpus)
     assert row["command"] == "report" and row["inputs"]["via"] == "mcp"

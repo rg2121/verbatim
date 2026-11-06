@@ -25,7 +25,7 @@ from typing import Annotated, Any, Literal
 from mcp.server.mcpserver import Context
 from pydantic import BaseModel, Field
 
-from verbatim import config
+from verbatim import config, graph_supervisor
 from verbatim.answers import OllamaToolCaller, RoleCompletion
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
@@ -282,6 +282,17 @@ Agents = Annotated[
         )
     ),
 ]
+# The choice `--supervisor` gives, on the two tools that climb a ladder.
+SUPERVISOR_CHOICE = (
+    "Which implementation climbs the ladder: builtin, a loop, or langgraph, a LangGraph state "
+    "machine running the same roles and checks"
+)
+AskSupervisor = Annotated[
+    Literal["builtin", "langgraph"], Field(description=f"{SUPERVISOR_CHOICE}. Only with deep")
+]
+ReportSupervisor = Annotated[
+    Literal["builtin", "langgraph"], Field(description=f"{SUPERVISOR_CHOICE}. Only with agents")
+]
 JobId = Annotated[str, Field(description="The job_id that ask or report returned")]
 WaitSeconds = Annotated[
     int,
@@ -515,11 +526,22 @@ def build_server(
 
         return off_the_loop(kind, arguments, begin)
 
-    async def ask(question: Question, strategy: Strategy = "default", arxiv_id: PaperScope = None) -> JobView:
+    async def ask(
+        question: Question,
+        strategy: Strategy = "default",
+        arxiv_id: PaperScope = None,
+        supervisor: AskSupervisor = "builtin",
+    ) -> JobView:
         def prepare() -> dict[str, Any]:
             text = question.strip()
             if not text:
                 raise ValueError("question is empty: pass a standalone question")
+            if supervisor != "builtin" and strategy != "deep":
+                # Refused rather than ignored, as in the CLI.
+                raise ValueError(
+                    "supervisor only applies with strategy deep; without it ask climbs no "
+                    "ladder. Use deep or leave supervisor as builtin."
+                )
             scope = None
             if arxiv_id is not None and arxiv_id.strip():
                 if strategy == "deep":
@@ -529,21 +551,35 @@ def build_server(
                         "retrieval. Drop one of the two."
                     )
                 scope = held_version(corpus_store(), arxiv_id)
-            return {"question": text, "strategy": strategy, "arxiv_id": scope}
+            _supervisor_ready(supervisor)
+            return {"question": text, "strategy": strategy, "arxiv_id": scope, "supervisor": supervisor}
 
-        arguments = {"question": question, "strategy": strategy, "arxiv_id": arxiv_id}
+        arguments = {
+            "question": question, "strategy": strategy, "arxiv_id": arxiv_id, "supervisor": supervisor,
+        }
         return JobView(**await start("ask", arguments, prepare))
 
-    async def report(topic: Topic, sections: SectionCount = 4, agents: Agents = False) -> JobView:
+    async def report(
+        topic: Topic,
+        sections: SectionCount = 4,
+        agents: Agents = False,
+        supervisor: ReportSupervisor = "builtin",
+    ) -> JobView:
         def prepare() -> dict[str, Any]:
             text = topic.strip()
             if not text:
                 raise ValueError("topic is empty: pass what the review is about, as a phrase")
             if not 1 <= sections <= MAX_SECTIONS:
                 raise ValueError(f"sections must be between 1 and {MAX_SECTIONS}")
-            return {"topic": text, "sections": sections, "agents": agents}
+            if supervisor != "builtin" and not agents:
+                raise ValueError(
+                    "supervisor only applies with agents; the plain report runs a single rung "
+                    "and climbs no ladder. Set agents or leave supervisor as builtin."
+                )
+            _supervisor_ready(supervisor)
+            return {"topic": text, "sections": sections, "agents": agents, "supervisor": supervisor}
 
-        arguments = {"topic": topic, "sections": sections, "agents": agents}
+        arguments = {"topic": topic, "sections": sections, "agents": agents, "supervisor": supervisor}
         return JobView(**await start("report", arguments, prepare))
 
     async def collect(
@@ -601,6 +637,12 @@ def _tool_caller(completion: Any, tool_caller: Any, llm: str | None) -> Any:
         # An injected model is the whole backend: never build an Ollama caller behind it.
         return completion if hasattr(completion, "choose_tool") else None
     return OllamaToolCaller(config.role_model("planner", llm))
+
+
+def _supervisor_ready(supervisor: str) -> None:
+    """Refuse LangGraph before a job is queued: failing once it ran would leave a failed run."""
+    if supervisor == "langgraph" and not graph_supervisor.installed():
+        raise ValueError(graph_supervisor.MISSING)
 
 
 def _corpus_facts(state: Path) -> tuple[int, str]:

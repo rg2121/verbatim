@@ -37,9 +37,18 @@ from verbatim.orchestrator import (
 from verbatim.report import ReportSection
 
 MISSING = (
-    "--supervisor langgraph needs the optional langgraph extra. "
+    "The langgraph supervisor needs the optional langgraph extra. "
     "Install it with: uv sync --extra langgraph"
 )
+
+
+def installed() -> bool:
+    """Whether the extra imports, so a front end can refuse before any work starts."""
+    try:
+        import langgraph.graph  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 class LadderState(TypedDict, total=False):

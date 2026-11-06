@@ -32,7 +32,7 @@ from verbatim.answers import Answer, answer_from_matches, subject_check
 from verbatim.citations import locator, render_bibliography, render_locator
 from verbatim.corpus import CorpusStore
 from verbatim.evidence import describe_evidence
-from verbatim.orchestrator import Meters, orchestrate, work_section
+from verbatim.orchestrator import Meters, _supervisor, orchestrate
 from verbatim.report import render_markdown
 from verbatim.research import research
 from verbatim.retrieval import default_search_options, hybrid_search
@@ -518,11 +518,14 @@ def _ask(
     progress: Progress,
     ledger: dict[str, Any],
 ) -> dict[str, Any]:
-    """`verbatim ask`, with --plan or --deep as the strategy says."""
+    """`verbatim ask`, with --plan or --deep as the strategy says, and --supervisor for the ladder."""
     question, strategy, scope = inputs["question"], inputs["strategy"], inputs.get("arxiv_id")
-    with record_run(corpus, "ask", **ledger, passages=config.ASK_PASSAGES, strategy=strategy) as run:
+    supervisor = inputs["supervisor"]
+    with record_run(
+        corpus, "ask", **ledger, passages=config.ASK_PASSAGES, strategy=strategy, supervisor=supervisor
+    ) as run:
         if strategy == "deep":
-            section, climbed = work_section(
+            section, climbed = _supervisor(supervisor)(
                 corpus, embedder, completion, question,
                 caller=caller,
                 per_section=config.ASK_PASSAGES,
@@ -540,6 +543,7 @@ def _ask(
                 # The ladder already retried on a low subject score, as the page says.
                 "subject_warning": None,
                 "ladder": {
+                    "supervisor": supervisor,
                     "shape": climbed.shape,
                     "outcome": climbed.outcome,
                     "attempts": [
@@ -610,9 +614,12 @@ def _report(
     progress: Progress,
     ledger: dict[str, Any],
 ) -> dict[str, Any]:
-    """`verbatim report`, with --agents if asked, at its default passages per section."""
+    """`verbatim report`, with --agents and --supervisor if asked, at its default passages per section."""
     topic, sections, agents = inputs["topic"], inputs["sections"], inputs["agents"]
-    with record_run(corpus, "report", **ledger, sections=sections, agents=agents) as run:
+    supervisor = inputs["supervisor"]
+    with record_run(
+        corpus, "report", **ledger, sections=sections, agents=agents, supervisor=supervisor
+    ) as run:
         built, climbed = orchestrate(
             corpus, embedder, completion, completion.complete_text, topic,
             caller=caller,
@@ -621,6 +628,7 @@ def _report(
             max_per_paper=2,
             ladder=None if agents else ("hybrid",),
             on_section=lambda heading, done, total: progress.enter(f"section {done} of {total} ({heading})"),
+            supervisor=supervisor,
         )
         run.record(
             sections=len(built.sections),
@@ -631,6 +639,8 @@ def _report(
         )
     return {
         "topic": built.topic,
+        # Only a review with agents climbs a ladder.
+        "supervisor": supervisor if agents else None,
         # The trace is appended only with --agents, as the command does.
         "markdown": render_markdown(built, ledger=climbed if agents else None),
         "sections": [

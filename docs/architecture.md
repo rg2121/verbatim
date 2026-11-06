@@ -201,7 +201,8 @@ into a ledger printed with the review, including which tools the agent called,
 which papers it stood on and what it cost; a budget caps a run by tokens,
 seconds or attempts. `--supervisor langgraph` runs the same ladder as a
 LangGraph state machine, sharing every role and the data types in
-`contracts.py`, so only the control flow differs.
+`contracts.py`, so only the control flow differs; the MCP `ask` and `report`
+jobs take the same choice.
 
 Three designs around it are off by default, each with its measurement in
 [findings.md](findings.md):
