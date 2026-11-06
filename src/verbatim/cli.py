@@ -55,7 +55,7 @@ from verbatim.html_source import (
     parse_html_sections,
 )
 from verbatim.logs import configure_logging
-from verbatim.pipeline import MAX_ROUNDS, render_rounds, run_pipeline
+from verbatim.pipeline import MAX_ROUNDS, render_left, render_rounds, run_pipeline
 from verbatim.references import references_from_file
 from verbatim.reranking import RERANKERS, default_reranker, rerank, shared_reranker
 from verbatim.research import research
@@ -1404,6 +1404,12 @@ def run() -> None:
                 "embed": ("--model", args.model),
                 "index": ("--model", args.model),
             },
+            # A stage takes everything pending, so a large one can run for hours.
+            on_start=lambda name, waiting: print(
+                f"  ...    {name:<12} "
+                + ("running" if waiting is None else f"{waiting:>7,} pending"),
+                flush=True,
+            ),
             on_stage=lambda stage: print(
                 f"  {'ok ' if stage.ok else 'FAILED'} {stage.name:<12}"
                 f" {stage.pending_before:>7,} -> {stage.pending_after:>7,}",
@@ -1412,6 +1418,8 @@ def run() -> None:
         )
         print()
         print(render_rounds(rounds))
+        print()
+        print(render_left(pending(), rounds, max_rounds=args.max_rounds))
 
     if args.command == "mcp":
         from verbatim.mcp_server import serve

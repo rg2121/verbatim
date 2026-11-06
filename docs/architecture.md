@@ -31,7 +31,8 @@ costs the batch in flight and nothing more.
 ## Ingest
 
 `sync → licenses → download → html → references → chunk → embed → index`.
-`pipeline` runs them in rounds, because each creates work for the next, and
+`pipeline` runs them in rounds, because each creates work for the next, asks
+each stage for everything pending (`download` alone takes 3 PDFs a run), and
 stops when a round changes nothing rather than when every count reaches zero -
 some work never completes, such as the 33 papers that return a truncated PDF
 every time. Each stage runs as its own process, so one failure does not end the

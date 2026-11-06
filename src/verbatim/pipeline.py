@@ -30,6 +30,10 @@ STAGE_ARGUMENTS: dict[str, tuple[str, ...]] = {
     # Skip chunks an older chunker made; re-chunking would discard their vectors.
     "embed": ("--only-current",),
 }
+# Stages whose own default takes a few items a run (`download` takes 3 PDFs).
+# Inside the pipeline each is asked for everything pending, or a large sync
+# would be ingested a few papers per run.
+LIMITED_STAGES = frozenset({"download", "html", "licenses", "references"})
 MAX_ROUNDS = 8
 
 
@@ -85,11 +89,14 @@ def run_pipeline(
     max_rounds: int = MAX_ROUNDS,
     on_stage: Callable[[StageResult], None] | None = None,
     stage_arguments: dict[str, tuple[str, ...]] | None = None,
+    on_start: Callable[[str, int | None], None] | None = None,
 ) -> list[RoundResult]:
     """Run the stages in rounds until nothing is pending or a round changes nothing.
 
     Some work never completes (a PDF that is always truncated), so a round with
     no progress ends the run. `stage_arguments` adds arguments per stage.
+    `on_start` hears each stage and its pending count (None when it keeps
+    none, as `index` does) before it runs.
     """
     if max_rounds < 1:
         raise ValueError("max_rounds must be at least 1")
@@ -104,8 +111,12 @@ def run_pipeline(
             if counter and before == 0:
                 continue
             arguments = (
-                *STAGE_ARGUMENTS.get(name, ()), *(stage_arguments or {}).get(name, ())
+                *STAGE_ARGUMENTS.get(name, ()),
+                *(("--limit", str(before)) if name in LIMITED_STAGES else ()),
+                *(stage_arguments or {}).get(name, ()),
             )
+            if on_start is not None:
+                on_start(name, before if counter else None)
             ok, detail = runner(name, arguments, state)
             after = pending().get(counter, 0) if counter else 0
             stage = StageResult(name, ok, before, after, detail)
@@ -139,4 +150,28 @@ def render_rounds(rounds: Sequence[RoundResult]) -> str:
             f"\n  {len(failed)} stage run(s) failed; the rest continued. "
             "Re-run to retry them."
         )
+    return "\n".join(lines)
+
+
+def render_left(
+    pending: dict[str, int],
+    rounds: Sequence[RoundResult],
+    *,
+    max_rounds: int,
+    stages: Sequence[tuple[str, str]] = STAGES,
+) -> str:
+    """Say what is still pending after a run and why the run stopped, or that nothing is."""
+    left = [(name, pending.get(counter, 0)) for name, counter in stages if counter]
+    left = [(name, count) for name, count in left if count]
+    if not left:
+        return "  Nothing is left to do."
+    if rounds and rounds[-1].progressed and len(rounds) >= max_rounds:
+        reason = f"it reached its {max_rounds}-round limit"
+    else:
+        reason = "its last round made no progress"
+    lines = [f"  Work is left; the run stopped because {reason}:"]
+    lines += [f"    {name:<12} {count:>7,} pending" for name, count in left]
+    lines.append(
+        "  Re-run `verbatim pipeline`, or run a stage on its own to see what it reports."
+    )
     return "\n".join(lines)

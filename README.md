@@ -86,9 +86,11 @@ uv run verbatim stats                                      # what is done and wh
 ```
 
 `pipeline` runs every ingest stage in rounds until nothing is left to do. Each
-stage is incremental, so an interrupted run resumes, and each can be run on its
-own. After `references`, `grow` adds the papers your corpus cites most and
-does not yet hold.
+stage takes everything pending, so after a large `sync` it can run for hours:
+arXiv asks for a pause between requests. It ends by saying what, if anything,
+is left. Each stage is incremental, so an interrupted run resumes, and each can
+be run on its own. After `references`, `grow` adds the papers your corpus cites
+most and does not yet hold.
 
 - The whole corpus is one SQLite file, `data/corpus.db`. Everything else is
   derived from it.

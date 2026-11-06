@@ -279,6 +279,24 @@ def test_pipeline_hands_its_model_to_the_stages_it_runs(monkeypatch, tmp_path) -
         assert captured["stage_arguments"][stage] == ("--model", "other/model")
 
 
+def test_pipeline_ends_by_saying_what_is_left(monkeypatch, tmp_path, capsys) -> None:
+    """It printed its rounds and stopped, so papers still waiting looked like a finished run."""
+    from helpers import paper
+    from verbatim.corpus import CorpusStore
+
+    with CorpusStore(tmp_path / "c.db") as corpus:
+        corpus.upsert_papers([paper("2608.11111v1")])
+    monkeypatch.setattr("verbatim.cli.run_pipeline", lambda pending, **options: [])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verbatim", "pipeline", "--state", str(tmp_path / "c.db"), "--model", "stub"],
+    )
+    run()
+
+    out = capsys.readouterr().out
+    assert "download" in out and "1 pending" in out
+
+
 def test_the_licence_stage_is_in_the_run_ledger(monkeypatch, tmp_path, capsys) -> None:
     """Every other stage records its runs; a failing licence lookup never
     reached `runs` or the health check, because this one recorded nothing."""
