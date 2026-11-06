@@ -135,6 +135,8 @@ DOWNLOAD_DELAY = float(_text("VERBATIM_DOWNLOAD_DELAY", "3"))
 SYNC_LIMIT = _integer("VERBATIM_SYNC_LIMIT", 1_000)
 SYNC_PAGE_SIZE = _integer("VERBATIM_SYNC_PAGE_SIZE", 100)
 SYNC_DELAY = float(_text("VERBATIM_SYNC_DELAY", "3"))
+# Whole arXiv subjects a plain `verbatim sync` harvests, such as "cs,math,physics".
+SYNC_SUBJECTS = tuple(_text("VERBATIM_SYNC_SUBJECTS", "").replace(",", " ").split())
 
 # arXiv politeness. The OAI-PMH interface asks callers to pace themselves.
 LICENSE_LOOKUP_DELAY = float(_text("VERBATIM_LICENSE_LOOKUP_DELAY", "3"))

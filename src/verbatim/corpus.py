@@ -32,6 +32,8 @@ BIBLIOGRAPHIES_READ = "bibliographies_read"
 # PDFs deleted once nothing reads them again (`verbatim prune`). Created on
 # first use too, and the download record stays, with the URL and checksum.
 PRUNED_PDFS = "pruned_pdfs"
+# Whole subjects harvested since a start date (`sync --subject`), created on first use.
+SUBJECT_HARVESTS = "subject_harvests"
 # Long enough for one stage's write to finish while another waits: chunking
 # holds the write lock for minutes.
 BUSY_TIMEOUT_SECONDS = 300
@@ -102,6 +104,20 @@ class PaperFilter:
 class SyncSummary:
     inserted: int
     updated: int
+
+
+@dataclass(frozen=True)
+class SubjectHarvest:
+    """Where one subject's harvest stands.
+
+    `since` is the first-submission date a paper must reach to count as new;
+    `harvested_through` is the last day the newest finished harvest read.
+    """
+
+    subject: str
+    since: str
+    harvested_through: str | None
+    papers_kept: int
 
 
 @dataclass(frozen=True)
@@ -850,6 +866,64 @@ class CorpusStore:
                 (category, newest_updated, _timestamp(), papers_seen),
             )
 
+    def subject_harvest(self, subject: str) -> SubjectHarvest | None:
+        if not self._table_exists(SUBJECT_HARVESTS):
+            return None
+        row = self.connection.execute(
+            f"SELECT * FROM {SUBJECT_HARVESTS} WHERE subject = ?", (subject,)
+        ).fetchone()
+        return None if row is None else _subject_harvest_from_row(row)
+
+    def subject_harvests(self) -> list[SubjectHarvest]:
+        if not self._table_exists(SUBJECT_HARVESTS):
+            return []
+        rows = self.connection.execute(
+            f"SELECT * FROM {SUBJECT_HARVESTS} ORDER BY subject"
+        ).fetchall()
+        return [_subject_harvest_from_row(row) for row in rows]
+
+    def record_subject_harvest(
+        self, subject: str, *, since: str, through: str | None, kept: int
+    ) -> None:
+        """Record a harvest; `through` is None when it did not finish, and never moves back."""
+        with self.connection:
+            self.connection.execute(
+                f"CREATE TABLE IF NOT EXISTS {SUBJECT_HARVESTS} ("
+                " subject TEXT PRIMARY KEY, since TEXT NOT NULL, harvested_through TEXT,"
+                " last_harvested_at TEXT NOT NULL, papers_kept INTEGER NOT NULL DEFAULT 0)"
+            )
+            self.connection.execute(
+                f"""
+                INSERT INTO {SUBJECT_HARVESTS}
+                    (subject, since, harvested_through, last_harvested_at, papers_kept)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(subject) DO UPDATE SET
+                    since = excluded.since,
+                    harvested_through = CASE
+                        WHEN excluded.harvested_through IS NULL THEN harvested_through
+                        WHEN harvested_through IS NULL THEN excluded.harvested_through
+                        ELSE MAX(harvested_through, excluded.harvested_through) END,
+                    last_harvested_at = excluded.last_harvested_at,
+                    papers_kept = papers_kept + excluded.papers_kept
+                """,
+                (subject, since, through, _timestamp(), kept),
+            )
+
+    def last_seen_by_base(self, base_ids: Sequence[str]) -> dict[str, str]:
+        """When each held paper was last seen by a sync, across its versions."""
+        seen: dict[str, str] = {}
+        unique = list(dict.fromkeys(base_ids))
+        for start in range(0, len(unique), 500):
+            batch = unique[start : start + 500]
+            placeholders = ",".join("?" * len(batch))
+            rows = self.connection.execute(
+                f"SELECT base_arxiv_id, MAX(last_seen_at) AS seen FROM papers"
+                f" WHERE base_arxiv_id IN ({placeholders}) GROUP BY base_arxiv_id",
+                batch,
+            ).fetchall()
+            seen.update({row["base_arxiv_id"]: row["seen"] for row in rows})
+        return seen
+
     def sync_summary(self) -> list[tuple[str, str | None, int]]:
         rows = self.connection.execute(
             "SELECT category, newest_updated, papers_seen FROM sync_state ORDER BY category"
@@ -1587,6 +1661,13 @@ def build_fts_query(query: str, *, match: str = "all") -> str:
             continue
         terms.append(f'"{body}"*' if prefix else f'"{body}"')
     return (" OR " if match == "any" else " ").join(terms)
+
+
+def _subject_harvest_from_row(row: sqlite3.Row) -> SubjectHarvest:
+    return SubjectHarvest(
+        subject=row["subject"], since=row["since"],
+        harvested_through=row["harvested_through"], papers_kept=row["papers_kept"],
+    )
 
 
 def _download_from_row(row: sqlite3.Row) -> DownloadedPaper:

@@ -32,6 +32,13 @@ costs the batch in flight and nothing more.
 ## Ingest
 
 `sync → licenses → download → html → references → chunk → embed → index`.
+`sync --subject` harvests whole subjects through OAI-PMH, whose records carry
+the licence but not the first-submission date (a revision lists an old paper
+again), so metadata comes from the query API by identifier and a paper is kept
+when `published` reaches the subject's start date, or when it is a new version of
+a held paper. The identifier's month rules out most old papers without a lookup;
+`subject_harvests`, created on first use, keeps each subject's start and the last
+day a finished harvest read.
 `pipeline` runs them in rounds, because each creates work for the next, asks
 each stage for everything pending (`download` alone takes 3 PDFs a run), and
 stops when a round changes nothing rather than when every count reaches zero -

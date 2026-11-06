@@ -80,9 +80,9 @@ passages.
 ## Building your own corpus
 
 ```bash
-uv run verbatim sync --category cs.CL cs.IR --limit 2000   # paper metadata, newest first
-uv run verbatim pipeline                                   # licences, PDFs, HTML, bibliographies, passages, vectors
-uv run verbatim stats                                      # what is done and what is left
+uv run verbatim sync --subject cs math physics --since 2026-10-23   # whole subjects, licences included
+uv run verbatim pipeline --prune-pdfs --batch 1000                  # PDFs, HTML, bibliographies, passages, vectors
+uv run verbatim stats                                               # what is done and what is left
 ```
 
 `pipeline` runs every ingest stage in rounds until nothing is left to do. Each
@@ -94,6 +94,11 @@ most and does not yet hold.
 
 - The whole corpus is one SQLite file, `data/corpus.db`. Everything else is
   derived from it.
+- `sync --subject` takes every paper in a subject first submitted since
+  `--since`, through arXiv's OAI-PMH interface, which lists a day's changed
+  records with their licences, about 1,300 a request. The first sync of a
+  subject needs `--since`; later ones resume where the last one finished. The
+  three subjects above are 95% of arXiv, about 40,000 new papers a month.
 - `sync` stops at a stored watermark per category, so re-running it is cheap.
   To go deeper into a category than its first sync did, pass `--full`; a
   `--full` run cannot resume, so deepen a large category in stages.
@@ -111,7 +116,7 @@ Every command takes `--help`: `uv run verbatim <command> --help`.
 
 | | command | what it does |
 |---|---|---|
-| **Build** | `sync` | fetch paper metadata into the corpus |
+| **Build** | `sync` | fetch paper metadata: whole subjects since a date, or categories newest first |
 | | `licenses` | look up licences, which arXiv's query API omits |
 | | `download`, `html` | fetch PDFs and arXiv HTML renderings |
 | | `references` | read bibliographies, and list what the corpus cites and lacks |

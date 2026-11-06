@@ -76,6 +76,7 @@ from verbatim.storage import (
     save_download_manifest,
     save_papers,
 )
+from verbatim.harvest import SUBJECTS, format_harvest_report, harvest_subject
 from verbatim.sync import format_sync_report, sync_category
 from verbatim.vectors import SqlitePaperIndex, SqliteVecIndex
 
@@ -165,9 +166,18 @@ def run() -> None:
     fetch_parser.add_argument("--output", type=Path, default=config.PAPERS_SNAPSHOT_PATH)
 
     sync_parser = subparsers.add_parser("sync", help="Fetch metadata and upsert it into the cumulative corpus catalogue")
-    sync_parser.add_argument("--category", required=True, nargs="+", help="One or more arXiv categories")
-    sync_parser.add_argument("--limit", type=int, default=config.SYNC_LIMIT, help="Papers to ingest per category this run")
-    sync_parser.add_argument("--page-size", type=int, default=config.SYNC_PAGE_SIZE, help="Papers per API request")
+    sync_parser.add_argument("--category", nargs="+", help="One or more arXiv categories, newest first")
+    sync_parser.add_argument(
+        "--subject", nargs="+", choices=SUBJECTS,
+        help="Whole arXiv subjects, e.g. cs math physics: every paper first submitted "
+             "since --since. VERBATIM_SYNC_SUBJECTS makes this the default",
+    )
+    sync_parser.add_argument(
+        "--since", help="With --subject: the first-submission date, YYYY-MM-DD; needed "
+                        "the first time, after which a sync resumes where it stopped",
+    )
+    sync_parser.add_argument("--limit", type=int, help=f"Papers to ingest per category this run (default {config.SYNC_LIMIT})")
+    sync_parser.add_argument("--page-size", type=int, help=f"Papers per API request (default {config.SYNC_PAGE_SIZE})")
     sync_parser.add_argument("--delay", type=float, default=config.SYNC_DELAY, help="Seconds between requests")
     sync_parser.add_argument("--full", action="store_true", help="Ignore the watermark and re-walk the category")
     sync_parser.add_argument("--state", type=Path, default=config.STATE_PATH)
@@ -749,6 +759,42 @@ def run() -> None:
         print(f"Saved {len(papers)} papers to {args.output}")
 
     if args.command == "sync":
+        if args.subject and args.category:
+            raise SystemExit("error: name --category or --subject, not both")
+        subjects = args.subject or ([] if args.category else list(config.SYNC_SUBJECTS))
+        if not subjects and not args.category:
+            raise SystemExit(
+                "error: name what to sync: --subject cs math physics --since YYYY-MM-DD "
+                "for whole subjects, or --category cs.CL cs.IR. VERBATIM_SYNC_SUBJECTS "
+                "sets the subjects a plain sync harvests."
+            )
+        if subjects:
+            _refuse_ignored("--subject", "a subject is harvested by date, not by count", {
+                "--full": args.full, "--limit": args.limit is not None,
+                "--page-size": args.page_size is not None,
+            })
+            with CorpusStore(args.state) as corpus, record_run(corpus, "sync", subjects=subjects, since=args.since) as run:
+                kept = 0
+                for position, subject in enumerate(subjects):
+                    if position:
+                        time.sleep(args.delay)
+                    try:
+                        harvested = harvest_subject(
+                            corpus, subject, since=args.since, delay=args.delay,
+                            on_progress=lambda done: print(
+                                f"  {done.subject}: {done.records:,} records read,"
+                                f" {done.kept:,} kept", end="\r", flush=True,
+                            ),
+                        )
+                    except ValueError as error:
+                        raise SystemExit(f"error: {error}") from None
+                    kept += harvested.kept
+                    print(format_harvest_report(harvested))
+                run.record(kept=kept)
+            return
+        _refuse_ignored("--category", "a category sync stops at its own watermark", {
+            "--since": args.since is not None,
+        })
         with CorpusStore(args.state) as corpus, record_run(corpus, "sync", limit=args.limit, categories=args.category, full=args.full) as run:
             for position, category in enumerate(args.category):
                 if position:
@@ -756,8 +802,8 @@ def run() -> None:
                 report = sync_category(
                     corpus,
                     category,
-                    limit=args.limit,
-                    page_size=args.page_size,
+                    limit=args.limit if args.limit is not None else config.SYNC_LIMIT,
+                    page_size=args.page_size if args.page_size is not None else config.SYNC_PAGE_SIZE,
                     delay=args.delay,
                     full=args.full,
                     on_page=lambda done, total: print(
@@ -831,6 +877,7 @@ def run() -> None:
             fingerprint = chunker_fingerprint(args.chunk_size, args.overlap)
             counts = corpus.pipeline_stats(fingerprint, model_id)
             synced = corpus.sync_summary()
+            harvests = corpus.subject_harvests()
             prunable = corpus.prunable_pdfs(fingerprint, model_id)
         print(format_stats(counts))
         if prunable:
@@ -844,6 +891,12 @@ def run() -> None:
             for category, watermark, seen in synced:
                 mark = (watermark or "never")[:19]
                 print(f"    {category:<18} {seen:>7,} ingested   up to {mark}")
+        if harvests:
+            print("\n  harvested subjects")
+            for harvest in harvests:
+                through = harvest.harvested_through or "not finished yet"
+                print(f"    {harvest.subject:<10} since {harvest.since}   "
+                      f"{harvest.papers_kept:>7,} kept   harvested through {through}")
 
     if args.command == "eval":
         from verbatim.evaluation import load_key

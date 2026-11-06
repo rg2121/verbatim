@@ -384,6 +384,80 @@ def test_stats_say_how_much_pruning_would_free(tmp_path, capsys, monkeypatch) ->
     assert "1 PDF (" in capsys.readouterr().out
 
 
+def _captured_harvests(monkeypatch, tmp_path, *flags: str) -> list[dict]:
+    from verbatim.harvest import HarvestReport
+
+    calls: list[dict] = []
+
+    def capture(corpus, subject, **options):
+        calls.append({"subject": subject, **options})
+        return HarvestReport(subject=subject, since=options.get("since") or "2026-10-23",
+                             harvested_from=options.get("since") or "2026-10-23")
+
+    monkeypatch.setattr("verbatim.cli.harvest_subject", capture)
+    monkeypatch.setattr(
+        "sys.argv", ["verbatim", "sync", "--state", str(tmp_path / "c.db"), *flags]
+    )
+    run()
+    return calls
+
+
+def test_sync_harvests_whole_subjects_since_a_date(monkeypatch, tmp_path, capsys) -> None:
+    calls = _captured_harvests(
+        monkeypatch, tmp_path, "--subject", "cs", "math", "physics", "--since", "2026-10-23"
+    )
+
+    assert [call["subject"] for call in calls] == ["cs", "math", "physics"]
+    assert all(call["since"] == "2026-10-23" for call in calls)
+    out = capsys.readouterr().out
+    assert "cs:" in out and "physics:" in out
+
+
+def test_a_plain_sync_uses_the_saved_subjects(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("verbatim.config.SYNC_SUBJECTS", ("cs", "physics"))
+
+    calls = _captured_harvests(monkeypatch, tmp_path)
+
+    assert [call["subject"] for call in calls] == ["cs", "physics"]
+    assert all(call["since"] is None for call in calls)
+
+
+def test_a_sync_with_nothing_to_sync_says_what_to_name(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("verbatim.config.SYNC_SUBJECTS", ())
+
+    with pytest.raises(SystemExit, match="--subject"):
+        _captured_harvests(monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ("--subject", "cs", "--category", "cs.LG"),
+        ("--subject", "cs", "--full"),
+        ("--subject", "cs", "--limit", "50"),
+        ("--category", "cs.LG", "--since", "2026-10-23"),
+    ],
+)
+def test_sync_refuses_options_its_mode_would_ignore(monkeypatch, tmp_path, flags) -> None:
+    with pytest.raises(SystemExit):
+        _captured_harvests(monkeypatch, tmp_path, *flags)
+
+
+def test_stats_show_the_harvested_subjects(tmp_path, capsys, monkeypatch) -> None:
+    from verbatim.corpus import CorpusStore
+
+    with CorpusStore(tmp_path / "c.db") as corpus:
+        corpus.record_subject_harvest("cs", since="2026-10-23", through="2026-11-06", kept=9812)
+    monkeypatch.setattr(
+        "sys.argv", ["verbatim", "stats", "--state", str(tmp_path / "c.db"), "--model", "stub"]
+    )
+    run()
+
+    out = capsys.readouterr().out
+    assert "harvested subjects" in out
+    assert "since 2026-10-23" in out and "2026-11-06" in out and "9,812" in out
+
+
 def test_pipeline_ends_by_saying_what_is_left(monkeypatch, tmp_path, capsys) -> None:
     """It printed its rounds and stopped, so papers still waiting looked like a finished run."""
     from helpers import paper
