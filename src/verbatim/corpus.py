@@ -25,6 +25,10 @@ FTS_TERM_PATTERN = re.compile(r'"[^"]*"\*?|\S+')
 # Passages carry their paper's licence, joined in under this name.
 CHUNK_COLUMNS = "c.*, lic.license_url AS paper_license_url"
 PAPER_LICENCE_JOIN = "LEFT JOIN papers AS lic ON lic.arxiv_id = c.arxiv_id"
+# A keyword search reads full rows for only the passages the index ranks this
+# high (at least twice its limit). On 2.9 million passages, reading every
+# matching row before ranking took 28 s a question; ranking first, 1-4 s.
+KEYWORD_PREFETCH = 500
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Bibliographies that were read, at the checksum they were read from. Needed
 # for the ones that yield no entries, which otherwise look unread for ever.
@@ -1267,6 +1271,15 @@ class CorpusStore:
             ).fetchone()[0]
         )
 
+    def write_marker(self) -> tuple[int, int]:
+        """Changes whenever a write is committed, on this connection or another.
+
+        PRAGMA data_version moves on other connections' commits, total_changes on
+        this one's; reading both is free, unlike counting a large table.
+        """
+        version = self.connection.execute("PRAGMA data_version").fetchone()[0]
+        return int(version), self.connection.total_changes
+
     def embedding_count(self, model_id: str) -> int:
         return int(
             self.connection.execute(
@@ -1284,26 +1297,81 @@ class CorpusStore:
         include_references: bool = False,
         papers: PaperFilter | None = None,
     ) -> list[ChunkMatch]:
-        """Rank chunks by BM25 against a keyword query, filtering before ranking."""
+        """Rank chunks by BM25 against a keyword query, filtering before ranking.
+
+        Which rows are read is narrowed first, without changing the result: to
+        the paper's rowid range when scoped, otherwise to the passages the index
+        itself ranks highest, ranking every match only if the filters leave too
+        few of those.
+        """
         if limit < 1:
             raise ValueError("limit must be at least 1")
         expression = build_fts_query(query, match=match)
         if not expression:
             return []
-        clauses = ["chunks_fts MATCH ?"]
-        parameters: list[object] = [expression]
+        filters: list[str] = []
+        filter_parameters: list[object] = []
         if arxiv_id is not None:
-            clauses.append("c.arxiv_id = ?")
-            parameters.append(arxiv_id)
+            filters.append("c.arxiv_id = ?")
+            filter_parameters.append(arxiv_id)
         if not include_references:
             # Exclude bibliographies rather than select body text, so tables stay in.
-            clauses.append("c.kind != ?")
-            parameters.append(REFERENCES)
+            filters.append("c.kind != ?")
+            filter_parameters.append(REFERENCES)
         if papers:
-            clause, filter_parameters = papers.clause("c")
-            clauses.append(clause)
-            parameters.extend(filter_parameters)
-        parameters.append(limit)
+            clause, more = papers.clause("c")
+            filters.append(clause)
+            filter_parameters.extend(more)
+        clauses = ["chunks_fts MATCH ?", *filters]
+        parameters: list[object] = [expression, *filter_parameters]
+        if arxiv_id is not None:
+            low, high = self.connection.execute(
+                "SELECT MIN(rowid), MAX(rowid) FROM chunks WHERE arxiv_id = ?", (arxiv_id,)
+            ).fetchone()
+            if low is None:
+                return []
+            # A paper's passages are written together, so its range holds few others.
+            return self._ranked_chunks(
+                [*clauses, "chunks_fts.rowid BETWEEN ? AND ?"], [*parameters, low, high], limit
+            )
+        prefetch = max(KEYWORD_PREFETCH, 2 * limit)
+        ranked = self.connection.execute(
+            "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"
+            " ORDER BY bm25(chunks_fts) LIMIT ?",
+            (expression, prefetch),
+        ).fetchall()
+        # Rows are then read by id with the keyword index left out: joined back
+        # in, it was searched again for every row, 40-60 s a question.
+        position = {rowid: place for place, (rowid, _) in enumerate(ranked)}
+        rows = self.connection.execute(
+            f"SELECT c.rowid AS ranked_rowid, {CHUNK_COLUMNS} FROM chunks AS c"
+            f" {PAPER_LICENCE_JOIN}"
+            f" WHERE {' AND '.join(['c.rowid IN (SELECT value FROM json_each(?))', *filters])}",
+            [json.dumps(list(position)), *filter_parameters],
+        ).fetchall()
+        kept = sorted(rows, key=lambda row: position[row["ranked_rowid"]])[:limit]
+        # Fewer than `prefetch` means every match was among them.
+        if len(kept) < limit and len(ranked) == prefetch:
+            return self._ranked_chunks(clauses, parameters, limit)
+        relevance = dict(ranked)
+        snippets = dict(self.connection.execute(
+            "SELECT rowid, snippet(chunks_fts, 0, '[', ']', '…', 16) FROM chunks_fts"
+            " WHERE chunks_fts MATCH ? AND rowid IN (SELECT value FROM json_each(?))",
+            (expression, json.dumps([row["ranked_rowid"] for row in kept])),
+        ).fetchall())
+        return [
+            ChunkMatch(
+                chunk=_chunk_from_row(row),
+                score=-float(relevance[row["ranked_rowid"]]),
+                # Absent only if the passage was re-cut between these reads.
+                snippet=snippets.get(row["ranked_rowid"], ""),
+            )
+            for row in kept
+        ]
+
+    def _ranked_chunks(
+        self, clauses: list[str], parameters: list[object], limit: int
+    ) -> list[ChunkMatch]:
         rows = self.connection.execute(
             f"""
             SELECT {CHUNK_COLUMNS},
@@ -1316,7 +1384,7 @@ class CorpusStore:
             ORDER BY relevance ASC
             LIMIT ?
             """,
-            parameters,
+            [*parameters, limit],
         ).fetchall()
         # bm25() is negative with better matches further from zero; negate so
         # callers can sort descending like every other relevance score.

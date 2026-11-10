@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable
 import re
 from typing import Any
+import weakref
 
 from verbatim.chunking import REFERENCES
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter
@@ -37,6 +38,12 @@ def comparison_shaped(question: str) -> bool:
 
 # How much wider to search when a paper filter will discard results afterwards.
 FILTER_OVERFETCH = 8
+# Per open corpus, the models whose index was last found current and the write
+# marker then. Counting 2.9 million vectors and index rows took 1.9 s a search,
+# so the check runs again only after a write.
+_INDEX_CHECKED: weakref.WeakKeyDictionary[CorpusStore, dict[str, tuple[int, int]]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def vector_search(
@@ -58,13 +65,24 @@ def vector_search(
     if limit < 1:
         raise ValueError("limit must be at least 1")
     model = embedder.model
-    stored = corpus.embedding_count(model.model_id)
-    if stored == 0:
-        return []
+    default_index = index is None
+    marker = corpus.write_marker()
+    checked = _INDEX_CHECKED.setdefault(corpus, {})
+    if not default_index or checked.get(model.model_id) != marker:
+        stored = corpus.embedding_count(model.model_id)
+        if stored == 0:
+            return []
+        index = index or SqliteVecIndex(corpus.connection, model.dimensions)
+        ensure_current(index, stored, model.model_id, corpus.chunk_generation())
+        if default_index:
+            # Others' commits are read from before the check, so none slips past
+            # it; this connection's from after, so syncing the index is not news.
+            others, _ = marker
+            _, own = corpus.write_marker()
+            checked[model.model_id] = (others, own)
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
     # Over-fetch when filtering, since matches are discarded after ranking.
     fetch = limit * FILTER_OVERFETCH if papers else limit
-    ensure_current(index, stored, model.model_id, corpus.chunk_generation())
 
     # Filters go into the index query; a list of chunk ids would exceed SQLite's
     # variable limit.

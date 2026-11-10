@@ -129,8 +129,15 @@ The vector index records **which model's vectors it holds and which corpus
 generation it was built from**, and is rebuilt on a mismatch. Two embedding
 models of the same width once searched each other's vectors silently, and a
 source replacement once left every passage of a paper unsearchable while the
-row count still matched. Search over the index is brute force and exact: about
-0.2 s over 835,743 vectors, which is not the bottleneck.
+row count still matched. The check counts every vector, so it runs once per
+open corpus and again only after a write. Search over the index is brute force
+and exact: 0.2 s over 835,743 vectors, but 8.3 s over 2,892,238, once the 17.7
+GB database outgrew the 16 GB of memory. It is now the bottleneck.
+
+Keyword search **ranks inside the full-text index first** and reads full rows
+only for its best 500 passages, reading every match only when the filters
+leave too few; a search within one paper reads only that paper's rows. Reading
+every matching row first took 28 s a question on 2.9 million passages.
 
 ## Answering
 

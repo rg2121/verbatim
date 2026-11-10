@@ -617,3 +617,75 @@ def test_legs_disagree_when_their_top_papers_differ_or_one_is_empty() -> None:
     assert not legs_disagree([a], [a])
     assert legs_disagree([a], [b])
     assert legs_disagree([a], [])
+
+
+def add_plant_paper(corpus: CorpusStore, tmp_path: Path) -> None:
+    from verbatim.embedding import embed_pending
+
+    record = downloaded(tmp_path, "2608.22222v1")
+    corpus.upsert_papers([paper("2608.22222v1")])
+    corpus.record_downloads([record])
+    corpus.record_chunks(
+        extract_pdf_chunks([record], extract_pages=lambda _: ["A plant converts sunlight."])
+    )
+    embed_pending(corpus, WordCountEmbedder())
+
+
+def counts_run_by(corpus: CorpusStore, search) -> list[str]:
+    statements: list[str] = []
+    corpus.connection.set_trace_callback(statements.append)
+    try:
+        search()
+    finally:
+        corpus.connection.set_trace_callback(None)
+    return [s for s in statements if "COUNT(*) FROM embeddings" in s or "COUNT(*) FROM vec_chunks" in s]
+
+
+def test_a_search_on_an_unchanged_corpus_does_not_count_the_vectors_again(tmp_path: Path) -> None:
+    """Counting 2.9 million vectors and index rows took 1.9 s on every search."""
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux.", "Charge moves."]}) as corpus:
+        embedder = WordCountEmbedder()
+        first = counts_run_by(corpus, lambda: vector_search(corpus, embedder, "flux"))
+        second = counts_run_by(corpus, lambda: vector_search(corpus, embedder, "flux"))
+        found = vector_search(corpus, embedder, "flux", limit=1)
+
+    assert first and not second
+    assert [m.chunk.arxiv_id for m in found] == ["2608.11111v1"]
+
+
+def test_passages_another_connection_embeds_are_found_by_the_next_search(
+    tmp_path: Path,
+) -> None:
+    """The pipeline writes on its own connection while a server keeps searching on another."""
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        embedder = WordCountEmbedder()
+        vector_search(corpus, embedder, "plant", limit=1)
+        with CorpusStore(tmp_path / "corpus.db") as other:
+            add_plant_paper(other, tmp_path)
+        found = vector_search(corpus, embedder, "plant", limit=1)
+
+    assert [m.chunk.arxiv_id for m in found] == ["2608.22222v1"]
+
+
+def test_passages_the_same_connection_embeds_are_found_by_the_next_search(
+    tmp_path: Path,
+) -> None:
+    """A connection does not see its own commits in PRAGMA data_version."""
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        embedder = WordCountEmbedder()
+        vector_search(corpus, embedder, "plant", limit=1)
+        add_plant_paper(corpus, tmp_path)
+        found = vector_search(corpus, embedder, "plant", limit=1)
+
+    assert [m.chunk.arxiv_id for m in found] == ["2608.22222v1"]
+
+
+def test_a_search_given_its_own_index_still_checks_it(tmp_path: Path) -> None:
+    """Only the corpus's own index is remembered as checked; one passed in is checked each time."""
+    with embedded_corpus(tmp_path, {"2608.11111v1": ["Magnetic flux."]}) as corpus:
+        embedder = WordCountEmbedder()
+        index = SqliteVecIndex(corpus.connection, 3)
+        vector_search(corpus, embedder, "flux", index=index)
+        again = counts_run_by(corpus, lambda: vector_search(corpus, embedder, "flux", index=index))
+
+    assert again

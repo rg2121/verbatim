@@ -753,6 +753,14 @@ into its state.
   papers that exist, so their licences stay unknown until it does.
 - **A question about what is new lists what is new**, filtered by date and
   category but not by topic.
-- **Vector search is brute force** - exact, and about 0.2 s over 835,743
-  vectors. A corpus tens of times larger would want an approximate index
-  behind the same interface.
+- **Vector search is brute force**, and at 2,892,238 passages it is the
+  bottleneck. Exact search took 0.2 s over 835,743 vectors and 8.3 s over 2.9
+  million, once the database (17.7 GB) outgrew the Mac's 16 GB of memory. The
+  same growth took a default search from 1.27 s to about 40 s: keyword search
+  read every matching row before ranking (28 s; 2.5 million of 2.9 million
+  passages match an ordinary question) and every search counted all vectors
+  (1.9 s). Ranking inside the full-text index first and checking the index
+  only after a write brought it to 12.5 s (median of 8), with results
+  identical in 2,204 searches on the 1,500-paper eval corpus and 40 on the
+  full one. An approximate or compressed index behind the same interface is
+  the next step.
