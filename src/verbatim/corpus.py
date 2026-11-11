@@ -29,6 +29,7 @@ PAPER_LICENCE_JOIN = "LEFT JOIN papers AS lic ON lic.arxiv_id = c.arxiv_id"
 # high (at least twice its limit). On 2.9 million passages, reading every
 # matching row before ranking took 28 s a question; ranking first, 1-4 s.
 KEYWORD_PREFETCH = 500
+SNIPPET = "snippet(chunks_fts, 0, '[', ']', '…', 16)"
 VERSION_PATTERN = re.compile(r"^(?P<base>.+)v(?P<version>\d+)$")
 # Bibliographies that were read, at the checksum they were read from. Needed
 # for the ones that yield no entries, which otherwise look unread for ever.
@@ -1335,14 +1336,25 @@ class CorpusStore:
                 [*clauses, "chunks_fts.rowid BETWEEN ? AND ?"], [*parameters, low, high], limit
             )
         prefetch = max(KEYWORD_PREFETCH, 2 * limit)
-        ranked = self.connection.execute(
-            "SELECT rowid, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?"
-            " ORDER BY bm25(chunks_fts) LIMIT ?",
-            (expression, prefetch),
-        ).fetchall()
+        # A prefix term ("A"* from "Sgr A*") is expanded again for every passage
+        # a later query names by id: 80 s for 50 passages. A prefix search builds
+        # its snippets in this pass instead; ordered by rank, FTS5 builds them
+        # only for the rows it returns.
+        prefix = '"*' in expression
+        if prefix:
+            ranking = (
+                f"SELECT rowid, rank, {SNIPPET} FROM chunks_fts"
+                " WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?"
+            )
+        else:
+            ranking = (
+                "SELECT rowid, bm25(chunks_fts), NULL FROM chunks_fts"
+                " WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?"
+            )
+        ranked = self.connection.execute(ranking, (expression, prefetch)).fetchall()
         # Rows are then read by id with the keyword index left out: joined back
         # in, it was searched again for every row, 40-60 s a question.
-        position = {rowid: place for place, (rowid, _) in enumerate(ranked)}
+        position = {row[0]: place for place, row in enumerate(ranked)}
         rows = self.connection.execute(
             f"SELECT c.rowid AS ranked_rowid, {CHUNK_COLUMNS} FROM chunks AS c"
             f" {PAPER_LICENCE_JOIN}"
@@ -1353,12 +1365,14 @@ class CorpusStore:
         # Fewer than `prefetch` means every match was among them.
         if len(kept) < limit and len(ranked) == prefetch:
             return self._ranked_chunks(clauses, parameters, limit)
-        relevance = dict(ranked)
-        snippets = dict(self.connection.execute(
-            "SELECT rowid, snippet(chunks_fts, 0, '[', ']', '…', 16) FROM chunks_fts"
-            " WHERE chunks_fts MATCH ? AND rowid IN (SELECT value FROM json_each(?))",
-            (expression, json.dumps([row["ranked_rowid"] for row in kept])),
-        ).fetchall())
+        relevance = {row[0]: row[1] for row in ranked}
+        snippets = {row[0]: row[2] for row in ranked} if prefix else dict(
+            self.connection.execute(
+                f"SELECT rowid, {SNIPPET} FROM chunks_fts"
+                " WHERE chunks_fts MATCH ? AND rowid IN (SELECT value FROM json_each(?))",
+                (expression, json.dumps([row["ranked_rowid"] for row in kept])),
+            ).fetchall()
+        )
         return [
             ChunkMatch(
                 chunk=_chunk_from_row(row),
@@ -1376,7 +1390,7 @@ class CorpusStore:
             f"""
             SELECT {CHUNK_COLUMNS},
                    bm25(chunks_fts) AS relevance,
-                   snippet(chunks_fts, 0, '[', ']', '…', 16) AS snippet
+                   {SNIPPET} AS snippet
             FROM chunks_fts
             JOIN chunks AS c ON c.rowid = chunks_fts.rowid
             {PAPER_LICENCE_JOIN}

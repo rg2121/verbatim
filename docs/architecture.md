@@ -137,7 +137,10 @@ GB database outgrew the 16 GB of memory. It is now the bottleneck.
 Keyword search **ranks inside the full-text index first** and reads full rows
 only for its best 500 passages, reading every match only when the filters
 leave too few; a search within one paper reads only that paper's rows. Reading
-every matching row first took 28 s a question on 2.9 million passages.
+every matching row first took 28 s a question on 2.9 million passages. A
+question with a prefix term (a word ending in `*`, as in "Sgr A*") builds its
+snippets in that first pass, because the index expands the prefix again for
+each passage it is later asked about by id: 80 s for 50 passages.
 
 ## Answering
 

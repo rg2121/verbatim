@@ -346,7 +346,7 @@ def flux_corpus(tmp_path: Path) -> CorpusStore:
 
 @pytest.mark.parametrize("prefetch", [1, 2, 3, 1000])
 @pytest.mark.parametrize("limit", [1, 2, 3, 20])
-@pytest.mark.parametrize("query", ["flux", "magnetic flux ring", "flux reactor plant"])
+@pytest.mark.parametrize("query", ["flux", "magnetic flux ring", "flux reactor plant", "fl* ring"])
 def test_ranking_in_the_index_first_returns_what_ranking_every_match_returns(
     tmp_path: Path, monkeypatch, prefetch: int, limit: int, query: str
 ) -> None:
@@ -385,6 +385,24 @@ def test_a_filtered_search_ranks_as_it_did_before_narrowing(
             assert found(corpus.search_chunks("flux", limit=3, match="any", papers=papers)) == (
                 rank_every_match(corpus, "flux", limit=3, papers=papers)
             )
+
+
+def test_a_prefix_search_asks_the_keyword_index_once(tmp_path: Path) -> None:
+    """A prefix term is expanded again for every passage a later query names by id.
+
+    "Sgr A*" makes "A"* a prefix of every word starting with a: building
+    snippets for 50 passages that way took 80 s on 2.9 million passages, so a
+    prefix search takes its snippets in the ranking pass instead.
+    """
+    statements: list[str] = []
+    with flux_corpus(tmp_path) as corpus:
+        corpus.connection.set_trace_callback(statements.append)
+        matches = corpus.search_chunks("fl* ring", limit=3, match="any")
+        corpus.connection.set_trace_callback(None)
+        expected = rank_every_match(corpus, "fl* ring", limit=3)
+
+    assert found(matches) == expected
+    assert sum("chunks_fts MATCH" in statement for statement in statements) == 1
 
 
 def test_a_search_within_one_paper_ranks_as_it_did_before_narrowing(tmp_path: Path) -> None:
