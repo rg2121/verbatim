@@ -9,13 +9,14 @@ report says so.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import random
 import re
 
 from verbatim.answers import Answer
 from verbatim.citations import Citation
+from verbatim.corpus import unversioned
 from verbatim.critique import MARKER, sentences, uncited_sentences
 
 # Forced choice rather than yes/no, so "unrelated" is an answer, not a refusal.
@@ -48,7 +49,15 @@ class AnsweredCase:
 
     @property
     def cited_an_expected_paper(self) -> bool:
-        return bool(set(self.cited_papers) & set(self.expected_papers))
+        return cites_an_expected_paper(self.cited_papers, self.expected_papers)
+
+
+def cites_an_expected_paper(cited: Iterable[str], expected: Iterable[str]) -> bool:
+    """Whether a cited paper is an expected one, in any version.
+
+    A key names the version held when it was written; answers cite the newest.
+    """
+    return bool({unversioned(p) for p in cited} & {unversioned(p) for p in expected})
 
 
 @dataclass(frozen=True)

@@ -419,3 +419,12 @@ def test_the_shipped_default_is_scored_whenever_a_reranker_is_given(monkeypatch)
     assert shipped["rerank_when_legs_disagree"] and shipped["rerank_skips_definitions"]
     assert "reranker" not in plain
     assert "hybrid+graph+rerank" not in evaluation.retrieval_modes(None, None)
+
+
+def test_a_hit_on_another_version_of_an_expected_paper_counts() -> None:
+    """Keys name the version held when they were written; search reads the newest."""
+    results = [match("2608.30002v1"), match("2608.30001v2")]
+
+    assert rank_of_first_hit(results, ["2608.30001v1"]) == 2
+    assert group_rank(results, "2608.39999v1|2608.30001v1") == 2
+    assert rank_of_first_hit(results, ["2608.30003v1"]) is None

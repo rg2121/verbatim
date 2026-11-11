@@ -14,7 +14,7 @@ from pathlib import Path
 import random
 import subprocess
 
-from verbatim.corpus import ChunkMatch, CorpusStore
+from verbatim.corpus import ChunkMatch, CorpusStore, unversioned
 from verbatim.embedding import Embedder
 from verbatim.research import gather_within_budget, plan_subquestions
 from verbatim.retrieval import (
@@ -195,10 +195,13 @@ def source_of(case: EvalCase) -> str:
 
 
 def rank_of_first_hit(matches: Sequence[ChunkMatch], expected: Iterable[str]) -> int | None:
-    """1-based rank of the first result from an expected paper, or None."""
-    wanted = set(expected)
+    """1-based rank of the first result from an expected paper, in any version, or None.
+
+    A key names the version held when it was written; search reads the newest.
+    """
+    wanted = {unversioned(arxiv_id) for arxiv_id in expected}
     for rank, match in enumerate(matches, start=1):
-        if match.chunk.arxiv_id in wanted:
+        if unversioned(match.chunk.arxiv_id) in wanted:
             return rank
     return None
 

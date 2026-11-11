@@ -356,8 +356,8 @@ def run() -> None:
                              help="Searches the falsifier may run per gap")
     gaps_parser.add_argument(
         "--hide", nargs="*", default=[], metavar="ARXIV_ID",
-        help="Hide these papers from the falsifier, to plant a gap whose "
-             "answer is known. Nothing is deleted",
+        help="Hide these papers, in every version, from the falsifier, to "
+             "plant a gap whose answer is known. Nothing is deleted",
     )
 
     team_parser = subparsers.add_parser(

@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from verbatim import config
+from verbatim.answer_eval import cites_an_expected_paper
 from verbatim.answers import OllamaCompletion
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
@@ -74,9 +75,8 @@ def main() -> int:
                     "rungs": len(ledger.attempts),
                     "route": [a.strategy for a in ledger.attempts],
                     "verified": len(section.answer.citations),
-                    "cited_expected": bool(
-                        {c.arxiv_id for c in section.answer.citations}
-                        & set(case.expect_papers)
+                    "cited_expected": cites_an_expected_paper(
+                        (c.arxiv_id for c in section.answer.citations), case.expect_papers
                     ),
                     "calls": spent.calls,
                 }

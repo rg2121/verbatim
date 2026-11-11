@@ -142,6 +142,13 @@ question with a prefix term (a word ending in `*`, as in "Sgr A*") builds its
 snippets in that first pass, because the index expands the prefix again for
 each passage it is later asked about by id: 80 s for 50 passages.
 
+Searches read **only the newest version of a paper that has passages**. The
+subject harvest brought newer versions of 225 held papers, and both versions'
+near-identical passages were being returned. Older passages stay, so their
+citations still verify, and an older version stays searchable while the newer
+one has none. Paper filters and scoring compare papers in any version, since a
+key names the version held when it was written.
+
 ## Answering
 
 Passages go to a model through **Ollama**, the only backend - no API key, no

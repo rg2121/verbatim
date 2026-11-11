@@ -46,7 +46,11 @@ BUSY_TIMEOUT_SECONDS = 300
 
 @dataclass(frozen=True)
 class PaperFilter:
-    """Restrict retrieval by date, subject, licence or paper; both legs rank within it."""
+    """Restrict retrieval by date, subject, licence or paper; both legs rank within it.
+
+    Paper ids name a paper in every version: a key names the version held when
+    it was written, and a hidden paper must not answer through a newer one.
+    """
 
     since: str | None = None
     category: str | None = None
@@ -81,13 +85,15 @@ class PaperFilter:
             conditions.append(f"{table}.license_class IN ({placeholders})")
             parameters.extend(self.license_classes)
         if self.include_ids:
-            placeholders = ",".join("?" * len(self.include_ids))
-            conditions.append(f"{table}.arxiv_id IN ({placeholders})")
-            parameters.extend(self.include_ids)
+            bases = list(dict.fromkeys(map(unversioned, self.include_ids)))
+            placeholders = ",".join("?" * len(bases))
+            conditions.append(f"{table}.base_arxiv_id IN ({placeholders})")
+            parameters.extend(bases)
         if self.exclude_ids:
-            placeholders = ",".join("?" * len(self.exclude_ids))
-            conditions.append(f"{table}.arxiv_id NOT IN ({placeholders})")
-            parameters.extend(self.exclude_ids)
+            bases = list(dict.fromkeys(map(unversioned, self.exclude_ids)))
+            placeholders = ",".join("?" * len(bases))
+            conditions.append(f"{table}.base_arxiv_id NOT IN ({placeholders})")
+            parameters.extend(bases)
         return conditions, parameters
 
     def clause(self, alias: str = "c") -> tuple[str, list[object]]:
@@ -159,6 +165,8 @@ class CorpusStore:
         # second writer wait rather than fail.
         self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
+        # The versions searches skip, and the write marker they were found at.
+        self._superseded: tuple[tuple[int, int], frozenset[str]] | None = None
         self._initialize()
 
     def __enter__(self) -> CorpusStore:
@@ -1288,6 +1296,35 @@ class CorpusStore:
             ).fetchone()[0]
         )
 
+    def superseded_papers(self) -> frozenset[str]:
+        """Versions that searches skip, because a newer version of the paper has passages.
+
+        Their passages stay, so a citation of one still verifies. A newer version
+        without passages (arXiv had no PDF for it) leaves the older one searched.
+        Worked out again only after a write.
+        """
+        marker = self.write_marker()
+        if self._superseded is not None and self._superseded[0] == marker:
+            return self._superseded[1]
+        rows = self.connection.execute(
+            """
+            SELECT p.arxiv_id, p.base_arxiv_id, p.version FROM papers AS p
+            WHERE p.base_arxiv_id IN (
+                SELECT base_arxiv_id FROM papers GROUP BY base_arxiv_id HAVING COUNT(*) > 1
+            )
+              AND EXISTS (SELECT 1 FROM chunks AS c WHERE c.arxiv_id = p.arxiv_id)
+            """
+        ).fetchall()
+        newest: dict[str, int] = {}
+        for row in rows:
+            base = row["base_arxiv_id"]
+            newest[base] = max(newest.get(base, 0), row["version"])
+        superseded = frozenset(
+            row["arxiv_id"] for row in rows if row["version"] < newest[row["base_arxiv_id"]]
+        )
+        self._superseded = (marker, superseded)
+        return superseded
+
     def search_chunks(
         self,
         query: str,
@@ -1303,7 +1340,8 @@ class CorpusStore:
         Which rows are read is narrowed first, without changing the result: to
         the paper's rowid range when scoped, otherwise to the passages the index
         itself ranks highest, ranking every match only if the filters leave too
-        few of those.
+        few of those. Unless scoped to the version it names, a search skips the
+        versions a newer one replaces (`superseded_papers`).
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -1315,6 +1353,9 @@ class CorpusStore:
         if arxiv_id is not None:
             filters.append("c.arxiv_id = ?")
             filter_parameters.append(arxiv_id)
+        elif superseded := self.superseded_papers():
+            filters.append("c.arxiv_id NOT IN (SELECT value FROM json_each(?))")
+            filter_parameters.append(json.dumps(sorted(superseded)))
         if not include_references:
             # Exclude bibliographies rather than select body text, so tables stay in.
             filters.append("c.kind != ?")
@@ -1680,6 +1721,15 @@ def split_arxiv_version(arxiv_id: str) -> tuple[str, int]:
     if match is None:
         raise ValueError(f"arXiv identifier has no version suffix: {arxiv_id}")
     return match.group("base"), int(match.group("version"))
+
+
+def unversioned(arxiv_id: str) -> str:
+    """The identifier without its version, so every version of a paper compares equal.
+
+    An identifier written without one is returned as it is.
+    """
+    match = VERSION_PATTERN.fullmatch(arxiv_id)
+    return arxiv_id if match is None else match.group("base")
 
 
 def _paper_from_row(row: sqlite3.Row) -> Paper:

@@ -181,3 +181,14 @@ def test_a_quoted_reference_is_not_paired_with_the_citation_it_numbers() -> None
     )
 
     assert [quote.quoted_text for _claim, quote in claim_quote_pairs(case)] == ["fails at every scale tried"]
+
+
+def test_citing_another_version_of_the_expected_paper_counts() -> None:
+    """Keys name the version held when they were written; answers cite the newest."""
+    newer = answered("Flux threads the ring [1].",
+                     [citation("a", "flux threads", arxiv_id="2608.11111v2")])
+    other = answered("Flux threads the ring [1].",
+                     [citation("a", "flux threads", arxiv_id="2608.11112v1")])
+
+    assert newer.cited_an_expected_paper
+    assert not other.cited_an_expected_paper

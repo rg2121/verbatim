@@ -15,7 +15,7 @@ import statistics
 from pathlib import Path
 
 from verbatim import config
-from verbatim.answer_eval import AnsweredCase, score_answers
+from verbatim.answer_eval import AnsweredCase, cites_an_expected_paper, score_answers
 from verbatim.answers import OllamaCompletion, answer_from_matches
 from verbatim.corpus import CorpusStore
 from verbatim.embedding import FastEmbedEmbedder
@@ -93,9 +93,8 @@ def main() -> int:
                     "declined": answer.declined,
                     "verified": len(answer.citations),
                     "rejected": len(answer.rejected),
-                    "cited_expected": bool(
-                        {c.arxiv_id for c in answer.citations}
-                        & set(case.expect_papers)
+                    "cited_expected": cites_an_expected_paper(
+                        (c.arxiv_id for c in answer.citations), case.expect_papers
                     ),
                     "calls": spent.calls,
                 }) + "\n")

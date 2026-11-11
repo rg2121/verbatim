@@ -38,6 +38,10 @@ def comparison_shaped(question: str) -> bool:
 
 # How much wider to search when a paper filter will discard results afterwards.
 FILTER_OVERFETCH = 8
+# Older versions a newer one replaces are discarded the same way. At worst they
+# were 46 of a question's top 100 vector hits (the 23 key questions about papers
+# held twice), and fetching 150 cost no more than 50 over 2.9 million vectors.
+SUPERSEDED_OVERFETCH = 3
 # Per open corpus, the models whose index was last found current and the write
 # marker then. Counting 2.9 million vectors and index rows took 1.9 s a search,
 # so the check runs again only after a write.
@@ -60,7 +64,9 @@ def vector_search(
     """Rank passages by embedding similarity; higher scores are better.
 
     A paper filter is applied after the index returns, so the search over-fetches
-    and may return fewer than `limit` results.
+    and may return fewer than `limit` results. Older versions a newer one replaces
+    are skipped the same way, except within one paper, which reads the version it
+    names.
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -81,8 +87,14 @@ def vector_search(
             _, own = corpus.write_marker()
             checked[model.model_id] = (others, own)
     index = index or SqliteVecIndex(corpus.connection, model.dimensions)
+    superseded = corpus.superseded_papers() if arxiv_id is None else frozenset()
     # Over-fetch when filtering, since matches are discarded after ranking.
-    fetch = limit * FILTER_OVERFETCH if papers else limit
+    if papers:
+        fetch = limit * FILTER_OVERFETCH
+    elif superseded:
+        fetch = limit * SUPERSEDED_OVERFETCH
+    else:
+        fetch = limit
 
     # Filters go into the index query; a list of chunk ids would exceed SQLite's
     # variable limit.
@@ -101,6 +113,8 @@ def vector_search(
     for chunk_id, distance in hits:
         chunk = by_id.get(chunk_id)
         if chunk is None:  # index drifted mid-query; skip rather than fabricate
+            continue
+        if chunk.arxiv_id in superseded:
             continue
         if allowed is not None and chunk.arxiv_id not in allowed:
             continue

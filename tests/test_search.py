@@ -292,14 +292,21 @@ def rank_every_match(
     arxiv_id: str | None = None,
     include_references: bool = False,
     papers=None,
+    skip: tuple[str, ...] = (),
 ) -> list[tuple[str, float, str]]:
-    """The keyword search as it ran before narrowing: every matching row read, then ranked."""
+    """The keyword search as it ran before narrowing: every matching row read, then ranked.
+
+    `skip` leaves out these papers' passages, as a newer version does in search.
+    """
     from verbatim.chunking import REFERENCES
 
     clauses, parameters = ["chunks_fts MATCH ?"], [build_fts_query(query, match=match)]
     if arxiv_id is not None:
         clauses.append("c.arxiv_id = ?")
         parameters.append(arxiv_id)
+    if skip:
+        clauses.append(f"c.arxiv_id NOT IN ({','.join('?' * len(skip))})")
+        parameters.extend(skip)
     if not include_references:
         clauses.append("c.kind != ?")
         parameters.append(REFERENCES)
@@ -451,3 +458,110 @@ def test_a_search_within_a_paper_whose_passages_are_interleaved_stays_within_it(
 def test_a_search_within_a_paper_with_no_passages_finds_nothing(tmp_path: Path) -> None:
     with flux_corpus(tmp_path) as corpus:
         assert corpus.search_chunks("flux", match="any", arxiv_id="2608.99999v1") == []
+
+
+OLDER, NEWER, OTHER = "2608.30001v1", "2608.30001v2", "2608.30002v1"
+
+
+def versioned_corpus(tmp_path: Path) -> CorpusStore:
+    """One paper held in two versions, both chunked, beside a paper held in one."""
+    return indexed_corpus(
+        tmp_path,
+        {
+            OLDER: ["Flux ropes erupt from the corona.", "Flux emerges as a loop."],
+            NEWER: ["Flux ropes erupt from the corona.", "Flux emerges as a twisted loop."],
+            OTHER: ["Flux tubes fill the solar wind."],
+        },
+    )
+
+
+@pytest.mark.parametrize("prefetch", [1, 2, 1000])
+def test_a_search_reads_only_the_newest_version_of_a_paper(
+    tmp_path: Path, monkeypatch, prefetch: int
+) -> None:
+    """The subject harvest brought newer versions of 225 held papers, and both were searched.
+
+    One paper's near-identical passages then took two places in the results.
+    The older version's passages stay, for the citations that quote them.
+    """
+    import verbatim.corpus as corpus_module
+
+    monkeypatch.setattr(corpus_module, "KEYWORD_PREFETCH", prefetch)
+    with versioned_corpus(tmp_path) as corpus:
+        matches = corpus.search_chunks("flux loop", limit=3, match="any")
+        expected = rank_every_match(corpus, "flux loop", limit=3, skip=(OLDER,))
+        kept = corpus.chunks_for_paper(OLDER)
+
+    assert found(matches) == expected
+    assert {m.chunk.arxiv_id for m in matches} == {NEWER, OTHER}
+    assert len(kept) == 2
+
+
+def test_an_older_version_is_searched_while_the_newer_one_has_no_passages(
+    tmp_path: Path,
+) -> None:
+    """Seven newer versions have no PDF (arXiv answers 404), so their older text stays searchable."""
+    with indexed_corpus(tmp_path, {OLDER: ["Flux ropes erupt from the corona."]}) as corpus:
+        corpus.upsert_papers([paper(NEWER)])
+        matches = corpus.search_chunks("flux", match="any")
+
+    assert [m.chunk.arxiv_id for m in matches] == [OLDER]
+
+
+def test_a_search_within_an_older_version_reads_that_version(tmp_path: Path) -> None:
+    """A search within one paper reads the version it names."""
+    with versioned_corpus(tmp_path) as corpus:
+        scoped = corpus.search_chunks("flux", match="any", arxiv_id=OLDER)
+
+    assert [m.chunk.arxiv_id for m in scoped] == [OLDER, OLDER]
+
+
+def test_a_paper_filter_names_a_paper_in_every_version(tmp_path: Path) -> None:
+    """A hidden paper must not answer through its newer version, or a planted gap leaks.
+
+    Gaps are planted with ids from the keys, which name the version held when
+    they were written.
+    """
+    from verbatim.corpus import PaperFilter
+
+    def searched(corpus: CorpusStore, papers: PaperFilter) -> set[str]:
+        return {m.chunk.arxiv_id for m in corpus.search_chunks("flux", match="any", papers=papers)}
+
+    with versioned_corpus(tmp_path) as corpus:
+        hidden = searched(corpus, PaperFilter(exclude_ids=(OLDER,)))
+        hidden_by_base = searched(corpus, PaperFilter(exclude_ids=("2608.30001",)))
+        only = searched(corpus, PaperFilter(include_ids=(OLDER,)))
+
+    assert hidden == {OTHER}
+    assert hidden_by_base == {OTHER}
+    assert only == {NEWER}
+
+
+def test_which_versions_are_searched_is_worked_out_again_only_after_a_write(
+    tmp_path: Path,
+) -> None:
+    """A newer version arriving on the pipeline's connection, or on this one, is searched next."""
+    from helpers import store_paper
+
+    def add_version(store: CorpusStore, arxiv_id: str) -> None:
+        record = store_paper(store, tmp_path, arxiv_id)
+        store.record_chunks(
+            extract_pdf_chunks([record], extract_pages=lambda _: ["Flux ropes erupt again."])
+        )
+
+    with indexed_corpus(tmp_path, {OLDER: ["Flux ropes erupt from the corona."]}) as corpus:
+        first = corpus.search_chunks("flux", match="any")
+        statements: list[str] = []
+        corpus.connection.set_trace_callback(statements.append)
+        corpus.search_chunks("flux", match="any")
+        corpus.connection.set_trace_callback(None)
+        with CorpusStore(tmp_path / "corpus.db") as pipeline:
+            add_version(pipeline, NEWER)
+        after_theirs = corpus.search_chunks("flux", match="any")
+        add_version(corpus, "2608.30001v3")
+        after_ours = corpus.search_chunks("flux", match="any")
+
+    assert [m.chunk.arxiv_id for m in first] == [OLDER]
+    assert not any("GROUP BY base_arxiv_id" in statement for statement in statements)
+    assert [m.chunk.arxiv_id for m in after_theirs] == [NEWER]
+    assert [m.chunk.arxiv_id for m in after_ours] == ["2608.30001v3"]

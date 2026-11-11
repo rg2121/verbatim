@@ -689,3 +689,33 @@ def test_a_search_given_its_own_index_still_checks_it(tmp_path: Path) -> None:
         again = counts_run_by(corpus, lambda: vector_search(corpus, embedder, "flux", index=index))
 
     assert again
+
+
+def test_vector_search_reads_only_the_newest_version_of_a_paper(tmp_path: Path) -> None:
+    """The older version ranks first here; it is passed over without returning fewer."""
+    from verbatim.corpus import PaperFilter
+    from verbatim.retrieval import hybrid_search
+
+    with embedded_corpus(
+        tmp_path,
+        {
+            "2608.30001v1": ["Magnetic flux."],
+            "2608.30001v2": ["Magnetic flux and charge."],
+            "2608.30002v1": ["A plant converts sunlight."],
+        },
+    ) as corpus:
+        embedder = WordCountEmbedder()
+        newest = vector_search(corpus, embedder, "flux", limit=1)
+        scoped = vector_search(corpus, embedder, "flux", limit=1, arxiv_id="2608.30001v1")
+        hidden = vector_search(
+            corpus, embedder, "flux", limit=3,
+            papers=PaperFilter(exclude_ids=("2608.30001v1",)),
+        )
+        fused = hybrid_search(corpus, embedder, "flux", limit=10)
+
+    assert [m.chunk.arxiv_id for m in newest] == ["2608.30001v2"]
+    # A search within one paper reads the version it names.
+    assert [m.chunk.arxiv_id for m in scoped] == ["2608.30001v1"]
+    # Hiding a paper hides every version of it.
+    assert [m.chunk.arxiv_id for m in hidden] == ["2608.30002v1"]
+    assert "2608.30001v1" not in {m.chunk.arxiv_id for m in fused}
