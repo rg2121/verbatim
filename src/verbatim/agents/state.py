@@ -107,8 +107,66 @@ class Allowance(Record):
     tokens: int | None = None
 
 
+@dataclass(frozen=True)
+class Tally(Record):
+    """What the check found in one attempt: the counts I10 compares, and the
+    passages the attempt has a verified citation for (contract.tally)."""
+
+    verified: int = 0
+    failed: int = 0
+    unbacked: int = 0
+    uncited: int = 0
+    passages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Attempt(Record):
+    """One draft or revision, numbered in the order written; `revises` is the
+    attempt it repairs, if any."""
+
+    number: int
+    tally: Tally
+    revises: int | None = None
+
+
+# -- the Lead's decisions; contract.lead_action_refused says when each is legal --
+
+
+@dataclass(frozen=True)
+class Next(Record):
+    """Take these steps in order. `brief` says what a research step must find;
+    `passages` are a writer step's passages, v1's (the opening search's, in rank
+    order) when empty."""
+
+    steps: tuple[str, ...]
+    brief: str = ""
+    passages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Inspect(Record):
+    """Read these passages' exact text before deciding."""
+
+    ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Final(Record):
+    """Finish, returning this attempt."""
+
+    attempt: int
+
+
+@dataclass(frozen=True)
+class Abstain(Record):
+    """Finish without an answer: the corpus does not answer the question."""
+
+    reason: str
+
+
 # Every record a checkpoint may hold; the serializer rebuilds these and no others.
-RECORDS: tuple[type, ...] = (Step, Found, Evidence, SectionResult, Allowance, Cost)
+RECORDS: tuple[type, ...] = (Step, Found, Evidence, SectionResult, Allowance, Tally, Attempt,
+                             Next, Inspect, Final, Abstain, Cost)
 
 
 def keyed_append(left: list[Any] | None, right: list[Any] | None) -> list[Any]:

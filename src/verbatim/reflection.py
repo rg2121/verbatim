@@ -127,7 +127,7 @@ def findings(
     ]
     found.extend(
         f"The answer uses [{marker}], but there is no CITE [{marker}] line."
-        for marker in _dangling(payload, list(texts.values()))
+        for marker in dangling_markers(payload, list(texts.values()))
     )
     found.extend(
         f'This sentence makes a claim but has no marker: "{sentence}"'
@@ -242,7 +242,7 @@ def _rejected(item: RejectedCitation, marker: object, texts: dict[str, str]) -> 
     return f'{found} The closest words in that passage are: "{words}"'
 
 
-def _dangling(payload: dict[str, Any], passages: Sequence[str] = ()) -> list[str]:
+def dangling_markers(payload: dict[str, Any], passages: Sequence[str] = ()) -> list[str]:
     """Markers in the answer with no CITE line, read as renumbering reads them.
 
     So a bracket inside a quotation one of `passages` holds is the paper's, not a marker.
