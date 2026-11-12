@@ -59,3 +59,58 @@ def test_a_retry_sends_back_what_was_wrong() -> None:
     error = ProtocolError("FINAL: takes the number of the attempt to return, e.g. FINAL: 2")
     message = retry_message(error)
     assert str(error) in message and "again" in message
+
+
+# -- what the review of M2a found the parser misread ------------------------------------
+
+
+@pytest.mark.parametrize("line", [
+    "**NEXT: researcher, writer**", "NEXT: `researcher`, `writer`", 'NEXT: "researcher", "writer"',
+    "NEXT: [researcher, writer]", "`NEXT: researcher, writer`", "NEXT: researcher, writer.",
+])
+def test_steps_are_read_as_words_however_they_are_dressed(line: str) -> None:
+    assert parse_lead(f"{line}\nBRIEF: find the training time").steps == ("researcher", "writer")
+
+
+def test_windows_line_endings_leave_nothing_behind() -> None:
+    assert fields("BRIEF: find it\r\nNEXT: researcher\r\n") == [("BRIEF", "find it"),
+                                                               ("NEXT", "researcher")]
+    with pytest.raises(ProtocolError, match="reason"):
+        parse_lead("ABSTAIN:\r\n")
+
+
+@pytest.mark.parametrize("value", ["", "none", "None.", "default"])
+def test_an_empty_passages_line_gives_the_writer_its_default_passages(value: str) -> None:
+    assert parse_lead(f"NEXT: writer\nPASSAGES: {value}") == Next(steps=("writer",))
+
+
+def test_passages_that_are_not_ids_say_the_line_can_be_left_out() -> None:
+    with pytest.raises(ProtocolError, match="leave the line out"):
+        parse_lead("NEXT: writer\nPASSAGES: the first three")
+
+
+def test_bulleted_reasoning_does_not_count_as_the_decision() -> None:
+    reply = ("Options:\n- NEXT: researcher would cost 2 calls\n- INSPECT: not needed yet\n"
+             "NEXT: writer\n")
+    assert parse_lead(reply) == Next(steps=("writer",))
+    with pytest.raises(ProtocolError, match="exactly one"):
+        parse_lead("NEXT: writer\nNEXT: researcher\nBRIEF: x")
+
+
+def test_final_reads_the_attempt_it_names() -> None:
+    assert parse_lead("FINAL: of the 3 attempts, attempt 2") == Final(attempt=2)
+    assert parse_lead("FINAL: draft #3") == Final(attempt=3)
+    with pytest.raises(ProtocolError, match="one attempt number"):
+        parse_lead("FINAL: 2 of 3")
+
+
+def test_an_id_cut_short_is_an_error_not_a_dropped_passage() -> None:
+    with pytest.raises(ProtocolError, match="0123456789ab"):
+        parse_lead(f"NEXT: writer\nPASSAGES: {ID1}, 0123456789ab")
+    with pytest.raises(ProtocolError, match="whole"):
+        parse_lead(f"INSPECT: {ID2}, fedcba98765")
+
+
+def test_a_passage_named_twice_is_read_once() -> None:
+    assert parse_lead(f"INSPECT: {ID1}, {ID1}, {ID2}, {ID2}, {ID1}") == Inspect(ids=(ID1, ID2))
+    assert parse_lead(f"NEXT: writer\nPASSAGES: {ID1}, {ID1}").passages == (ID1,)

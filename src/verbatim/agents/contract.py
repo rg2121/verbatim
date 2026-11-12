@@ -13,14 +13,12 @@ functions over facts code computed, never over a model's judgement:
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from typing import Any
 
-from verbatim import gaps
+from verbatim import gaps, reflection
 from verbatim.agents.state import Abstain, Attempt, Final, Inspect, Next, Tally
 from verbatim.answers import Answer
-from verbatim.critique import unbacked_sentences, uncited_sentences
-from verbatim.reflection import UNVERIFIED as UNVERIFIED_MARKER
-from verbatim.reflection import dangling_markers
+from verbatim.critique import CITED, unbacked_sentences, uncited_sentences
+from verbatim.quotations import mask_quoted_brackets
 
 # -- terminal states (I2) ---------------------------------------------------------------
 
@@ -108,21 +106,29 @@ def _either(options: Sequence[str]) -> str:
 # -- attempts (I10) ---------------------------------------------------------------------
 
 
-def tally(answer: Answer, payload: Mapping[str, Any], texts: Mapping[str, str]) -> Tally:
-    """What the check found in an attempt. `payload` is the Writer's reply as
-    parsed, and `texts` each passage's text by chunk id as the check reads it
-    (reflection.passage_texts). Failed checks are quotes the check rejected,
-    markers with no CITE line, and quotations in the prose no cited passage holds.
-    An abstention, which cites nothing, makes no uncited claims, as in v1."""
-    abstains = (not answer.citations and not answer.rejected
-                and UNVERIFIED_MARKER not in answer.text)
-    dangling = dangling_markers(dict(payload), list(texts.values()))
+def tally(answer: Answer, texts: Mapping[str, str]) -> Tally:
+    """What the check found in an attempt; `texts` holds each passage's text by
+    chunk id as the check reads it (reflection.passage_texts).
+
+    - verified: the citations a marker in the text points at; one that no
+      marker points at supports nothing.
+    - failed, as v1's problem_count counts them: each quote the check rejected,
+      and each [unverified] marker the text shows, every claim a failed or
+      missing citation leaves unsupported; and each quotation in the prose that
+      the passage its marker names does not hold.
+    - unbacked and uncited: v1's sentence checks, on every attempt. One that
+      cites nothing, as v1's Writer declines, still makes the claims it makes.
+    """
+    markers = {int(number) for number in CITED.findall(mask_quoted_brackets(answer.text))}
+    used = [citation for number, citation in enumerate(answer.citations, start=1)
+            if number in markers]
+    misquoted = [problem for problem in answer.quotation_problems if problem.marker is not None]
     return Tally(
-        verified=len(answer.citations),
-        failed=len(answer.rejected) + len(dangling) + len(answer.quotation_problems),
+        verified=len(used),
+        failed=len(answer.rejected) + answer.text.count(reflection.UNVERIFIED) + len(misquoted),
         unbacked=len(unbacked_sentences(answer, dict(texts))),
-        uncited=0 if abstains else len(uncited_sentences(answer.text)),
-        passages=tuple(sorted({citation.chunk_id for citation in answer.citations})),
+        uncited=len(uncited_sentences(answer.text)),
+        passages=tuple(sorted({citation.chunk_id for citation in used})),
     )
 
 
@@ -149,27 +155,34 @@ def revision_refused(draft: Tally, revision: Tally, draft_name: str = "the draft
 
 
 def return_refused(number: int, attempts: Sequence[Attempt]) -> str | None:
-    """Why attempt `number` may not be returned, or None (I10). A revision that
-    breaks v1's refusals against any attempt it descends from may not; of the
-    rest, none that another of the rest dominates."""
-    by_number = {attempt.number: attempt for attempt in attempts}
-    if number not in by_number:
-        return f"there is no attempt {number}"
-    if why := _refused(by_number[number], by_number):
-        return why
-    for other in attempts:
-        if (other.number != number and _refused(other, by_number) is None
-                and dominates(other.tally, by_number[number].tally)):
-            return f"attempt {other.number} is at least as good on every count and better on one"
-    return None
+    """Why attempt `number` may not be returned, or None (I10)."""
+    reasons = _reasons(attempts)
+    return reasons[number] if number in reasons else f"there is no attempt {number}"
 
 
 def legal_returns(attempts: Sequence[Attempt]) -> tuple[int, ...]:
     """The attempts that may be returned, in the order written. Never empty while
     any exist: a first draft revises nothing, so it is never refused, and of the
     rest some attempt is always undominated."""
-    return tuple(attempt.number for attempt in attempts
-                 if return_refused(attempt.number, attempts) is None)
+    reasons = _reasons(attempts)
+    return tuple(attempt.number for attempt in attempts if reasons[attempt.number] is None)
+
+
+def _reasons(attempts: Sequence[Attempt]) -> dict[int, str | None]:
+    """Each attempt's reason it may not be returned, or None. A revision that
+    breaks v1's refusals against any attempt it descends from may not; of the
+    rest, none that another of the rest dominates."""
+    by_number = {attempt.number: attempt for attempt in attempts}
+    if len(by_number) != len(attempts):
+        raise ValueError("two attempts share a number")
+    reasons = {attempt.number: _refused(attempt, by_number) for attempt in attempts}
+    standing = [attempt for attempt in attempts if reasons[attempt.number] is None]
+    for attempt in standing:
+        better = next((other for other in standing if dominates(other.tally, attempt.tally)), None)
+        if better is not None:
+            reasons[attempt.number] = (f"attempt {better.number} is at least as good on every "
+                                       "count and better on one")
+    return reasons
 
 
 def first_by_rank(attempts: Sequence[Attempt]) -> int | None:
@@ -205,11 +218,13 @@ REFUTED, STANDS, UNPROVEN = gaps.REFUTED, gaps.STANDS, gaps.UNPROVEN
 def legal_verdicts(*, refutation_verified: bool, queries: int, papers: int) -> tuple[str, ...]:
     """The verdicts a Falsifier may give a gap: refuted needs a citation whose
     check passed, stands needs v1's effort floor (gaps.MIN_QUERIES queries over
-    gaps.MIN_PAPERS papers), and unproven is always legal."""
-    legal = [REFUTED] if refutation_verified else []
+    gaps.MIN_PAPERS papers) and no such citation, as in v1, and unproven is
+    always legal."""
+    if refutation_verified:
+        return (REFUTED, UNPROVEN)
     if queries >= gaps.MIN_QUERIES and papers >= gaps.MIN_PAPERS:
-        legal.append(STANDS)
-    return (*legal, UNPROVEN)
+        return (STANDS, UNPROVEN)
+    return (UNPROVEN,)
 
 
 # -- the Lead's actions -----------------------------------------------------------------
@@ -247,18 +262,22 @@ def _queue_refused(action: Next, board: Collection[str], attempts: Sequence[Atte
     unknown = [step for step in action.steps if step not in steps]
     if unknown:
         return f"{unknown[0]!r} is not a step; the steps are {', '.join(steps)}"
+    if not action.steps:
+        return "a queue needs at least one step"
     if len(action.steps) > MAX_QUEUE:
         return f"a queue holds at most {MAX_QUEUE} steps"
     if not action.brief and any(step in RESEARCH_STEPS for step in action.steps):
         return "a researcher or skeptic step needs a BRIEF: line saying what to find"
     if action.passages and "writer" not in action.steps:
         return "PASSAGES: goes with a writer step"
-    drafted = bool(attempts)
+    found, drafted = bool(board), bool(attempts)
     for step in action.steps:
-        if step == "writer" and not board:
-            return "the board holds no passages to write from"
+        if step == "writer" and not found:
+            return ("a writer step has no passages to write from: none are on the board, "
+                    "and no research step comes before it")
         if step == "verifier" and not drafted:
             return "the verifier has no draft to check yet"
+        found = found or step in RESEARCH_STEPS
         drafted = drafted or step == "writer"
     return _off_board(action.passages, board)
 
