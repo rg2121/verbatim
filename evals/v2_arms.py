@@ -1,5 +1,6 @@
 """Drive both arms of the v2 evaluation. The driver is built at M3; this header is
-the evaluation, pre-registered at M0 (plan revision 6) and fixed from here on.
+the evaluation, pre-registered at M0 (plan revision 6) and fixed from here on; any
+correction made before a test run is dated under AMENDMENTS.
 
 PINNED
 v1, its worker (evals/v1_arms.py), the scorer (evals/score_arms.py) and every
@@ -69,8 +70,9 @@ PRIMARY METRICS (ask; all three must pass)                          margin
 Decision: v2 is non-inferior if the lower bound of the 95% paired-bootstrap
 interval of (v2 - v1) is above -margin, taking the lowest bound over 10 seeds of
 10,000 resamples. Requiring all three is an intersection-union test, so a wrong
-merge stays at or below 2.5% without adjustment. Superiority is claimed only
-from Holm-adjusted tests.
+merge stays at or below 2.5% in one evaluation without adjustment, and at or
+below about 4.9% over the two PROCEDURE allows. Superiority is claimed only from
+Holm-adjusted tests.
 
 SIZING (fixed after the M3 pilot, before any test run)
 - Test sets: n = max(1,040, 13.0 * d_hi / margin^2) for test-a and test-b
@@ -120,8 +122,15 @@ decisions under the same contract) as the default, the agent Lead behind
 
 ACCEPTED RISKS
 A v2 equal to v1 passes the first evaluation about 73% of the time and one of
-the two about 93%. A v2 truly 2 points worse on P2 passes that gate about 58% of
-the time at 1,040 cases: a 5-point loss is the loss accepted.
+the two about 93%. The second chance works both ways: a v2 truly worse by a full
+margin passes one evaluation at most 2.5% of the time, and one of the two at
+most about 4.9% (1 - 0.975^2). A v2 truly 2 points worse on P2 passes that gate
+about 58% of the time at 1,040 cases: a 5-point loss is the loss accepted.
+
+AMENDMENTS
+2026-11-12, before any test run, after a review: the wrong-merge figure now
+counts the sealed second evaluation (at most 2.5% for one evaluation, about 4.9%
+over both). No rule, margin, set or size changed.
 """
 
 if __name__ == "__main__":

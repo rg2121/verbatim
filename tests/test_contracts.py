@@ -82,3 +82,14 @@ def test_a_budget_counts_every_model_the_run_uses_once() -> None:
     shared.record({"prompt_eval_count": 60})
 
     assert once.exhausted() is None
+
+
+def test_a_budget_stops_a_run_at_its_call_ceiling() -> None:
+    """Calls made before the guard was built do not count against it."""
+    usage = Usage()
+    usage.record({})
+    guard = BudgetGuard(Budget(max_calls=2), usage)
+    usage.record({})
+    assert guard.exhausted() is None
+    usage.record({})
+    assert "2 model calls" in guard.exhausted()

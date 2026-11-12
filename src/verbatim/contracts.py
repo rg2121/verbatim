@@ -56,11 +56,17 @@ class Cost:
 
 @dataclass(frozen=True)
 class Budget:
-    """A ceiling for a whole run. None means unbounded, the default."""
+    """A ceiling for a whole run. None means unbounded, the default.
+
+    `max_calls` counts model calls. BudgetGuard, which v1's report uses, checks
+    every field; v2 splits calls and tokens between branches from its ledger and
+    makes `max_seconds` one deadline (agents.runtime.Deadline.for_budget).
+    """
 
     max_tokens: int | None = None
     max_seconds: float | None = None
     max_attempts: int | None = None
+    max_calls: int | None = None
 
 
 @dataclass(frozen=True)
@@ -108,12 +114,16 @@ class BudgetGuard:
         self._attempts = 0
         self._lock = threading.Lock()
         self._spent_at_start = self._tokens()
+        self._calls_at_start = self._calls()
 
     def _tokens(self) -> int:
         return sum(
             int(getattr(usage, "prompt_tokens", 0)) + int(getattr(usage, "output_tokens", 0))
             for usage in self.usages
         )
+
+    def _calls(self) -> int:
+        return sum(int(getattr(usage, "calls", 0)) for usage in self.usages)
 
     def take(self) -> None:
         """Count one attempt against the budget."""
@@ -129,6 +139,10 @@ class BudgetGuard:
             spent = self._tokens() - self._spent_at_start
             if spent >= budget.max_tokens:
                 return f"{spent:,} tokens reached the limit of {budget.max_tokens:,}"
+        if budget.max_calls is not None:
+            calls = self._calls() - self._calls_at_start
+            if calls >= budget.max_calls:
+                return f"{calls} model calls reached the limit of {budget.max_calls}"
         if budget.max_seconds is not None:
             elapsed = self._clock() - self._started
             if elapsed >= budget.max_seconds:
