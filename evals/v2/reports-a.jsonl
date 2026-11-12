@@ -1,0 +1,14 @@
+# v2 evaluation, report topics (plan revision 6): written on 2026-11-12, before any
+# v2 code existed, from web searches of current research in cs, math and physics;
+# the corpus was not searched. Listed alphabetically, then split 10/10 between
+# reports-a and reports-b by the frozen seed "reports".
+{"topic": "Altermagnetism: materials, theory and experimental signatures"}
+{"topic": "Controllable video generation with diffusion models"}
+{"topic": "Finite-time singularity formation in the Euler and Navier-Stokes equations"}
+{"topic": "Fourier restriction, decoupling and the Kakeya conjecture"}
+{"topic": "Fractional quantum anomalous Hall states in twisted MoTe2 and rhombohedral graphene"}
+{"topic": "Large language models for formal theorem proving in Lean"}
+{"topic": "Neural operators and physics-informed neural networks for solving partial differential equations"}
+{"topic": "Neutrino oscillation measurements and the determination of the neutrino mass ordering"}
+{"topic": "Reinforcement learning with verifiable rewards for reasoning in large language models"}
+{"topic": "Vision-language-action models for robot manipulation"}

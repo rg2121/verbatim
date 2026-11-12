@@ -1,0 +1,84 @@
+{
+  "plan": "revision 6",
+  "authoring": {
+    "model": "gemma4:e4b-mlx",
+    "digest": "64af8205368d06c46ab8e2fdc458ad9465caaf7d020544fdfab0ea7f30602a66"
+  },
+  "sets": {
+    "dev": {
+      "path": "dev.jsonl",
+      "kind": "questions",
+      "sha256": "b343d33a24c74b6c1854e38592f7a0972bea362a8b263855f055beb294ca8878"
+    },
+    "dev-pairs": {
+      "path": "dev-pairs.jsonl",
+      "kind": "breadth",
+      "sha256": "0775e5f3f8c78403f8baf5ff95e7fc1eefedf4843cc6e4c4c05a18e4119d6a6e"
+    },
+    "dev-claims": {
+      "path": "dev-claims.jsonl",
+      "kind": "claims",
+      "sha256": "671ee665f712cf04b63a98da659dd1fe84ea748619e6bbbaa7e35c950ae22305"
+    },
+    "test-a": {
+      "path": "test-a.jsonl",
+      "kind": "questions",
+      "sha256": "6b7915acadd12644b0347e0da0d268cf636f07f9dbe00535ba056d5ff6bf6a0c"
+    },
+    "test-b": {
+      "path": "test-b.jsonl",
+      "kind": "questions",
+      "sha256": "7e68a2fd80b5e40e79b4e341ecc01ce814607afa8852ca44993145c315a2757f"
+    },
+    "abstention-a": {
+      "path": "abstention-a.jsonl",
+      "kind": "abstention",
+      "sha256": "26b55c6815b74a0f05ed47fa974515fcd9656082dd9be91d6b451ffbb6c15271"
+    },
+    "abstention-b": {
+      "path": "abstention-b.jsonl",
+      "kind": "abstention",
+      "sha256": "f758489d7e7c1930998dae3c4b7e4e009e0a9cac1447a71bc37abd928be7d187"
+    },
+    "team-a": {
+      "path": "../breadth/questions.jsonl",
+      "kind": "breadth",
+      "sha256": "cc2d395d576b2cc3f8bfb03c2021b57f73fce4aaa8950742cdddfe5f4150af9d"
+    },
+    "team-b": {
+      "path": "team-b.jsonl",
+      "kind": "breadth",
+      "sha256": "c889ab3c77be0a26472ff5837cb2f8800e12908a9eb28a53e0dd0dce2f8ed030"
+    },
+    "reports-a": {
+      "path": "reports-a.jsonl",
+      "kind": "topics",
+      "sha256": "e3f725f23593be53af47eb2667846645fc2e8ba63f412ffef7de35ce31c9fd31"
+    },
+    "reports-b": {
+      "path": "reports-b.jsonl",
+      "kind": "topics",
+      "sha256": "78a3ce689053858d77efa35297546738c36a558c11fd11a75b78c02b8fd6ca7b"
+    },
+    "gaps-a": {
+      "path": "gaps-a.jsonl",
+      "kind": "claims",
+      "sha256": "242bbb03aa3d48641f05c9c85b7a0cafd922b41a66a03cc2b429ff48c4302ef1"
+    },
+    "gaps-b": {
+      "path": "gaps-b.jsonl",
+      "kind": "claims",
+      "sha256": "99518c6589db19a61198bf058dc602a39cb5ac4563950fd47677ab5c19b5d441"
+    }
+  },
+  "seeds": {
+    "dev": 2220551727,
+    "abstention-a": 756777323,
+    "abstention-b": 2698055297,
+    "gaps-a": 2828108287,
+    "gaps-b": 1845349893,
+    "dev-claims": 1258751485,
+    "reports": 1174568764,
+    "human": 3592231090
+  }
+}

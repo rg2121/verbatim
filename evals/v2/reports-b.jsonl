@@ -1,0 +1,14 @@
+# v2 evaluation, report topics (plan revision 6): written on 2026-11-12, before any
+# v2 code existed, from web searches of current research in cs, math and physics;
+# the corpus was not searched. Listed alphabetically, then split 10/10 between
+# reports-a and reports-b by the frozen seed "reports".
+{"topic": "Binary black hole populations from LIGO-Virgo-KAGRA gravitational-wave catalogs"}
+{"topic": "Diffusion language models as an alternative to autoregressive text generation"}
+{"topic": "Dynamical dark energy and the DESI baryon acoustic oscillation measurements"}
+{"topic": "Little red dots: the nature of the compact red sources found by JWST"}
+{"topic": "LLM agents for software engineering: repository-level code generation and issue resolution"}
+{"topic": "Mechanistic interpretability of language models with sparse autoencoders and circuit analysis"}
+{"topic": "Prompt injection attacks and defenses for tool-using LLM agents"}
+{"topic": "Quantum error correction and fault-tolerant logical qubits"}
+{"topic": "Speculative decoding and KV-cache compression for efficient LLM inference"}
+{"topic": "Universal machine-learned interatomic potentials for atomistic simulation"}
