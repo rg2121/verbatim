@@ -8,23 +8,32 @@ raises instead of leaking. A paper is hidden in every version, as PaperFilter
 hides it. With nothing hidden it filters nothing, and every method returns what
 the store does.
 
-Counts over the whole corpus (holdings, reference_count, citation_graph_stats,
-and the citation counts of papers still shown) include the hidden papers: a
-number names no paper and quotes nothing.
+Nothing it returns comes from a hidden paper, a row or a count: counts are made
+by the store without the hidden papers, so a total always agrees with its list.
+Other papers' bibliographies name the hidden papers, so while anything is hidden
+no reference list is read at all, even by a search that asks for them. Other
+papers' body text can still mention a hidden paper; that is theirs to say.
+A store's connection belongs to the thread that opened it, so a branch running
+on another thread reads through `for_thread`, a copy over a connection of its own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
+import re
 from typing import Any, TypeVar
 
 from verbatim.arxiv import Paper
-from verbatim.chunking import Chunk
+from verbatim.chunking import REFERENCES, Chunk
 from verbatim.corpus import ChunkMatch, CorpusStore, PaperFilter, unversioned
 from verbatim.retrieval import hybrid_search
 
 Row = TypeVar("Row")
+
+# How a hidden paper may be written besides its id: an abstract or PDF link.
+ARXIV_LINK = re.compile(r"arxiv\.org/(?:abs|pdf)/(?P<id>[^?#\s]+?)(?:\.pdf)?/?$", re.IGNORECASE)
 
 # The store methods tools.py reaches. Nothing else is offered.
 ALLOWED = (
@@ -39,8 +48,28 @@ class ScopedCorpus:
     """The corpus with some papers hidden, offering only what agents' tools read."""
 
     def __init__(self, store: CorpusStore, hidden: Iterable[str] = ()) -> None:
+        if isinstance(hidden, str):
+            raise TypeError("hidden takes a list of paper ids, not one string")
         self._store = store
-        self._hidden = frozenset(unversioned(arxiv_id) for arxiv_id in hidden)
+        self._hidden = frozenset(self._held(written) for written in hidden)
+
+    def _held(self, written: object) -> str:
+        """A paper to hide, without its version, however it was written; one the
+        corpus does not hold is refused, since hiding it would hide nothing."""
+        text = str(written).strip()
+        if (link := ARXIV_LINK.search(text)) is not None:
+            text = link["id"]
+        base = unversioned(text.removeprefix("arXiv:").removeprefix("arxiv:").strip())
+        if self._store.latest_version_of(base) is None:
+            raise ValueError(f"no paper {base} in this corpus to hide")
+        return base
+
+    @contextmanager
+    def for_thread(self) -> Iterator[ScopedCorpus]:
+        """This scope over a connection of its own, for a branch running on another
+        thread; the connection closes when the block ends."""
+        with CorpusStore(self._store.path) as store:
+            yield ScopedCorpus(store, self.hidden)
 
     @property
     def hidden(self) -> tuple[str, ...]:
@@ -56,6 +85,7 @@ class ScopedCorpus:
             given = papers or PaperFilter()
             papers = replace(given, exclude_ids=tuple(dict.fromkeys(
                 (*given.exclude_ids, *self.hidden))))
+            options = {**options, "include_references": False}
         return hybrid_search(self._store, embedder, query, papers=papers, **options)
 
     # -- papers --
@@ -91,45 +121,50 @@ class ScopedCorpus:
         return self._top(lambda n: self._store.papers_citing(base_arxiv_id, limit=n), limit)
 
     def citation_counts(self, base_arxiv_ids: Sequence[str]) -> dict[str, int]:
-        return {base: count for base, count in self._store.citation_counts(base_arxiv_ids).items()
-                if self._shown(base)}
+        counts = self._store.citation_counts(base_arxiv_ids, excluding=self._hidden)
+        return {base: count for base, count in counts.items() if self._shown(base)}
 
     def most_cited_held_papers(self, *, limit: int = 25) -> list[tuple[Paper, int]]:
-        return self._top(lambda n: self._store.most_cited_held_papers(limit=n), limit,
-                         key=lambda pair: pair[0].arxiv_id)
+        return self._store.most_cited_held_papers(limit=limit, excluding=self._hidden)
 
     def most_cited_absent_papers(self, *, limit: int = 50) -> list[tuple[str, int]]:
-        # Papers cited and not held; a hidden paper is held, so it is never one of them.
-        return self._store.most_cited_absent_papers(limit=limit)
+        return self._store.most_cited_absent_papers(limit=limit, excluding=self._hidden)
 
     def reference_count(self) -> int:
-        return self._store.reference_count()
+        return self._store.reference_count(excluding=self._hidden)
 
     def citation_graph_stats(self) -> dict[str, int]:
-        return self._store.citation_graph_stats()
+        return self._store.citation_graph_stats(excluding=self._hidden)
 
     # -- passages --
 
     def chunks_by_id(self, chunk_ids: Sequence[str]) -> list[Chunk]:
-        return [chunk for chunk in self._store.chunks_by_id(chunk_ids)
-                if self._shown(chunk.arxiv_id)]
+        return self._readable(self._store.chunks_by_id(chunk_ids))
 
     def chunks_for_paper(self, arxiv_id: str) -> list[Chunk]:
-        return self._store.chunks_for_paper(arxiv_id) if self._shown(arxiv_id) else []
+        return self._readable(self._store.chunks_for_paper(arxiv_id)) if self._shown(arxiv_id) else []
 
     def chunks_on_pages(self, arxiv_id: str, pages: Sequence[int]) -> list[Chunk]:
-        return self._store.chunks_on_pages(arxiv_id, pages) if self._shown(arxiv_id) else []
+        if not self._shown(arxiv_id):
+            return []
+        return self._readable(self._store.chunks_on_pages(arxiv_id, pages))
 
     def passage_span(self, arxiv_id: str) -> tuple[int, int | None, int | None]:
         return self._store.passage_span(arxiv_id) if self._shown(arxiv_id) else (0, None, None)
 
     def holdings(self, *, categories: int = 10) -> dict[str, object]:
-        return self._store.holdings(categories=categories)
+        return self._store.holdings(categories=categories, excluding=self._hidden)
 
     # -- filtering --
 
     def _shown(self, arxiv_id: str) -> bool:
         return unversioned(arxiv_id) not in self._hidden
+
+    def _readable(self, chunks: list[Chunk]) -> list[Chunk]:
+        """None of a hidden paper's passages, and while anything is hidden, no
+        reference list: other papers' bibliographies name the hidden papers."""
+        return [chunk for chunk in chunks if self._shown(chunk.arxiv_id)
+                and not (self._hidden and chunk.kind == REFERENCES)]
 
     def _paper(self, found: Paper | None) -> Paper | None:
         return found if found is not None and self._shown(found.arxiv_id) else None

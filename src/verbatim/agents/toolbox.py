@@ -12,10 +12,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from verbatim import tools
+from verbatim.agents import contract
 from verbatim.agents.scoped import ScopedCorpus
 from verbatim.retrieval import default_search_options
 
-INSPECT_PASSAGES = 4
 INSPECT_CHARACTERS = 6000
 CUT = " [cut]"
 
@@ -34,20 +34,21 @@ def search_chunks(corpus: ScopedCorpus, embedder: Any, query: str, *, limit: int
     """tools.search_chunks, searching through the scope; test_scoped holds the two equal."""
     if not query.strip():
         raise ValueError("query is empty: pass the words to search for")
+    bounded = tools.bounded_limit(limit)  # checked before the paper, as v1 checks them
     scope = (tools.held_version(corpus, arxiv_id)  # type: ignore[arg-type]
              if arxiv_id and str(arxiv_id).strip() else None)
-    matches = corpus.search(embedder, query, limit=tools.bounded_limit(limit), arxiv_id=scope,
+    matches = corpus.search(embedder, query, limit=bounded, arxiv_id=scope,
                             max_per_paper=3 if scope is None else None, **default_search_options())
     return tools.passage_rows(corpus, [match.chunk for match in matches])  # type: ignore[arg-type]
 
 
 def inspect(corpus: ScopedCorpus, ids: Sequence[str]) -> list[dict[str, Any]]:
-    """The exact text of up to INSPECT_PASSAGES passages, in the order asked and
-    each once, sharing INSPECT_CHARACTERS between them; a passage cut short ends
-    with CUT. A passage the scope does not show is not returned."""
+    """The exact text of up to contract.MAX_INSPECT passages, in the order asked
+    and each once, sharing INSPECT_CHARACTERS between them; a passage cut short
+    ends with CUT. A passage the scope does not show is not returned."""
     wanted = list(dict.fromkeys(ids))
-    if len(wanted) > INSPECT_PASSAGES:
-        raise ValueError(f"INSPECT reads at most {INSPECT_PASSAGES} passages at a time")
+    if len(wanted) > contract.MAX_INSPECT:
+        raise ValueError(f"INSPECT reads at most {contract.MAX_INSPECT} passages at a time")
     found = {chunk.chunk_id: chunk for chunk in corpus.chunks_by_id(wanted)}
     rows = tools.passage_rows(corpus, [found[chunk_id] for chunk_id in wanted  # type: ignore[arg-type]
                                        if chunk_id in found])

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
@@ -703,26 +703,35 @@ class CorpusStore:
         ).fetchall()
         return {row["license"]: row["n"] for row in rows}
 
-    def holdings(self, *, categories: int = 10) -> dict[str, object]:
-        """What the current versions add up to, for judging what the corpus can answer."""
+    def holdings(
+        self, *, categories: int = 10, excluding: Collection[str] = ()
+    ) -> dict[str, object]:
+        """What the current versions add up to, for judging what the corpus can answer.
+
+        `excluding` names papers, without versions, to count as if not held.
+        """
+        hidden, parameters = _leaving_out(excluding, "papers.base_arxiv_id")
         papers, earliest, latest, updated = self.connection.execute(
             "SELECT COUNT(*), MIN(published), MAX(published), MAX(updated)"
-            " FROM papers WHERE is_latest = 1"
+            f" FROM papers WHERE is_latest = 1{hidden}",
+            parameters,
         ).fetchone()
         passages = self.connection.execute(
             "SELECT COUNT(*) FROM chunks"
-            " WHERE arxiv_id IN (SELECT arxiv_id FROM papers WHERE is_latest = 1)"
+            f" WHERE arxiv_id IN (SELECT arxiv_id FROM papers WHERE is_latest = 1{hidden})",
+            parameters,
         ).fetchone()[0]
         licences = self.connection.execute(
             "SELECT COALESCE(license_class, 'unknown') AS licence, COUNT(*) AS n FROM papers"
-            " WHERE is_latest = 1 GROUP BY licence ORDER BY n DESC, licence"
+            f" WHERE is_latest = 1{hidden} GROUP BY licence ORDER BY n DESC, licence",
+            parameters,
         ).fetchall()
         # A paper counts once in each category it lists.
         listed = self.connection.execute(
             "SELECT category.value AS name, COUNT(*) AS n"
             " FROM papers, json_each(papers.categories_json) AS category"
-            " WHERE papers.is_latest = 1 GROUP BY name ORDER BY n DESC, name LIMIT ?",
-            (categories,),
+            f" WHERE papers.is_latest = 1{hidden} GROUP BY name ORDER BY n DESC, name LIMIT ?",
+            (*parameters, categories),
         ).fetchall()
         return {
             "papers": int(papers),
@@ -1107,25 +1116,35 @@ class CorpusStore:
             )
         return condition
 
-    def most_cited_absent_papers(self, *, limit: int = 50) -> list[tuple[str, int]]:
-        """arXiv papers this corpus cites most and does not hold: its reading list."""
+    def most_cited_absent_papers(
+        self, *, limit: int = 50, excluding: Collection[str] = ()
+    ) -> list[tuple[str, int]]:
+        """arXiv papers this corpus cites most and does not hold: its reading list.
+
+        The bibliographies of `excluding`'s papers, named without versions, are not read.
+        """
+        hidden, parameters = _leaving_out(excluding, "r.citing_arxiv_id", versioned=True)
         rows = self.connection.execute(
-            """
+            f"""
             SELECT r.cited_arxiv_id, COUNT(DISTINCT r.citing_arxiv_id) AS citations
             FROM paper_references AS r
             WHERE r.cited_arxiv_id IS NOT NULL
-              AND r.cited_arxiv_id NOT IN (SELECT base_arxiv_id FROM papers)
+              AND r.cited_arxiv_id NOT IN (SELECT base_arxiv_id FROM papers){hidden}
             GROUP BY r.cited_arxiv_id
             ORDER BY citations DESC, r.cited_arxiv_id
             LIMIT ?
             """,
-            (limit,),
+            (*parameters, limit),
         ).fetchall()
         return [(row["cited_arxiv_id"], int(row["citations"])) for row in rows]
 
-    def reference_count(self) -> int:
+    def reference_count(self, *, excluding: Collection[str] = ()) -> int:
+        """Bibliography entries held, not counting those of `excluding`'s papers."""
+        hidden, parameters = _leaving_out(excluding, "citing_arxiv_id", versioned=True)
         return int(
-            self.connection.execute("SELECT COUNT(*) FROM paper_references").fetchone()[0]
+            self.connection.execute(
+                f"SELECT COUNT(*) FROM paper_references WHERE TRUE{hidden}", parameters
+            ).fetchone()[0]
         )
 
     def papers_citing(self, base_arxiv_id: str, *, limit: int = 25) -> list[Paper]:
@@ -1168,12 +1187,16 @@ class CorpusStore:
         ).fetchall()
         return [_paper_from_row(row) for row in rows]
 
-    def citation_counts(self, base_arxiv_ids: Sequence[str]) -> dict[str, int]:
-        """How many distinct held papers cite each of these base identifiers."""
+    def citation_counts(
+        self, base_arxiv_ids: Sequence[str], *, excluding: Collection[str] = ()
+    ) -> dict[str, int]:
+        """How many distinct held papers cite each of these base identifiers, not
+        counting `excluding`'s papers, named without versions."""
         if not base_arxiv_ids:
             return {}
         unique = list(dict.fromkeys(base_arxiv_ids))
         placeholders = ",".join("?" * len(unique))
+        hidden, parameters = _leaving_out(excluding, "citer.base_arxiv_id")
         rows = self.connection.execute(
             f"""
             SELECT r.cited_arxiv_id AS cited,
@@ -1181,43 +1204,52 @@ class CorpusStore:
             FROM paper_references AS r
             JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
             WHERE r.cited_arxiv_id IN ({placeholders})
-              AND r.cited_arxiv_id != citer.base_arxiv_id
+              AND r.cited_arxiv_id != citer.base_arxiv_id{hidden}
             GROUP BY r.cited_arxiv_id
             """,
-            unique,
+            [*unique, *parameters],
         ).fetchall()
         return {row["cited"]: int(row["citations"]) for row in rows}
 
-    def most_cited_held_papers(self, *, limit: int = 25) -> list[tuple[Paper, int]]:
-        """The held papers this corpus cites most, with their citer counts."""
+    def most_cited_held_papers(
+        self, *, limit: int = 25, excluding: Collection[str] = ()
+    ) -> list[tuple[Paper, int]]:
+        """The held papers this corpus cites most, with their citer counts; `excluding`'s
+        papers, named without versions, neither cite nor are cited."""
+        citers, citer_parameters = _leaving_out(excluding, "citer.base_arxiv_id")
+        held, held_parameters = _leaving_out(excluding, "held.base_arxiv_id")
         rows = self.connection.execute(
-            """
+            f"""
             SELECT held.*, COUNT(DISTINCT citer.base_arxiv_id) AS citations
             FROM paper_references AS r
             JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
             JOIN papers AS held
               ON held.base_arxiv_id = r.cited_arxiv_id AND held.is_latest = 1
-            WHERE r.cited_arxiv_id != citer.base_arxiv_id
+            WHERE r.cited_arxiv_id != citer.base_arxiv_id{citers}{held}
             GROUP BY held.base_arxiv_id
             ORDER BY citations DESC, held.base_arxiv_id
             LIMIT ?
             """,
-            (limit,),
+            (*citer_parameters, *held_parameters, limit),
         ).fetchall()
         return [(_paper_from_row(row), int(row["citations"])) for row in rows]
 
-    def citation_graph_stats(self) -> dict[str, int]:
-        """Edges between held papers, papers touching one, and the paper total."""
-        edges_sql = """
+    def citation_graph_stats(self, *, excluding: Collection[str] = ()) -> dict[str, int]:
+        """Edges between held papers, papers touching one, and the paper total, with
+        `excluding`'s papers, named without versions, counted as not held."""
+        citers, citer_parameters = _leaving_out(excluding, "citer.base_arxiv_id")
+        cited, cited_parameters = _leaving_out(excluding, "r.cited_arxiv_id")
+        edge_parameters = [*citer_parameters, *cited_parameters]
+        edges_sql = f"""
             SELECT DISTINCT citer.base_arxiv_id AS citing, r.cited_arxiv_id AS cited
             FROM paper_references AS r
             JOIN papers AS citer ON citer.arxiv_id = r.citing_arxiv_id
             WHERE r.cited_arxiv_id IN (SELECT base_arxiv_id FROM papers)
-              AND r.cited_arxiv_id != citer.base_arxiv_id
+              AND r.cited_arxiv_id != citer.base_arxiv_id{citers}{cited}
         """
         edges = int(
             self.connection.execute(
-                f"SELECT COUNT(*) FROM ({edges_sql})"
+                f"SELECT COUNT(*) FROM ({edges_sql})", edge_parameters
             ).fetchone()[0]
         )
         connected = int(
@@ -1228,12 +1260,15 @@ class CorpusStore:
                     UNION
                     SELECT cited FROM ({edges_sql})
                 )
-                """
+                """,
+                [*edge_parameters, *edge_parameters],
             ).fetchone()[0]
         )
+        held, held_parameters = _leaving_out(excluding, "base_arxiv_id")
         papers = int(
             self.connection.execute(
-                "SELECT COUNT(DISTINCT base_arxiv_id) FROM papers"
+                f"SELECT COUNT(DISTINCT base_arxiv_id) FROM papers WHERE TRUE{held}",
+                held_parameters,
             ).fetchone()[0]
         )
         return {"edges": edges, "connected_papers": connected, "papers": papers}
@@ -1721,6 +1756,20 @@ def split_arxiv_version(arxiv_id: str) -> tuple[str, int]:
     if match is None:
         raise ValueError(f"arXiv identifier has no version suffix: {arxiv_id}")
     return match.group("base"), int(match.group("version"))
+
+
+def _leaving_out(
+    bases: Collection[str], column: str, *, versioned: bool = False
+) -> tuple[str, list[object]]:
+    """An SQL condition, " AND ...", leaving out rows whose `column` names one of the
+    papers in `bases`, given without versions; nothing when there are none. With
+    `versioned` the column holds versioned ids, so every version is left out."""
+    if not bases:
+        return "", []
+    listed = "SELECT value FROM json_each(?)"
+    if versioned:
+        listed = f"SELECT arxiv_id FROM papers WHERE base_arxiv_id IN ({listed})"
+    return f" AND {column} NOT IN ({listed})", [json.dumps(sorted(bases))]
 
 
 def unversioned(arxiv_id: str) -> str:

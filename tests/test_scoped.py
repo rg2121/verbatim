@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import operator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
 import pytest
 
@@ -19,6 +20,7 @@ from helpers import chunked_corpus, paper
 from verbatim import tools
 from verbatim.agents import toolbox
 from verbatim.agents.scoped import ALLOWED, ScopedCorpus
+from verbatim.chunking import REFERENCES
 from verbatim.references import Reference
 from verbatim.retrieval import default_search_options, hybrid_search
 
@@ -40,7 +42,9 @@ EMBEDDER = NoVectors()
 @pytest.fixture
 def store(tmp_path: Path):
     corpus = chunked_corpus(tmp_path, {
-        CITER: ["## Intro\n\nMagnetic flux threads the ring in every sample."],
+        CITER: ["## Intro\n\nMagnetic flux threads the ring in every sample.",
+                # Its bibliography names the hidden paper, by title and id.
+                "## References\n\n[1] A. Writer. Quasicrystal phonons. arXiv:2608.99999."],
         CITED: ["## Method\n\nThe ring is cooled below one kelvin before measuring."],
         OTHER: ["## Notes\n\nQuasicrystals grow slowly from the melt."],
         HIDDEN: ["## Result\n\nQuasicrystal phonons soften near the zone boundary.",
@@ -76,6 +80,7 @@ PROBES = [
     ("get_citations", {"identifier": CITED, "direction": "cited_by"}),
     ("get_citations", {"identifier": "2608.99999", "direction": "cited_by"}),
     ("read_pages", {"arxiv_id": NEWER, "pages": [1, 2]}),
+    ("read_pages", {"arxiv_id": CITER, "pages": [1, 2]}),  # a bibliography that names it
 ]
 # The other ways an agent reads: tools.py's MCP reads, INSPECT and the opening search.
 READS: dict[str, Callable[[ScopedCorpus, list[str]], Any]] = {
@@ -139,7 +144,7 @@ def test_a_method_nobody_listed_is_not_there(store) -> None:
         with pytest.raises(AttributeError):
             getattr(scoped, name)
     public = {name for name in dir(ScopedCorpus) if not name.startswith("_")}
-    assert public == {*ALLOWED, "search", "hidden"}
+    assert public == {*ALLOWED, "search", "hidden", "for_thread"}
 
 
 def method_calls(store) -> dict[str, tuple[tuple, dict]]:
@@ -215,3 +220,163 @@ def test_inspect_reads_at_most_four_passages_sharing_its_characters(store, monke
     assert [row["chunk_id"] for row in rows] == [ids[2], ids[0]]  # in the order asked, once
     assert [row["text"] for row in rows] == [texts[chunk_id][:30 - len(toolbox.CUT)] + toolbox.CUT
                                             for chunk_id in (ids[2], ids[0])]
+
+
+# -- what the review of M2b found ---------------------------------------------------------
+
+
+def test_a_parallel_branch_reads_through_a_copy_of_the_scope_on_its_own_thread(store) -> None:
+    import sqlite3
+    from concurrent.futures import ThreadPoolExecutor
+
+    scoped = ScopedCorpus(store, [HIDDEN])
+
+    def branch() -> tuple:
+        with scoped.for_thread() as mine:
+            return mine.hidden, mine.get_paper(CITER), mine.get_paper(NEWER)
+
+    with ThreadPoolExecutor(1) as pool:
+        # The store's connection belongs to the thread that opened it ...
+        with pytest.raises(sqlite3.ProgrammingError):
+            pool.submit(scoped.get_paper, CITER).result()
+        # ... so a branch opens its own, hiding the same papers.
+        hidden, shown, gone = pool.submit(branch).result()
+    assert hidden == ("2608.99999",) and shown.arxiv_id == CITER and gone is None
+
+
+def test_langgraph_branches_each_read_through_their_own_copy(store) -> None:
+    from dataclasses import dataclass
+
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.runtime import Runtime
+    from langgraph.types import Send
+
+    @dataclass
+    class Deps:
+        scope: ScopedCorpus
+
+    class State(TypedDict, total=False):
+        found: Annotated[list[str], operator.add]
+
+    def branch(brief: dict, runtime: Runtime[Deps]) -> dict:
+        with runtime.context.scope.for_thread() as mine:
+            return {"found": [p.arxiv_id for p in mine.papers_updated_since(limit=5)]}
+
+    graph = StateGraph(State, context_schema=Deps)
+    graph.add_node("branch", branch)
+    graph.add_conditional_edges(START, lambda state: [Send("branch", {"i": i}) for i in range(3)],
+                                ["branch"])
+    graph.add_edge("branch", END)
+    out = graph.compile().invoke({}, context=Deps(ScopedCorpus(store, [HIDDEN])))
+    assert out["found"] == [CITER, CITED, OTHER] * 3
+
+
+def test_a_hidden_paper_a_question_is_named_after_stays_out_of_the_title_and_graph_legs(
+        tmp_path: Path) -> None:
+    from helpers import titled_paper
+
+    anchor, first, second = "2608.50001v1", "2608.50002v1", "2608.50003v1"
+    corpus = chunked_corpus(tmp_path, {
+        anchor: ["## Method\n\nFlux pinning holds vortices in place at defects in the lattice."],
+        first: ["## Intro\n\nWe measure transport in thin films of niobium."],
+        second: ["## Intro\n\nWe image vortices with a scanning probe."],
+    })
+    question = "What is flux pinning?"
+    with corpus:
+        corpus.upsert_papers([titled_paper(anchor, "Flux Pinning")])
+        for citer in (first, second):
+            corpus.record_references([Reference(citer, 1, "[1] arXiv:2608.50001", "2608.50001")],
+                                     source_sha256=citer)
+
+        def found(scope: ScopedCorpus) -> set[str]:
+            opening = scope.search(EMBEDDER, question, limit=8, **default_search_options())
+            titled = scope.search(EMBEDDER, question, limit=8, use_titles=True)
+            tool = toolbox.search_chunks(scope, EMBEDDER, question)
+            return ({m.chunk.arxiv_id for m in (*opening, *titled)}
+                    | {row["arxiv_id"] for row in tool})
+
+        assert anchor in found(ScopedCorpus(corpus))
+        assert anchor not in found(ScopedCorpus(corpus, [anchor]))
+
+
+def test_nothing_the_scope_counts_comes_from_a_hidden_paper(store) -> None:
+    scoped = ScopedCorpus(store, [HIDDEN])
+    # 2601.00001 is in the hidden paper's bibliography and nobody else's.
+    assert scoped.most_cited_absent_papers(limit=10) == []
+    # CITED is cited by CITER and by the hidden paper, so one citer is shown.
+    assert scoped.citation_counts(["2608.22222"]) == {"2608.22222": 1}
+    cited_by = toolbox.call("get_citations", {"identifier": CITED, "direction": "cited_by"},
+                            scoped, EMBEDDER)
+    assert cited_by["total"] == len(cited_by["papers"]) == 1
+    assert scoped.most_cited_held_papers(limit=10) == [(store.get_paper(CITED), 1)]
+    holdings = scoped.holdings()
+    assert (holdings["papers"], holdings["passages"], holdings["updated_up_to"]) == (
+        3, 4, "2026-08-08")
+    assert scoped.citation_graph_stats() == {"edges": 1, "connected_papers": 2, "papers": 3}
+    assert scoped.reference_count() == 2  # CITER's two entries, not the hidden paper's
+
+
+@pytest.mark.parametrize("spelling", ["arXiv:2608.99999v1", " 2608.99999v1 ", "2608.99999",
+                                      "https://arxiv.org/abs/2608.99999v1",
+                                      "https://arxiv.org/pdf/2608.99999v2.pdf"])
+def test_a_hidden_paper_is_hidden_however_its_id_is_written(store, spelling: str) -> None:
+    scoped = ScopedCorpus(store, [spelling])
+    assert scoped.hidden == ("2608.99999",) and scoped.get_paper(NEWER) is None
+
+
+def test_a_hidden_list_names_held_papers_and_is_a_list(store) -> None:
+    with pytest.raises(ValueError, match="2608.9999 "):
+        ScopedCorpus(store, ["2608.9999v1"])  # mistyped: no such paper is held
+    with pytest.raises(TypeError, match="list"):
+        ScopedCorpus(store, HIDDEN)  # one string, which would be read as characters
+
+
+def test_inspect_takes_its_limit_from_the_contract(store, monkeypatch) -> None:
+    from verbatim.agents import contract
+    from verbatim.agents.state import Inspect
+
+    ids = [chunk.chunk_id for chunk in store.iter_chunks() if not chunk.arxiv_id.startswith("2608.9")]
+    monkeypatch.setattr(contract, "MAX_INSPECT", 2)
+    assert contract.lead_action_refused(Inspect(tuple(ids[:3])), board=set(ids), attempts=[])
+    with pytest.raises(ValueError, match="at most 2"):
+        toolbox.inspect(ScopedCorpus(store), ids[:3])
+
+
+def test_the_scope_offers_exactly_the_store_methods_tools_py_calls() -> None:
+    import ast
+
+    tree = ast.parse(Path(tools.__file__).read_text(encoding="utf-8"))
+    called = {node.func.attr for node in ast.walk(tree)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == "corpus"}
+    assert called == set(ALLOWED)
+
+
+def test_the_copied_search_refuses_bad_arguments_as_v1s_does(store) -> None:
+    for limit, arxiv_id in ((0, "2601.00009"), (8, "2601.00009"), (0, None)):
+        with pytest.raises(ValueError) as v1:
+            tools.search_chunks(store, EMBEDDER, "flux", limit=limit, arxiv_id=arxiv_id)
+        with pytest.raises(ValueError) as copied:
+            toolbox.search_chunks(ScopedCorpus(store), EMBEDDER, "flux", limit=limit,
+                                  arxiv_id=arxiv_id)
+        assert str(copied.value) == str(v1.value)
+
+
+def test_a_list_asks_again_while_hidden_versions_fill_it(store) -> None:
+    store.upsert_papers([paper(HIDDEN, updated="2026-08-31T10:00:00Z")])  # both versions newest
+    shown = ScopedCorpus(store, [HIDDEN]).papers_updated_since(limit=1, latest_only=False)
+    assert [p.arxiv_id for p in shown] == [CITER]
+
+
+def test_while_a_paper_is_hidden_no_reference_list_is_read(store) -> None:
+    # Other papers' bibliographies name it, so none is read while anything is hidden;
+    # mentions in body text stay. With nothing hidden they read as in v1.
+    def references(scope: ScopedCorpus) -> list[str]:
+        searched = [m.chunk for m in scope.search(EMBEDDER, "Quasicrystal phonons", limit=8,
+                                                  include_references=True)]
+        read = [*scope.chunks_for_paper(CITER), *scope.chunks_on_pages(CITER, [2]),
+                *scope.chunks_by_id([chunk.chunk_id for chunk in store.chunks_for_paper(CITER)])]
+        return [chunk.chunk_id for chunk in (*searched, *read) if chunk.kind == REFERENCES]
+
+    assert len(references(ScopedCorpus(store))) == 4
+    assert references(ScopedCorpus(store, [HIDDEN])) == []
