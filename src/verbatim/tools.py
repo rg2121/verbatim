@@ -85,7 +85,7 @@ def _passage_row(chunk: Chunk, paper: Paper | None) -> dict[str, Any]:
     }
 
 
-def _passage_rows(corpus: CorpusStore, chunks: Sequence[Chunk]) -> list[dict[str, Any]]:
+def passage_rows(corpus: CorpusStore, chunks: Sequence[Chunk]) -> list[dict[str, Any]]:
     if not chunks:
         return []
     papers = corpus.papers_by_id(sorted({chunk.arxiv_id for chunk in chunks}))
@@ -115,7 +115,7 @@ def search_chunks(
         max_per_paper=3 if scope is None else None,
         **default_search_options(),
     )
-    return _passage_rows(corpus, [match.chunk for match in matches])
+    return passage_rows(corpus, [match.chunk for match in matches])
 
 
 def get_paper(corpus: CorpusStore, identifier: str) -> dict[str, Any] | None:
