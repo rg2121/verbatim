@@ -18,12 +18,13 @@ import re
 from typing import Any
 
 from verbatim.agents import contract
-from verbatim.agents.contract import DROP, FAILED, PASSED, REPAIR
+from verbatim.agents.contract import DROP, FAILED, PASSED, REMOVED, REPAIR, visible_status
 from verbatim.agents.protocol import ProtocolError, ask_twice, parse_verification
 from verbatim.agents.state import CitationRecord, Draft, Verification, WriterBrief
 from verbatim.answers import (
     ANSWER_SCHEMA,
     SYSTEM_PROMPT,
+    Answer,
     FormatError,
     answer_from_payload,
     build_prompt,
@@ -235,3 +236,18 @@ def verify(ask: Callable[[str, str], str], draft: Draft, records: Sequence[Citat
         return verification
 
     return ask_twice(ask, VERIFIER_SYSTEM, verifier_view(draft, records, texts), read)
+
+
+def assemble(draft: Draft, records: Sequence[CitationRecord], matches: Sequence[ChunkMatch],
+             papers: Mapping[str, Any]) -> Answer:
+    """The attempt as shown: its checked answer, unreworded (I4), less the CITE
+    lines the Verifier's decisions remove (I1). Their markers then read
+    [unverified], as v1 shows any marker with no verified citation behind it."""
+    removed = {record.line for record in records
+               if visible_status(record.check, record.decision) == REMOVED}
+    if not removed:
+        return draft.answer
+    kept = [raw for line, raw in enumerate(draft.payload.get("citations", []), start=1)
+            if line not in removed]
+    return answer_from_payload(draft.brief.task, list(matches),
+                               {**draft.payload, "citations": kept}, dict(papers))

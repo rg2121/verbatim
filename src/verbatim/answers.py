@@ -538,6 +538,8 @@ class RoleCompletion:
     planner: OllamaCompletion
     describer: OllamaCompletion
     reflector: OllamaCompletion
+    lead: OllamaCompletion
+    verifier: OllamaCompletion
 
     def __init__(
         self,
@@ -571,6 +573,12 @@ class RoleCompletion:
     def model(self) -> str:
         """The writer's model, the one an answer is credited to."""
         return self.writer.model
+
+    def for_role(self, name: str) -> OllamaCompletion:
+        """The client one role's calls go to, for v2's agents."""
+        if name not in config.ROLES:
+            raise ValueError(f"{name!r} is not a role; the roles are {', '.join(config.ROLES)}")
+        return getattr(self, name)
 
     def complete(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
         return self.writer.complete(system, user, schema)

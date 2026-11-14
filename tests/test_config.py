@@ -115,7 +115,8 @@ def test_each_role_reads_its_own_model_setting(tmp_path: Path) -> None:
     )
 
     assert result.stdout.strip() == (
-        "{'writer': None, 'planner': 'small', 'describer': None, 'reflector': None}"
+        "{'writer': None, 'planner': 'small', 'describer': None, 'reflector': None, "
+        "'lead': None, 'verifier': None}"
     )
 
 

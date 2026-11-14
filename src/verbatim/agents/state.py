@@ -233,6 +233,20 @@ class CitationDecision(Record):
 
 
 @dataclass(frozen=True)
+class Note(Record):
+    """What an agent says for the Lead, under its own name: one of the NOTES,
+    never a fact. `at` is where it was written."""
+
+    at: tuple[int | str, ...]
+    agent: str
+    text: str
+
+    @property
+    def key(self) -> tuple[int | str, ...]:
+        return self.at
+
+
+@dataclass(frozen=True)
 class Verification(Record):
     """The Verifier's decisions on one attempt: per citation, whether it goes
     back to the Writer, and what research it asks the Lead for, if any."""
@@ -246,7 +260,7 @@ class Verification(Record):
 # v1's Answer and what it holds come with a checked draft.
 RECORDS: tuple[type, ...] = (Step, Found, Evidence, SectionResult, Allowance, Tally, Attempt,
                              Next, Inspect, Final, Abstain, WriterBrief, Draft, CitationRecord,
-                             CitationDecision, Verification, Cost, Answer, Citation,
+                             CitationDecision, Verification, Note, Cost, Answer, Citation,
                              RejectedCitation, QuotationProblem)
 
 
