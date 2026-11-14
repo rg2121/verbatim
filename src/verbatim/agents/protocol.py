@@ -12,11 +12,15 @@ the contract's to say, not the parser's.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import re
+from typing import TypeVar
 
-from verbatim.agents.state import Abstain, Final, Inspect, Next
+from verbatim.agents.state import Abstain, CitationDecision, Final, Inspect, Next, Verification
 from verbatim.answers import CHUNK_ID_PATTERN
+
+T = TypeVar("T")
 
 # A key in capitals at the start of a line, however the model dresses it:
 # indented, after a bullet or a number, in bold, quotes or backticks. One line per key.
@@ -30,6 +34,17 @@ HEX_RUN = re.compile(r"\b[0-9a-f]{8,}\b")  # anything that looks like a passage 
 NAMED_ATTEMPT = re.compile(r"(?:attempt|draft|#)\s*#?\s*(\d+)", re.IGNORECASE)
 NO_PASSAGES = frozenset({"", "none", "default", "n/a", "-"})
 LEAD_DECISIONS = ("NEXT", "INSPECT", "FINAL", "ABSTAIN")
+# An ACTION line however it is written: any case, plural, with or without the colon.
+ACTION_LINE = re.compile(
+    r"^[ \t]*(?:(?:[-*>]|\d+[.)])[ \t]+)?[*`\"']*actions?\b[*`\"']*[ \t]*:?(?P<value>.*)$",
+    re.IGNORECASE | re.MULTILINE)
+# In one decision: a bracketed marker anywhere, or a bare number leading it ("2) drop").
+ACTION_MARKER = re.compile(r"\[\s*(\d+)\s*\]|^[^\w\[]*(\d+)(?![\w.])")
+ACTION_DECISION = re.compile(r"\b(?:keep[\W_]*(?:as[\W_]*)?unverified|keep|repair|drop)\b",
+                             re.IGNORECASE)
+VERIFIER_NEXT = {"writer": True, "repair": True, "done": False, "accept": False}
+NO_DECISIONS = frozenset({"", "none", "nothing", "n/a", "-"})
+RETRY_SHOWN = 1500  # characters of an unusable reply shown back with what was wrong
 
 
 class ProtocolError(ValueError):
@@ -60,16 +75,30 @@ def retry_message(error: ProtocolError) -> str:
     return f"Your reply could not be used: {error}. Reply again, in the format asked for."
 
 
+def ask_twice(ask: Callable[[str, str], str], system: str, user: str,
+              read: Callable[[str], T]) -> tuple[T | None, tuple[str, ...]]:
+    """One decision from a model. `read` turns a reply into it, raising
+    ProtocolError on one it cannot use, an illegal one included; that reply goes
+    back once with what was wrong. None after two, with every reply."""
+    replies: list[str] = []
+    prompt = user
+    for _ in range(2):
+        reply = ask(system, prompt)
+        replies.append(reply)
+        try:
+            return read(reply), tuple(replies)
+        except ProtocolError as error:
+            prompt = (f"{user}\n\nYour reply was:\n{reply[:RETRY_SHOWN]}\n\n"
+                      f"{retry_message(error)}")
+    return None, tuple(replies)
+
+
 def parse_lead(reply: str) -> Next | Inspect | Final | Abstain:
     """The Lead's one decision: NEXT (with BRIEF and PASSAGES), INSPECT, FINAL or ABSTAIN."""
     found = lines(reply)
-    decisions = [line for line in found if line.key in LEAD_DECISIONS]
-    bare = [line for line in decisions if not line.bulleted]
-    chosen = bare if len(bare) == 1 else decisions
-    if len(chosen) != 1:
-        raise ProtocolError("reply with exactly one line starting NEXT:, INSPECT:, FINAL: or "
-                            f"ABSTAIN: (this reply had {len(decisions)})")
-    key, value = chosen[0].key, chosen[0].value
+    chosen = _decision(found, LEAD_DECISIONS, "reply with exactly one line starting NEXT:, "
+                                              "INSPECT:, FINAL: or ABSTAIN:")
+    key, value = chosen.key, chosen.value
     if key == "NEXT":
         steps = tuple(word for word in STEP_WORD.findall(value.lower()) if word not in FILLER)
         if not steps:
@@ -89,6 +118,29 @@ def parse_lead(reply: str) -> Next | Inspect | Final | Abstain:
     return Abstain(reason=value)
 
 
+def parse_verification(reply: str) -> Verification:
+    """The Verifier's decisions: an ACTION line per citation it decides on, and
+    NEXT: writer, to send the draft back, or NEXT: done; RESEARCH asks the Lead
+    for more evidence."""
+    found = lines(reply)
+    value = _decision(found, ("NEXT",), "reply with exactly one line NEXT: writer, to send "
+                                        "the draft back, or NEXT: done").value
+    # The first of writer or done decides: "done, no need to send it to the writer" is done.
+    said = [word for word in STEP_WORD.findall(value.lower()) if word in VERIFIER_NEXT]
+    if not said:
+        raise ProtocolError("NEXT: takes writer or done")
+    repair = VERIFIER_NEXT[said[0]]
+    decisions: dict[int, CitationDecision] = {}
+    text = (reply or "").replace("\r\n", "\n").replace("\r", "\n")
+    for line in ACTION_LINE.finditer(text):
+        for decided in _actions(line["value"]):
+            if decided.marker in decisions:
+                raise ProtocolError(f"two decisions for [{decided.marker}]: give each citation one")
+            decisions[decided.marker] = decided
+    return Verification(decisions=tuple(decisions.values()), repair=repair,
+                        research=" ".join(_values(found, "RESEARCH")[:1]))
+
+
 def passage_ids(value: str) -> tuple[str, ...]:
     """The passage ids in a value, each once, in order. A run of hex digits too
     short to be an id is one cut short: an error, never a passage dropped."""
@@ -100,6 +152,40 @@ def passage_ids(value: str) -> tuple[str, ...]:
         if run not in ids:
             ids.append(run)
     return tuple(ids)
+
+
+def _actions(value: str) -> list[CitationDecision]:
+    """The decisions on one ACTION line, separated by commas or semicolons. A part
+    with neither a marker nor a decision is prose and is skipped; one with only
+    one of them, or with more than one of either, cannot be read whole; and a line
+    must decide something, unless it says none."""
+    decided = []
+    for part in re.split(r"[,;]", value):
+        markers = [int(bracketed or bare) for bracketed, bare in ACTION_MARKER.findall(part)]
+        words = ACTION_DECISION.findall(part)
+        if not markers and not words:
+            continue
+        if len(markers) != 1 or len(words) != 1:
+            raise ProtocolError("ACTION: takes one citation's marker and one decision, e.g. "
+                                "ACTION: [2] repair; the decisions are keep, repair, drop and "
+                                "keep_unverified")
+        word = words[0].lower()
+        decided.append(CitationDecision(markers[0], "keep_unverified" if "unverified" in word else word))
+    if not decided and value.strip(DRESSING + ".:").lower() not in NO_DECISIONS:
+        raise ProtocolError("ACTION: takes one citation's marker and one decision, e.g. ACTION: "
+                            "[2] repair, or ACTION: none")
+    return decided
+
+
+def _decision(found: list[Line], keys: tuple[str, ...], error: str) -> Line:
+    """The one decision line among `keys`: a bare line over bulleted ones, which
+    a model weighing options writes."""
+    decisions = [line for line in found if line.key in keys]
+    bare = [line for line in decisions if not line.bulleted]
+    chosen = bare if len(bare) == 1 else decisions
+    if len(chosen) != 1:
+        raise ProtocolError(f"{error} (this reply had {len(decisions)})")
+    return chosen[0]
 
 
 def _values(found: list[Line], key: str) -> list[str]:

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping, Sequence
 
 from verbatim import gaps, reflection
-from verbatim.agents.state import Abstain, Attempt, Final, Inspect, Next, Tally
+from verbatim.agents.state import Abstain, Attempt, Final, Inspect, Next, Tally, Verification
 from verbatim.answers import Answer
 from verbatim.critique import CITED, unbacked_sentences, uncited_sentences
 from verbatim.quotations import mask_quoted_brackets
@@ -97,6 +97,22 @@ def visible_status(check: str, decision: str | None = None) -> str:
     if decision in (REPAIR, DROP):
         return REMOVED
     return VERIFIED if check == PASSED else UNVERIFIED
+
+
+def verification_refused(verification: Verification,
+                         checks: Mapping[int, Sequence[str]]) -> str | None:
+    """Why the Verifier may not decide this, or None. `checks` holds, by marker,
+    the check result of each CITE line under it: a decision must be legal for
+    every one. A citation sent for repair needs the draft sent back."""
+    for decided in verification.decisions:
+        if decided.marker not in checks:
+            return f"there is no citation [{decided.marker}] in this draft"
+        for result in checks[decided.marker]:
+            if why := decision_refused(result, decided.decision):
+                return f"[{decided.marker}]: {why}"
+    if not verification.repair and any(d.decision == REPAIR for d in verification.decisions):
+        return "a citation marked repair needs NEXT: writer, which sends the draft back"
+    return None
 
 
 def _either(options: Sequence[str]) -> str:

@@ -14,10 +14,13 @@ comes back as a list, and any other dataclass as a dict of its fields.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any
 
+from verbatim.answers import Answer, RejectedCitation
+from verbatim.citations import Citation
 from verbatim.contracts import Cost
+from verbatim.quotations import QuotationProblem
 
 
 def _tuples(value: Any) -> Any:
@@ -164,9 +167,87 @@ class Abstain(Record):
     reason: str
 
 
+# -- one attempt: what the Writer is given, what it wrote, and what the check found --
+
+
+@dataclass(frozen=True)
+class WriterBrief(Record):
+    """Everything the Writer is given (I3): the task, its passages in order, write
+    or repair, and for a repair the attempt it repairs and the checker's facts,
+    rendered by code."""
+
+    task: str
+    passage_ids: tuple[str, ...]
+    mode: str = "write"
+    repair_facts: tuple[str, ...] = ()
+    draft: int | None = None
+
+
+@dataclass(frozen=True)
+class Draft(Record):
+    """One attempt as the Writer wrote it (`payload`) and as the check found it:
+    the checked answer, its tally, and v1's repair findings, in v1's order."""
+
+    number: int
+    brief: WriterBrief
+    # Left out of the hash, which a dict and v1's lists cannot take; still compared.
+    payload: dict[str, Any] = field(hash=False)
+    answer: Answer = field(hash=False)
+    tally: Tally = Tally()
+    findings: tuple[str, ...] = ()
+    revises: int | None = None
+
+    @property
+    def key(self) -> int:
+        return self.number
+
+    @property
+    def attempt(self) -> Attempt:
+        return Attempt(self.number, self.tally, self.revises)
+
+
+@dataclass(frozen=True)
+class CitationRecord(Record):
+    """One CITE line of one attempt, by its place among them: what the check
+    found and what the Verifier decided. How it is shown is never stored:
+    contract.visible_status derives it from the two (I1)."""
+
+    attempt: int
+    line: int
+    marker: int
+    chunk_id: str
+    quote: str
+    check: str
+    reason: str = ""
+    decision: str | None = None
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.attempt, self.line)
+
+
+@dataclass(frozen=True)
+class CitationDecision(Record):
+    marker: int
+    decision: str
+
+
+@dataclass(frozen=True)
+class Verification(Record):
+    """The Verifier's decisions on one attempt: per citation, whether it goes
+    back to the Writer, and what research it asks the Lead for, if any."""
+
+    decisions: tuple[CitationDecision, ...] = ()
+    repair: bool = False
+    research: str = ""
+
+
 # Every record a checkpoint may hold; the serializer rebuilds these and no others.
+# v1's Answer and what it holds come with a checked draft.
 RECORDS: tuple[type, ...] = (Step, Found, Evidence, SectionResult, Allowance, Tally, Attempt,
-                             Next, Inspect, Final, Abstain, Cost)
+                             Next, Inspect, Final, Abstain, WriterBrief, Draft, CitationRecord,
+                             CitationDecision, Verification, Cost, Answer, Citation,
+                             RejectedCitation, QuotationProblem)
 
 
 def keyed_append(left: list[Any] | None, right: list[Any] | None) -> list[Any]:

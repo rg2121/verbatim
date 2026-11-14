@@ -180,7 +180,7 @@ def reflect(
     try:
         revised = completion.revise(
             SYSTEM_PROMPT + REPAIR_RULES,
-            f"{prompt}\n\nYour draft:\n{_as_written(payload)}\n\n"
+            f"{prompt}\n\nYour draft:\n{as_written(payload)}\n\n"
             f"What the checker found:\n{listed}",
             ANSWER_SCHEMA,
         )
@@ -197,7 +197,7 @@ def reflect(
     return Reflection(draft=draft, findings=found, revision=revision, answer=answer)
 
 
-def _as_written(payload: dict[str, Any]) -> str:
+def as_written(payload: dict[str, Any]) -> str:
     """The draft in the line format the model wrote it in."""
     lines = [f"ANSWER: {payload.get('answer', '')}"]
     lines.extend(
