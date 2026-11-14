@@ -12,12 +12,21 @@ the contract's to say, not the parser's.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import re
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from verbatim.agents.state import Abstain, CitationDecision, Final, Inspect, Next, Verification
+from verbatim.agents.state import (
+    Abstain,
+    CitationDecision,
+    Done,
+    Final,
+    Inspect,
+    Next,
+    ToolCall,
+    Verification,
+)
 from verbatim.answers import CHUNK_ID_PATTERN
 
 T = TypeVar("T")
@@ -56,13 +65,17 @@ class Line:
     key: str
     value: str
     bulleted: bool
+    end: int = 0  # where the line ends in the reply, line endings made plain
 
 
 def lines(reply: str) -> list[Line]:
     """Every `KEY: value` line in a reply, in order, its value undressed."""
-    text = (reply or "").replace("\r\n", "\n").replace("\r", "\n")
-    return [Line(match["key"], match["value"].strip(DRESSING), match["bullet"] is not None)
-            for match in KEY_LINE.finditer(text)]
+    return [Line(match["key"], match["value"].strip(DRESSING), match["bullet"] is not None,
+                 match.end()) for match in KEY_LINE.finditer(_plain(reply))]
+
+
+def _plain(reply: str) -> str:
+    return (reply or "").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def fields(reply: str) -> list[tuple[str, str]]:
@@ -131,14 +144,56 @@ def parse_verification(reply: str) -> Verification:
         raise ProtocolError("NEXT: takes writer or done")
     repair = VERIFIER_NEXT[said[0]]
     decisions: dict[int, CitationDecision] = {}
-    text = (reply or "").replace("\r\n", "\n").replace("\r", "\n")
-    for line in ACTION_LINE.finditer(text):
+    for line in ACTION_LINE.finditer(_plain(reply)):
         for decided in _actions(line["value"]):
             if decided.marker in decisions:
                 raise ProtocolError(f"two decisions for [{decided.marker}]: give each citation one")
             decisions[decided.marker] = decided
     return Verification(decisions=tuple(decisions.values()), repair=repair,
                         research=" ".join(_values(found, "RESEARCH")[:1]))
+
+
+# An argument line under a CALL: a parameter's name, in any case, then its value.
+ARGUMENT = re.compile(r"^[ \t]*(?:[-*>][ \t]+)?[*`\"']*(?P<name>[A-Za-z_]+)[*`\"']*[ \t]*:[ \t]*(?P<value>.*)$",
+                      re.MULTILINE)
+
+
+def parse_step(reply: str, tools: Mapping[str, Mapping[str, Any]]) -> ToolCall | Done:
+    """A ReAct agent's turn: CALL: <tool> with one line per argument after it,
+    each read in its parameter's type, or DONE: <what it found>. `tools` maps
+    the agent's tool names to their schemas (tools.TOOL_SCHEMAS)."""
+    found = lines(reply)
+    chosen = _decision(found, ("CALL", "DONE"), "reply with exactly one line starting CALL: or DONE:")
+    if chosen.key == "DONE":
+        if not chosen.value:
+            raise ProtocolError("DONE: says what you found, for the lead")
+        return Done(chosen.value)
+    name = next(iter(re.findall(r"[a-z_]+", chosen.value.lower())), "")
+    if name not in tools:
+        raise ProtocolError(f"{name!r} is not one of your tools: {', '.join(tools)}")
+    schema = tools[name].get("parameters", {})
+    properties = schema.get("properties", {})
+    arguments: dict[str, Any] = {}
+    for line in ARGUMENT.finditer(_plain(reply)[chosen.end:]):
+        key = line["name"].lower()
+        if key in properties and key not in arguments:
+            arguments[key] = _typed(key, line["value"].strip(DRESSING), properties[key])
+    missing = [key for key in schema.get("required", []) if key not in arguments]
+    if missing:
+        raise ProtocolError(f"{name} needs {', '.join(missing)}: give each on its own line "
+                            f"after the CALL line, e.g. {missing[0]}: ...")
+    return ToolCall(name, tuple(arguments.items()))
+
+
+def _typed(name: str, value: str, schema: Mapping[str, Any]) -> Any:
+    if schema.get("type") == "integer":
+        number = re.search(r"-?\d+", value)
+        if number is None:
+            raise ProtocolError(f"{name} takes a number")
+        return int(number.group())
+    if schema.get("type") == "array":
+        return tuple(int(number) for number in re.findall(r"-?\d+", value))
+    return value
 
 
 def passage_ids(value: str) -> tuple[str, ...]:

@@ -233,6 +233,34 @@ class CitationDecision(Record):
 
 
 @dataclass(frozen=True)
+class ToolCall(Record):
+    """An agent's call: one of its tools, with the arguments it gave, in order."""
+
+    tool: str
+    arguments: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class Done(Record):
+    """An agent's last word: what it found, for the Lead."""
+
+    note: str
+
+
+@dataclass(frozen=True)
+class Turn(Record):
+    """One turn of a ReAct agent: the call it made and what code showed it back."""
+
+    number: int
+    call: ToolCall
+    shown: str
+
+    @property
+    def key(self) -> int:
+        return self.number
+
+
+@dataclass(frozen=True)
 class Note(Record):
     """What an agent says for the Lead, under its own name: one of the NOTES,
     never a fact. `at` is where it was written."""
@@ -260,7 +288,8 @@ class Verification(Record):
 # v1's Answer and what it holds come with a checked draft.
 RECORDS: tuple[type, ...] = (Step, Found, Evidence, SectionResult, Allowance, Tally, Attempt,
                              Next, Inspect, Final, Abstain, WriterBrief, Draft, CitationRecord,
-                             CitationDecision, Verification, Note, Cost, Answer, Citation,
+                             CitationDecision, Verification, Note, ToolCall, Done, Turn, Cost,
+                             Answer, Citation,
                              RejectedCitation, QuotationProblem)
 
 

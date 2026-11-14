@@ -30,7 +30,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.config import get_config
 
 from verbatim.agents.state import RECORDS, Allowance, Step, spent
-from verbatim.contracts import Budget
+from verbatim.contracts import Budget, Cost
 
 BUSY_TIMEOUT = 30  # seconds a writer waits for another process instead of failing
 
@@ -102,6 +102,47 @@ def limit_reached(allowance: Allowance, steps: Sequence[Step], deadline: Deadlin
     if allowance.tokens is not None and used.tokens >= allowance.tokens:
         return f"{used.tokens:,} of {allowance.tokens:,} tokens spent"
     return None
+
+
+class OutOfBudget(Exception):
+    """A model call the run's limits do not allow."""
+
+
+class Metered:
+    """A model client that checks a branch's limits before every call, counting
+    the calls `before` it, and records every call, failed ones too, as a ledger
+    step after it (I5). `at` is where the calls are made (`position()`)."""
+
+    def __init__(self, client: Any, allowance: Allowance, deadline: Deadline, name: str,
+                 at: Sequence[int | str], before: Sequence[Step] = ()) -> None:
+        self.client, self.allowance, self.deadline, self.name = client, allowance, deadline, name
+        self.at, self.before = tuple(at), list(before)
+        self.steps: list[Step] = []
+
+    def complete(self, system: str, user: str, schema: dict[str, Any]) -> Any:
+        return self._call("complete", system, user, schema)
+
+    def revise(self, system: str, user: str, schema: dict[str, Any]) -> Any:
+        return self._call("revise", system, user, schema)
+
+    def complete_text(self, system: str, user: str) -> str:
+        return self._call("complete_text", system, user)
+
+    def judge(self, system: str, user: str) -> str:
+        return self._call("judge", system, user)
+
+    def _call(self, method: str, *arguments: Any) -> Any:
+        if why := limit_reached(self.allowance, [*self.before, *self.steps], self.deadline):
+            raise OutOfBudget(why)
+        before = self.client.usage.snapshot()
+        try:
+            return getattr(self.client, method)(*arguments)
+        finally:
+            used = self.client.usage.since(before)
+            self.steps.append(Step(
+                key=(*self.at, len(self.steps)), kind="model", name=self.name,
+                cost=Cost(calls=max(used.calls, 1), tokens_in=used.prompt_tokens,
+                          tokens_out=used.output_tokens, seconds=used.seconds)))
 
 
 def serializer(records: Iterable[type] = RECORDS) -> JsonPlusSerializer:

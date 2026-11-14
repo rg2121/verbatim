@@ -112,9 +112,11 @@ OLLAMA_TIMEOUT = float(_text("OLLAMA_TIMEOUT", "600"))
 # A model per role, so combinations can be compared: the writer answers, the
 # planner splits topics and questions and rewrites queries, the describer
 # names what passages are about, and the reflector repairs an answer the quote
-# check flagged; in v2 the lead decides each step and the verifier reviews what
-# the check found. A role left empty uses the general model.
-ROLES = ("writer", "planner", "describer", "reflector", "lead", "verifier")
+# check flagged; in v2 the lead decides each step, the verifier reviews what the
+# check found, and the researcher and skeptic search. A role left empty uses the
+# general model.
+ROLES = ("writer", "planner", "describer", "reflector", "lead", "verifier", "researcher",
+         "skeptic")
 ROLE_MODELS = {role: _text(f"OLLAMA_MODEL_{role.upper()}", "") or None for role in ROLES}
 
 

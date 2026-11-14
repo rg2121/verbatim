@@ -540,6 +540,8 @@ class RoleCompletion:
     reflector: OllamaCompletion
     lead: OllamaCompletion
     verifier: OllamaCompletion
+    researcher: OllamaCompletion
+    skeptic: OllamaCompletion
 
     def __init__(
         self,

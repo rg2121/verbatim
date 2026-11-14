@@ -46,14 +46,18 @@ from verbatim.agents.contract import (
     COMPLETE,
     ERROR,
     PROTOCOL_FAILURE,
+    LEAD_STEPS,
     first_by_rank,
     lead_action_refused,
     tally,
 )
 from verbatim.agents.lead import AgentPolicy, LeadPolicy, lead_view
+from verbatim.agents.react import PROTOCOL, AgentSpec, build_agent
+from verbatim.agents.roster import RESEARCHER, SKEPTIC
 from verbatim.agents.runtime import (
     Deadline,
-    limit_reached,
+    Metered,
+    OutOfBudget,
     position,
     refuse_used_thread,
     require_checkpointable,
@@ -78,11 +82,11 @@ from verbatim.agents.state import (
     merge_evidence,
 )
 from verbatim.answers import Answer, subject_check
-from verbatim.contracts import Budget, Cost
+from verbatim.contracts import Budget
 from verbatim.corpus import ChunkMatch
 from verbatim.reflection import passage_texts
 
-STEPS = ("writer", "verifier")  # the Researcher and Skeptic come at M2e
+STEPS = LEAD_STEPS  # researcher, skeptic, writer, verifier
 MAX_LEAD_TURNS = 12  # a step cap: past it the run ends budget_exhausted
 RECURSION_LIMIT = 200  # LangGraph's own, set past anything MAX_LEAD_TURNS allows
 
@@ -115,6 +119,7 @@ class AskState(TypedDict, total=False):
     ledger: Annotated[list[Step], ledger_append]
     notes: Annotated[list[Note], keyed_append]
     queue: list[str]  # the steps the Lead queued and not yet taken
+    brief: str  # what the Lead's queued research steps must find
     passages: list[str]  # the Lead's PASSAGES for the next writer step
     repair: WriterBrief | None  # a repair the Verifier asked for, for the next writer step
     inspected: list[str]
@@ -125,44 +130,9 @@ class AskState(TypedDict, total=False):
     shown: Tally | None
 
 
-class OutOfBudget(Exception):
-    """A model call the run's limits do not allow."""
-
-
-class Metered:
-    """A model client that checks the run's limits before every call and records
-    every call, failed ones too, as a ledger step after it (I5)."""
-
-    def __init__(self, client: Any, deps: Deps, ledger: Sequence[Step], name: str) -> None:
-        self.client, self.name, self.deadline = client, name, deps.deadline
-        self.allowance = shares(deps.budget, ledger, 1)[0]
-        self.at = position()
-        self.steps: list[Step] = []
-
-    def complete(self, system: str, user: str, schema: dict[str, Any]) -> Any:
-        return self._call("complete", system, user, schema)
-
-    def revise(self, system: str, user: str, schema: dict[str, Any]) -> Any:
-        return self._call("revise", system, user, schema)
-
-    def complete_text(self, system: str, user: str) -> str:
-        return self._call("complete_text", system, user)
-
-    def judge(self, system: str, user: str) -> str:
-        return self._call("judge", system, user)
-
-    def _call(self, method: str, *arguments: Any) -> Any:
-        if why := limit_reached(self.allowance, self.steps, self.deadline):
-            raise OutOfBudget(why)
-        before = self.client.usage.snapshot()
-        try:
-            return getattr(self.client, method)(*arguments)
-        finally:
-            used = self.client.usage.since(before)
-            self.steps.append(Step(
-                key=(*self.at, len(self.steps)), kind="model", name=self.name,
-                cost=Cost(calls=max(used.calls, 1), tokens_in=used.prompt_tokens,
-                          tokens_out=used.output_tokens, seconds=used.seconds)))
+def _meter(deps: Deps, client: Any, ledger: Sequence[Step], name: str) -> Metered:
+    """A metered client for one sequential step: it may spend what the run has left."""
+    return Metered(client, shares(deps.budget, ledger, 1)[0], deps.deadline, name, position())
 
 
 def passages_for(scope: ScopedCorpus, ids: Sequence[str]) -> list[ChunkMatch]:
@@ -197,7 +167,7 @@ def opening(state: AskState, runtime: Runtime[Deps]) -> Command:
         "queue": [], "passages": [], "inspected": [], "repair": None}
     get_stream_writer()({"event": "searched", "passages": len(matches)})
     if matches and deps.subject_check:  # as v1, which checks no subject with no passages
-        meter = Metered(deps.model, deps, state.get("ledger", []), "describer")
+        meter = _meter(deps, deps.model, state.get("ledger", []), "describer")
         try:
             subject, closeness = subject_check(meter, deps.embedder, question, matches)
         except OutOfBudget as stop:
@@ -216,7 +186,7 @@ def lead(state: AskState, runtime: Runtime[Deps]) -> Command:
         return _finish(BUDGET_EXHAUSTED, {}, f"the Lead took its {MAX_LEAD_TURNS} turns")
     drafts = state.get("drafts", [])
     board = state.get("board", [])
-    meter = Metered(deps.model.for_role("lead"), deps, ledger, "lead")
+    meter = _meter(deps, deps.model.for_role("lead"), ledger, "lead")
     view = lead_view(
         state["question"], subject=state.get("subject"), closeness=state.get("closeness"),
         board=_board_rows(deps.scope, board), drafts=drafts, records=state.get("citations", []),
@@ -235,7 +205,8 @@ def lead(state: AskState, runtime: Runtime[Deps]) -> Command:
         return _finish(PROTOCOL_FAILURE, update, "the Lead's replies could not be used, twice")
     if isinstance(action, Next):
         return Command(goto=action.steps[0], update={
-            **update, "queue": list(action.steps), "passages": list(action.passages)})
+            **update, "queue": list(action.steps), "brief": action.brief,
+            "passages": list(action.passages)})
     if isinstance(action, Inspect):
         return Command(goto="lead", update={**update, "inspected": list(action.ids)})
     if isinstance(action, Final):
@@ -253,7 +224,7 @@ def writer(state: AskState, runtime: Runtime[Deps]) -> Command:
     brief = state.get("repair") or WriterBrief(
         task=state["question"], passage_ids=tuple(state.get("passages") or state.get("opening", [])))
     matches = passages_for(deps.scope, brief.passage_ids)
-    meter = Metered(deps.model, deps, state.get("ledger", []), "writer")
+    meter = _meter(deps, deps.model, state.get("ledger", []), "writer")
     repaired = next((draft for draft in drafts if draft.number == brief.draft), None)
     try:
         payload = write(meter, brief, matches, repaired)
@@ -281,7 +252,7 @@ def verifier(state: AskState, runtime: Runtime[Deps]) -> Command:
     latest = max(state["drafts"], key=lambda draft: draft.number)
     records = [record for record in state.get("citations", []) if record.attempt == latest.number]
     matches = passages_for(deps.scope, latest.brief.passage_ids)
-    meter = Metered(deps.model.for_role("verifier"), deps, state.get("ledger", []), "verifier")
+    meter = _meter(deps, deps.model.for_role("verifier"), state.get("ledger", []), "verifier")
     try:
         verification, _ = verify(meter.complete_text, latest, records, passage_texts(matches))
     except OutOfBudget as stop:
@@ -303,6 +274,35 @@ def verifier(state: AskState, runtime: Runtime[Deps]) -> Command:
         queue = ["writer", *queue]
     update["queue"] = queue
     return Command(goto=_next(queue), update=update)
+
+
+def researching(spec: AgentSpec) -> Any:
+    """The node that runs one ReAct agent's subgraph on its own state, with the
+    Lead's brief: what it finds goes on the board and its last word to the Lead
+    as a note. An agent that met its limits says so in that note: whether the
+    run can go on is the next metered call's to say. One whose replies could not
+    be used hands the run back to the Lead."""
+    agent = build_agent(spec)
+
+    def node(state: AskState, runtime: Runtime[Deps]) -> Command:
+        deps = runtime.context
+        queue = list(state.get("queue", []))[1:]
+        at = list(position())
+        out = agent.invoke({"question": state["question"], "brief": state.get("brief", ""), "at": at,
+                            "allowance": shares(deps.budget, state.get("ledger", []), 1)[0],
+                            "turns": [], "board": [], "ledger": []})
+        update: dict[str, Any] = {"board": out.get("board", []), "ledger": out.get("ledger", []),
+                                  "queue": queue}
+        if out["status"] == PROTOCOL:
+            update.update(queue=[], notes=[Note(at=(*at, 0), agent=spec.name,
+                                                 text="its replies could not be used, twice")])
+            return Command(goto="lead", update=update)
+        update["notes"] = [Note(at=(*at, 0), agent=spec.name, text=out.get("note", ""))]
+        get_stream_writer()({"event": "researched", "agent": spec.name,
+                             "passages": len(out.get("board", []))})
+        return Command(goto=_next(queue), update=update)
+
+    return node
 
 
 def finalize(state: AskState, runtime: Runtime[Deps]) -> dict[str, Any]:
@@ -355,10 +355,13 @@ def _limits(meter: Metered, deadline: Deadline) -> str:
 def build_ask(checkpointer: Any = None) -> Any:
     require_checkpointable(AskState)
     graph = StateGraph(AskState, context_schema=Deps)
+    steps = ("lead", *STEPS, "finalize")
     graph.add_node("opening", opening, destinations=("lead", "finalize"))
-    graph.add_node("lead", lead, destinations=("lead", "writer", "verifier", "finalize"))
-    graph.add_node("writer", writer, destinations=("lead", "writer", "verifier", "finalize"))
-    graph.add_node("verifier", verifier, destinations=("lead", "writer", "verifier", "finalize"))
+    graph.add_node("lead", lead, destinations=steps)
+    graph.add_node("researcher", researching(RESEARCHER), destinations=steps)
+    graph.add_node("skeptic", researching(SKEPTIC), destinations=steps)
+    graph.add_node("writer", writer, destinations=steps)
+    graph.add_node("verifier", verifier, destinations=steps)
     graph.add_node("finalize", finalize)
     graph.add_edge(START, "opening")
     graph.add_edge("finalize", END)
